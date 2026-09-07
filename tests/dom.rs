@@ -369,3 +369,79 @@ fn selection_is_in_document_order_and_ignores_unknown_ids() {
     let tags: Vec<&str> = sel.iter().map(|&n| d.tag(n)).collect();
     assert_eq!(tags, vec!["g", "path", "text"]);
 }
+
+#[test]
+#[should_panic(expected = "own subtree")]
+fn attaching_a_node_inside_its_own_subtree_panics() {
+    let mut d = parse(DOC);
+    let g = d.by_id("g").unwrap();
+    // g has children, so prepend_child(g, g) resolves to insert_before(g, <first child of g>),
+    // which would make g its own parent (and hang `descendants` walking a self-referential
+    // node) if not caught.
+    d.prepend_child(g, g);
+}
+
+#[test]
+#[should_panic(expected = "own subtree")]
+fn insert_before_its_own_descendant_panics() {
+    let mut d = parse(DOC);
+    let g = d.by_id("g").unwrap();
+    let p = d.by_id("p").unwrap();
+    // p is a descendant of g; inserting g before p would make g its own ancestor.
+    d.insert_before(g, p);
+}
+
+#[test]
+fn mutations_bump_generation_and_style_changes_bump_sheet_generation() {
+    let mut d = parse(DOC);
+    let p = d.by_id("p").unwrap();
+    let t = d.by_id("t").unwrap();
+    let s = d.by_id("s").unwrap();
+    let txt = d.first_child(t).unwrap();
+    let style_txt = d.first_child(s).unwrap();
+
+    let before = d.generation();
+    d.set_attr(p, "stroke", "red");
+    assert!(d.generation() > before, "set_attr must bump generation");
+    assert_eq!(
+        d.sheet_generation(),
+        0,
+        "set_attr on <path> must not bump sheet_generation"
+    );
+
+    let before = d.generation();
+    d.remove_attr(p, "stroke");
+    assert!(d.generation() > before, "remove_attr must bump generation");
+
+    let before = d.generation();
+    d.set_text(txt, "bye");
+    assert!(d.generation() > before, "set_text must bump generation");
+
+    let before = d.generation();
+    d.detach(p);
+    assert!(d.generation() > before, "detach must bump generation");
+
+    let before = d.generation();
+    d.append_child(t, p);
+    assert!(d.generation() > before, "append_child must bump generation");
+
+    assert_eq!(
+        d.sheet_generation(),
+        0,
+        "no <style> mutation has happened yet"
+    );
+
+    let sheet = d.sheet_generation();
+    d.set_text(style_txt, "g{fill:blue}");
+    assert!(
+        d.sheet_generation() > sheet,
+        "set_text on <style>'s text must bump sheet_generation"
+    );
+
+    let sheet = d.sheet_generation();
+    d.detach(s);
+    assert!(
+        d.sheet_generation() > sheet,
+        "detaching <style> must bump sheet_generation"
+    );
+}

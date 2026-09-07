@@ -383,6 +383,19 @@ impl Doc {
         self.svg
     }
 
+    /// Bumped by every mutation of the tree reachable from `svg()`; consumers
+    /// cache derived data keyed by it to know when to recompute.
+    pub fn generation(&self) -> u64 {
+        self.generation.get()
+    }
+
+    /// Bumped whenever a `<style>` element is attached, detached, or its text
+    /// changes; consumers of the parsed stylesheet key their cache on this
+    /// instead of `generation()` so unrelated edits don't force a re-parse.
+    pub fn sheet_generation(&self) -> u64 {
+        self.sheet_generation.get()
+    }
+
     pub fn kind(&self, n: NodeId) -> &Kind {
         &self.nodes[n as usize].kind
     }
@@ -664,11 +677,22 @@ impl Doc {
         self.bump();
     }
 
-    pub fn append_child(&mut self, parent: NodeId, n: NodeId) {
-        debug_assert!(
-            parent != n && !self.ancestors(parent).any(|a| a == n),
-            "cannot append an ancestor"
+    /// Panics if attaching `n` at `target` would make `n` its own ancestor:
+    /// `target` is the future parent for `append_child`/`prepend_child`, or the
+    /// anchor for `insert_before`/`insert_after`. A real `assert!` (not
+    /// `debug_assert!`): misuse must panic even in release builds, because the
+    /// alternative — `descendants` looping forever over a node that is its own
+    /// ancestor — hangs the process instead of failing loudly. `main` catches
+    /// panics and echoes the document back; it cannot recover from a hang.
+    fn assert_can_attach(&self, n: NodeId, target: NodeId) {
+        assert!(
+            target != n && !self.ancestors(target).any(|a| a == n),
+            "cannot attach a node inside its own subtree"
         );
+    }
+
+    pub fn append_child(&mut self, parent: NodeId, n: NodeId) {
+        self.assert_can_attach(n, parent);
         self.detach(n);
         self.link_last(parent, n);
         self.after_attach(n);
@@ -683,7 +707,7 @@ impl Doc {
     }
 
     pub fn insert_before(&mut self, n: NodeId, anchor: NodeId) {
-        debug_assert!(n != anchor, "cannot insert a node before itself");
+        self.assert_can_attach(n, anchor);
         self.detach(n);
         let p = self.nodes[anchor as usize]
             .parent
@@ -704,7 +728,7 @@ impl Doc {
     }
 
     pub fn insert_after(&mut self, n: NodeId, anchor: NodeId) {
-        debug_assert!(n != anchor, "cannot insert a node after itself");
+        self.assert_can_attach(n, anchor);
         match self.nodes[anchor as usize].next {
             Some(nx) if nx != n => self.insert_before(n, nx),
             Some(_) => {}
