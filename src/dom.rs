@@ -5,13 +5,15 @@
 //! attribute, the ` />` form, namespace prefixes as literal strings, all text.
 //! Normalized on output: attribute quotes are always `"`, text is re-escaped
 //! canonically (`& < >` in text, plus `"` and newline/tab/CR as char refs in
-//! attributes). Namespace prefixes are never resolved: `svg:path` and `path`
+//! attributes), and the DOCTYPE keyword is followed by exactly one space.
+//! Namespace prefixes are never resolved: `svg:path` and `path`
 //! compare equal by local name (ponytail: standard prefixes are enforced at parse).
 
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
 
+use quick_xml::escape::EscapeError;
 use quick_xml::events::{BytesStart, Event};
 
 pub type NodeId = u32;
@@ -231,16 +233,24 @@ impl Doc {
         Ok(doc)
     }
 
+    /// Checks every element in the document (not just the root) for a known
+    /// namespace URI bound to a non-conventional prefix, e.g. a descendant
+    /// declaring `xmlns:ink="...inkscape..."` instead of `xmlns:inkscape`.
     fn check_namespaces(&self) -> Result<(), DomError> {
-        for a in self.attrs(self.svg) {
-            let Some(prefix) = a.name.strip_prefix("xmlns:") else {
+        for n in self.descendants(self.root) {
+            if !self.is_element(n) {
                 continue;
-            };
-            if let Some((uri, std_prefix)) = KNOWN_NS.iter().find(|(uri, _)| *uri == a.value) {
-                if prefix != *std_prefix {
-                    return Err(DomError::Unsupported(format!(
-                        "namespace {uri} is bound to prefix '{prefix}' (expected '{std_prefix}')"
-                    )));
+            }
+            for a in self.attrs(n) {
+                let Some(prefix) = a.name.strip_prefix("xmlns:") else {
+                    continue;
+                };
+                if let Some((uri, std_prefix)) = KNOWN_NS.iter().find(|(uri, _)| *uri == a.value) {
+                    if prefix != *std_prefix {
+                        return Err(DomError::Unsupported(format!(
+                            "namespace {uri} is bound to prefix '{prefix}' (expected '{std_prefix}')"
+                        )));
+                    }
                 }
             }
         }
@@ -489,7 +499,15 @@ fn parse_attributes(raw: &str) -> Result<(Vec<Attr>, String), DomError> {
             .find(quote)
             .ok_or_else(|| DomError::Xml(format!("unterminated value for attribute '{name}'")))?;
         let value = quick_xml::escape::unescape(&body[..end])
-            .map_err(|e| DomError::Unsupported(format!("attribute '{name}': {e}")))?
+            .map_err(|e| match e {
+                // A well-formed but undefined/unsupported reference (e.g. `&nbsp;`).
+                EscapeError::UnrecognizedEntity(..) => {
+                    DomError::Unsupported(format!("attribute '{name}': {e}"))
+                }
+                // Everything else (unterminated `&...`, an invalid `&#...;` char
+                // ref, runaway nested-entity expansion) is malformed XML.
+                _ => DomError::Xml(format!("attribute '{name}': {e}")),
+            })?
             .into_owned();
         attrs.push(Attr {
             name: name.to_string(),

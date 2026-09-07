@@ -60,6 +60,18 @@ fn unknown_entity_is_unsupported() {
 }
 
 #[test]
+fn malformed_char_ref_in_attribute_is_xml_error() {
+    let err = Doc::parse(b"<svg id=\"&#zz;\"/>").err().unwrap();
+    assert!(matches!(err, DomError::Xml(_)), "{err}");
+}
+
+#[test]
+fn undefined_entity_in_attribute_is_unsupported() {
+    let err = Doc::parse(b"<svg id=\"a&nbsp;b\"/>").err().unwrap();
+    assert!(matches!(err, DomError::Unsupported(_)), "{err}");
+}
+
+#[test]
 fn non_utf8_is_unsupported() {
     let err = Doc::parse(b"<svg>\xff\xfe</svg>").err().unwrap();
     assert!(matches!(err, DomError::Unsupported(_)), "{err}");
@@ -80,6 +92,12 @@ fn root_must_be_svg() {
 #[test]
 fn nonstandard_prefix_for_known_namespace_is_unsupported() {
     let err = Doc::parse(b"<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:ink=\"http://www.inkscape.org/namespaces/inkscape\"/>").err().unwrap();
+    assert!(matches!(err, DomError::Unsupported(_)), "{err}");
+}
+
+#[test]
+fn nonstandard_prefix_on_descendant_is_unsupported() {
+    let err = Doc::parse(b"<svg xmlns=\"http://www.w3.org/2000/svg\"><g xmlns:ink=\"http://www.inkscape.org/namespaces/inkscape\" ink:label=\"x\"/></svg>").err().unwrap();
     assert!(matches!(err, DomError::Unsupported(_)), "{err}");
 }
 
