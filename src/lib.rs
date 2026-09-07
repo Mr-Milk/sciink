@@ -2,6 +2,7 @@
 //! Inkscape launches `sciink --tool=<name> --param=value… --id=… input.svg`
 //! and reads the modified SVG from stdout (see docs/spec/03-infrastructure.md §C.3).
 
+pub mod dom;
 pub mod num;
 
 /// Version string shown to users: Cargo version plus the git SHA baked in by CI.
