@@ -110,13 +110,10 @@ pub struct Doc {
     ids: HashMap<String, NodeId>,
     // Read/written starting in Task 4 (navigation/mutation); laid down here so
     // the struct shape doesn't change under later tasks.
-    #[allow(dead_code)]
     next_auto_id: u32,
     /// Bumped on every mutation; consumers cache derived data keyed by it.
-    #[allow(dead_code)]
     pub(crate) generation: Cell<u64>,
     /// Bumped when a `<style>` element or its text changes.
-    #[allow(dead_code)]
     pub(crate) sheet_generation: Cell<u64>,
 }
 
@@ -466,6 +463,329 @@ impl Doc {
             }
         }
         s
+    }
+
+    pub fn parent(&self, n: NodeId) -> Option<NodeId> {
+        self.nodes[n as usize].parent
+    }
+
+    pub fn first_child(&self, n: NodeId) -> Option<NodeId> {
+        self.nodes[n as usize].first
+    }
+
+    pub fn last_child(&self, n: NodeId) -> Option<NodeId> {
+        self.nodes[n as usize].last
+    }
+
+    pub fn next_sibling(&self, n: NodeId) -> Option<NodeId> {
+        self.nodes[n as usize].next
+    }
+
+    pub fn prev_sibling(&self, n: NodeId) -> Option<NodeId> {
+        self.nodes[n as usize].prev
+    }
+
+    /// Parent chain, nearest first, ending with the Document node.
+    pub fn ancestors(&self, n: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        let mut c = self.nodes[n as usize].parent;
+        std::iter::from_fn(move || {
+            let cur = c?;
+            c = self.nodes[cur as usize].parent;
+            Some(cur)
+        })
+    }
+
+    pub fn is_text(&self, n: NodeId) -> bool {
+        matches!(self.kind(n), Kind::Text(_) | Kind::CData(_))
+    }
+
+    pub fn is_comment(&self, n: NodeId) -> bool {
+        matches!(self.kind(n), Kind::Comment(_))
+    }
+
+    /// Number of elements below the root `<svg>` (excluding it).
+    pub fn element_count(&self) -> usize {
+        self.descendants(self.svg)
+            .skip(1)
+            .filter(|&n| self.is_element(n))
+            .count()
+    }
+
+    pub fn set_attr(&mut self, n: NodeId, name: &str, value: impl Into<String>) {
+        let value = value.into();
+        if name == "id" {
+            if let Some(old) = self.attr(n, "id").map(str::to_string) {
+                if self.ids.get(&old) == Some(&n) {
+                    self.ids.remove(&old);
+                }
+            }
+            self.ids.insert(value.clone(), n);
+        }
+        if let Kind::Element { attrs, .. } = &mut self.nodes[n as usize].kind {
+            match attrs.iter_mut().find(|a| a.name == name) {
+                Some(a) => a.value = value,
+                None => attrs.push(Attr {
+                    name: name.to_string(),
+                    value,
+                    ws: " ".to_string(),
+                }),
+            }
+        }
+        self.bump();
+    }
+
+    pub fn remove_attr(&mut self, n: NodeId, name: &str) -> Option<String> {
+        if name == "id" {
+            if let Some(old) = self.attr(n, "id").map(str::to_string) {
+                if self.ids.get(&old) == Some(&n) {
+                    self.ids.remove(&old);
+                }
+            }
+        }
+        let Kind::Element { attrs, .. } = &mut self.nodes[n as usize].kind else {
+            return None;
+        };
+        let i = attrs.iter().position(|a| a.name == name)?;
+        let removed = attrs.remove(i).value;
+        self.bump();
+        Some(removed)
+    }
+
+    /// `xlink:href` or SVG 2 `href`.
+    pub fn href(&self, n: NodeId) -> Option<&str> {
+        self.attr(n, "xlink:href").or_else(|| self.attr(n, "href"))
+    }
+
+    pub fn set_text(&mut self, n: NodeId, s: &str) {
+        match &mut self.nodes[n as usize].kind {
+            Kind::Text(t) | Kind::CData(t) => *t = s.to_string(),
+            _ => return,
+        }
+        if self.parent(n).is_some_and(|p| self.tag(p) == "style") {
+            self.bump_sheet();
+        }
+        self.bump();
+    }
+
+    /// The Text node directly following `n` (lxml's `.tail`), if any.
+    pub fn tail(&self, n: NodeId) -> Option<NodeId> {
+        let nx = self.next_sibling(n)?;
+        matches!(self.kind(nx), Kind::Text(_)).then_some(nx)
+    }
+
+    /// Returns the element's id, assigning `sciink-N` if it has none.
+    pub fn ensure_id(&mut self, n: NodeId) -> String {
+        if let Some(id) = self.attr(n, "id") {
+            return id.to_string();
+        }
+        loop {
+            let cand = format!("sciink-{}", self.next_auto_id);
+            self.next_auto_id += 1;
+            if !self.ids.contains_key(&cand) {
+                self.set_attr(n, "id", cand.clone());
+                return cand;
+            }
+        }
+    }
+
+    /// New detached element written as `<name/>` until children are added.
+    pub fn new_element(&mut self, name: &str) -> NodeId {
+        self.alloc(Kind::Element {
+            name: name.to_string(),
+            attrs: Vec::new(),
+            self_closing: true,
+            close_ws: String::new(),
+        })
+    }
+
+    pub fn new_text(&mut self, s: &str) -> NodeId {
+        self.alloc(Kind::Text(s.to_string()))
+    }
+
+    pub fn new_comment(&mut self, s: &str) -> NodeId {
+        self.alloc(Kind::Comment(s.to_string()))
+    }
+
+    /// Detached copy of `n` and its subtree; `id` attributes are dropped.
+    pub fn deep_clone(&mut self, n: NodeId) -> NodeId {
+        fn copy_kind(k: &Kind) -> Kind {
+            match k {
+                Kind::Element {
+                    name,
+                    attrs,
+                    self_closing,
+                    close_ws,
+                } => Kind::Element {
+                    name: name.clone(),
+                    attrs: attrs.iter().filter(|a| a.name != "id").cloned().collect(),
+                    self_closing: *self_closing,
+                    close_ws: close_ws.clone(),
+                },
+                other => other.clone(),
+            }
+        }
+        let root_copy = self.alloc(copy_kind(&self.nodes[n as usize].kind));
+        let mut stack: Vec<(NodeId, NodeId)> = vec![(n, root_copy)];
+        while let Some((src, dst)) = stack.pop() {
+            let kids: Vec<NodeId> = self.children(src).collect();
+            for k in kids {
+                let kc = self.alloc(copy_kind(&self.nodes[k as usize].kind));
+                self.link_last(dst, kc);
+                stack.push((k, kc));
+            }
+        }
+        root_copy
+    }
+
+    /// Unlinks `n` from its parent (keeping its subtree). No-op if detached.
+    pub fn detach(&mut self, n: NodeId) {
+        let Some(p) = self.nodes[n as usize].parent else {
+            return;
+        };
+        let (prev, next) = (self.nodes[n as usize].prev, self.nodes[n as usize].next);
+        match prev {
+            Some(x) => self.nodes[x as usize].next = next,
+            None => self.nodes[p as usize].first = next,
+        }
+        match next {
+            Some(x) => self.nodes[x as usize].prev = prev,
+            None => self.nodes[p as usize].last = prev,
+        }
+        {
+            let node = &mut self.nodes[n as usize];
+            node.parent = None;
+            node.prev = None;
+            node.next = None;
+        }
+        self.unindex_subtree(n);
+        if self.subtree_has_style(n) {
+            self.bump_sheet();
+        }
+        self.bump();
+    }
+
+    pub fn append_child(&mut self, parent: NodeId, n: NodeId) {
+        debug_assert!(
+            parent != n && !self.ancestors(parent).any(|a| a == n),
+            "cannot append an ancestor"
+        );
+        self.detach(n);
+        self.link_last(parent, n);
+        self.after_attach(n);
+    }
+
+    pub fn prepend_child(&mut self, parent: NodeId, n: NodeId) {
+        match self.nodes[parent as usize].first {
+            Some(f) if f != n => self.insert_before(n, f),
+            Some(_) => {}
+            None => self.append_child(parent, n),
+        }
+    }
+
+    pub fn insert_before(&mut self, n: NodeId, anchor: NodeId) {
+        debug_assert!(n != anchor, "cannot insert a node before itself");
+        self.detach(n);
+        let p = self.nodes[anchor as usize]
+            .parent
+            .expect("anchor must be attached");
+        let prev = self.nodes[anchor as usize].prev;
+        {
+            let node = &mut self.nodes[n as usize];
+            node.parent = Some(p);
+            node.prev = prev;
+            node.next = Some(anchor);
+        }
+        self.nodes[anchor as usize].prev = Some(n);
+        match prev {
+            Some(x) => self.nodes[x as usize].next = Some(n),
+            None => self.nodes[p as usize].first = Some(n),
+        }
+        self.after_attach(n);
+    }
+
+    pub fn insert_after(&mut self, n: NodeId, anchor: NodeId) {
+        debug_assert!(n != anchor, "cannot insert a node after itself");
+        match self.nodes[anchor as usize].next {
+            Some(nx) if nx != n => self.insert_before(n, nx),
+            Some(_) => {}
+            None => {
+                let p = self.nodes[anchor as usize]
+                    .parent
+                    .expect("anchor must be attached");
+                self.append_child(p, n);
+            }
+        }
+    }
+
+    /// Puts `new` where `old` is and detaches `old`.
+    pub fn replace(&mut self, old: NodeId, new: NodeId) {
+        self.insert_before(new, old);
+        self.detach(old);
+    }
+
+    /// First direct `<defs>` child of the root, created (and prepended) if absent.
+    pub fn defs(&mut self) -> NodeId {
+        if let Some(d) = self
+            .children(self.svg)
+            .find(|&c| self.is_element(c) && self.tag(c) == "defs")
+        {
+            return d;
+        }
+        let d = self.new_element("defs");
+        self.prepend_child(self.svg, d);
+        d
+    }
+
+    /// Nodes for the given ids in document order; unknown ids are dropped.
+    pub fn selection(&self, ids: &[String]) -> Vec<NodeId> {
+        let wanted: std::collections::HashSet<NodeId> =
+            ids.iter().filter_map(|i| self.by_id(i)).collect();
+        self.descendants(self.svg)
+            .filter(|n| wanted.contains(n))
+            .collect()
+    }
+
+    pub(crate) fn bump(&self) {
+        self.generation.set(self.generation.get() + 1);
+    }
+
+    fn bump_sheet(&self) {
+        self.sheet_generation.set(self.sheet_generation.get() + 1);
+    }
+
+    fn after_attach(&mut self, n: NodeId) {
+        self.index_subtree(n);
+        if self.subtree_has_style(n) {
+            self.bump_sheet();
+        }
+        self.bump();
+    }
+
+    fn index_subtree(&mut self, n: NodeId) {
+        let ids: Vec<(String, NodeId)> = self
+            .descendants(n)
+            .filter_map(|d| self.attr(d, "id").map(|id| (id.to_string(), d)))
+            .collect();
+        for (id, d) in ids {
+            self.ids.entry(id).or_insert(d);
+        }
+    }
+
+    fn unindex_subtree(&mut self, n: NodeId) {
+        let ids: Vec<(String, NodeId)> = self
+            .descendants(n)
+            .filter_map(|d| self.attr(d, "id").map(|id| (id.to_string(), d)))
+            .collect();
+        for (id, d) in ids {
+            if self.ids.get(&id) == Some(&d) {
+                self.ids.remove(&id);
+            }
+        }
+    }
+
+    fn subtree_has_style(&self, n: NodeId) -> bool {
+        self.descendants(n)
+            .any(|d| self.is_element(d) && self.tag(d) == "style")
     }
 }
 
