@@ -14,11 +14,15 @@ static LAST_PANIC_LOCATION: Mutex<Option<String>> = Mutex::new(None);
 fn main() {
     let argv: Vec<OsString> = std::env::args_os().collect();
     if argv.iter().skip(1).any(|a| a == "--version" || a == "-V") {
-        println!("sciink {}", sciink::version());
+        // A GUI-subsystem exe (see the `windows_subsystem` attribute above) has no console
+        // of its own; a parent that captures stdout through a pipe it doesn't keep read
+        // open on (e.g. PowerShell's `& $exe --version`) can close it mid-write. `println!`
+        // panics on a failed write, so fall back to a tolerant write instead.
+        let _ = writeln!(std::io::stdout().lock(), "sciink {}", sciink::version());
         return;
     }
     if argv.iter().skip(1).any(|a| a == "--help" || a == "-h") {
-        println!("{}", sciink::cli::HELP);
+        let _ = writeln!(std::io::stdout().lock(), "{}", sciink::cli::HELP);
         return;
     }
     let pre = sciink::cli::prescan(&argv);

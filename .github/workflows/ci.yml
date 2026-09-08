@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -34,3 +34,39 @@ jobs:
         run: |
           ./target/release/sciink --tool=about tests/data/edge/simple.svg > out.svg
           cmp out.svg tests/data/edge/simple.svg
+      - name: package + installer (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          asset=linux-x64; [ "$RUNNER_OS" = macOS ] && asset=macos-universal
+          dist/package.sh "$asset" target/release/sciink
+          dist/test-package.sh "dist/out/sciink-$asset.zip"
+          dist/test-install.sh "dist/out/sciink-$asset.zip"
+      - name: package + installer (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          dist/package.sh windows-x64 target/release/sciink.exe
+          dist/test-package.sh dist/out/sciink-windows-x64.zip
+      - name: install.ps1 (windows, PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP "ext with space"
+          ./install.ps1 -Zip dist/out/sciink-windows-x64.zip -Dest $dest
+          if (-not (Test-Path (Join-Path $dest "sciink\bin\sciink.exe"))) { throw "not installed" }
+          if (-not (Test-Path (Join-Path $dest "sciink\about.inx"))) { throw "inx missing" }
+          ./install.ps1 -Dest $dest -Uninstall
+          if (Test-Path (Join-Path $dest "sciink")) { throw "uninstall failed" }
+          "PS-INSTALL-OK"
+      - name: install.ps1 (windows, PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP "ext51 with space"
+          ./install.ps1 -Zip dist/out/sciink-windows-x64.zip -Dest $dest
+          if (-not (Test-Path (Join-Path $dest "sciink\bin\sciink.exe"))) { throw "not installed" }
+          if (-not (Test-Path (Join-Path $dest "sciink\about.inx"))) { throw "inx missing" }
+          ./install.ps1 -Dest $dest -Uninstall
+          if (Test-Path (Join-Path $dest "sciink")) { throw "uninstall failed" }
+          "PS-INSTALL-OK"
