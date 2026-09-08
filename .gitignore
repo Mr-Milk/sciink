@@ -1,3 +1,4 @@
 /target
 /tests/upstream
+/dist/out
 .DS_Store
