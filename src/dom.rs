@@ -9,7 +9,7 @@
 //! Namespace prefixes are never resolved: `svg:path` and `path`
 //! compare equal by local name (ponytail: standard prefixes are enforced at parse).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -115,6 +115,8 @@ pub struct Doc {
     pub(crate) generation: Cell<u64>,
     /// Bumped when a `<style>` element or its text changes.
     pub(crate) sheet_generation: Cell<u64>,
+    /// Style-cascade caches (owned here so `style.rs` can keep them on the document).
+    pub(crate) caches: RefCell<crate::style::Caches>,
 }
 
 impl Doc {
@@ -138,6 +140,7 @@ impl Doc {
             next_auto_id: 1,
             generation: Cell::new(0),
             sheet_generation: Cell::new(0),
+            caches: RefCell::new(crate::style::Caches::default()),
         };
         doc.nodes.push(Node::new(Kind::Document));
         let mut stack: Vec<NodeId> = vec![0];
