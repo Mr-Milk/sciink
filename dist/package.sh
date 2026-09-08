@@ -2,7 +2,7 @@
 # Assemble a release zip: dist/package.sh <asset> <binary>
 #   asset  : macos-universal | windows-x64 | linux-x64
 #   binary : path to the built sciink[.exe]
-# Writes dist/out/sciink-<asset>.zip with layout sciink/{*.inx,bin/sciink[.exe],README.txt}
+# Writes dist/out/sciink-<asset>.zip with layout sciink/{*.inx,bin/sciink[.exe],README.txt,LICENSE}
 set -euo pipefail
 asset="${1:?usage: package.sh <asset> <binary>}"
 binary="${2:?usage: package.sh <asset> <binary>}"
@@ -31,6 +31,7 @@ for f in "$here"/inx/*.inx; do
   fi
 done
 sed -e "s/@VERSION@/$version/g" "$here/dist/README-dist.txt" > "$stage/sciink/README.txt"
+cp "$here/LICENSE" "$stage/sciink/LICENSE"
 
 mkdir -p "$here/dist/out"
 zip_path="$here/dist/out/sciink-$asset.zip"
@@ -40,6 +41,7 @@ if command -v zip >/dev/null 2>&1; then
 elif command -v 7z >/dev/null 2>&1; then
   (cd "$stage" && 7z a -tzip -bso0 -bsp0 "$zip_path" sciink >/dev/null)
 else
-  powershell.exe -NoProfile -Command "Compress-Archive -Path '$(cygpath -w "$stage/sciink")' -DestinationPath '$(cygpath -w "$zip_path")' -Force"
+  echo "need zip or 7z to build the archive" >&2
+  exit 1
 fi
 echo "$zip_path"

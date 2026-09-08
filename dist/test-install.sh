@@ -12,6 +12,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# After a (re)install, no crash-leftover staging dir may remain, and $ext
+# must contain nothing but sciink/ and the pre-existing sibling extension.
+assert_ext_layout() {
+  local stray entries
+  stray="$(find "$ext" -maxdepth 1 -name '.sciink-stage.*')"
+  [ -z "$stray" ] || { echo "FAIL: leftover staging dir: $stray"; exit 1; }
+  entries="$(ls -A "$ext" | sort | tr '\n' ' ')"
+  [ "$entries" = "other_extension sciink " ] || { echo "FAIL: unexpected entries in \$ext: $entries"; exit 1; }
+}
+
 # a sibling extension must never be touched by any install.sh operation below
 mkdir -p "$ext/other_extension" && touch "$ext/other_extension/keep.inx"
 
@@ -19,12 +29,14 @@ SCIINK_ZIP="$zip" SCIINK_EXT_DIR="$ext" sh "$here/install.sh"
 test -x "$ext/sciink/bin/sciink" || { echo "FAIL: binary not installed"; exit 1; }
 test -f "$ext/sciink/about.inx" || { echo "FAIL: inx not installed"; exit 1; }
 test -f "$ext/other_extension/keep.inx" || { echo "FAIL: install touched another extension"; exit 1; }
+assert_ext_layout
 
 # a stale file from an older install must disappear on re-install
 touch "$ext/sciink/stale.inx"
 SCIINK_ZIP="$zip" SCIINK_EXT_DIR="$ext" sh "$here/install.sh"
 test ! -e "$ext/sciink/stale.inx" || { echo "FAIL: stale file survived re-install"; exit 1; }
 test -f "$ext/other_extension/keep.inx" || { echo "FAIL: re-install touched another extension"; exit 1; }
+assert_ext_layout
 
 # a broken PATH (no unzip/bsdtar) must fail closed and never touch the existing install
 minimal_bin="$(mktemp -d)"

@@ -12,6 +12,7 @@ if command -v unzip >/dev/null 2>&1; then unzip -oq "$zip" -d "$tmp"; else bsdta
 test -d "$tmp/sciink" || { echo "FAIL: zip has no top-level sciink/ folder"; exit 1; }
 test -f "$tmp/sciink/README.txt" || { echo "FAIL: README.txt missing"; exit 1; }
 test -f "$tmp/sciink/about.inx" || { echo "FAIL: about.inx missing"; exit 1; }
+test -f "$tmp/sciink/LICENSE" || { echo "FAIL: LICENSE missing"; exit 1; }
 grep -q '@VERSION@' "$tmp"/sciink/*.inx && { echo "FAIL: @VERSION@ left unsubstituted"; exit 1; }
 
 case "$zip" in
