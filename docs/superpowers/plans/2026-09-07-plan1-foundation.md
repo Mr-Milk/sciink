@@ -18,7 +18,7 @@
 - Namespace prefixes are literal strings (`inkscape:label`, `xlink:href`, `sodipodi:role`); never resolve namespaces. `tag()` compares local names only.
 - Every number written into the document goes through `num::fmt` (8 significant digits, shortest repr, `-0` → `0`, non-finite → `0`).
 - Attribute names used in code are exactly as written in the SVG (`"style"`, `"inkscape:label"`, `"xml:space"`).
-- Style semantics = upstream inkex `cache.py`: specified style of a node = parent's specified style overridden by the node's cascaded style; cascaded = presentation attrs < `<style>` rules (by `!important`, specificity, order) < inline `style=""`. Every property propagates (no inherited/non-inherited distinction).
+- Style semantics = upstream inkex `cache.py`: specified style of a node = parent's specified style overridden by the node's cascaded style; cascaded = presentation attrs < `<style>` rules < inline `style=""`, where an `!important` declaration (sheet or inline) beats any normal declaration and specificity/order break ties. Every property propagates (no inherited/non-inherited distinction).
 - Windows binary uses `#![cfg_attr(windows, windows_subsystem = "windows")]` (no console flash); stdout still works through Inkscape's pipe.
 - `panic = "unwind"` in release (needed for `catch_unwind`). All tree walks are iterative (no recursion on document depth).
 - Formatting/lints: `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings` must be clean before every commit.
