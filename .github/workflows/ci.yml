@@ -48,11 +48,22 @@ jobs:
         run: |
           dist/package.sh windows-x64 target/release/sciink.exe
           dist/test-package.sh dist/out/sciink-windows-x64.zip
-      - name: install.ps1 (windows)
+      - name: install.ps1 (windows, PowerShell 7)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $dest = Join-Path $env:RUNNER_TEMP "ext with space"
+          ./install.ps1 -Zip dist/out/sciink-windows-x64.zip -Dest $dest
+          if (-not (Test-Path (Join-Path $dest "sciink\bin\sciink.exe"))) { throw "not installed" }
+          if (-not (Test-Path (Join-Path $dest "sciink\about.inx"))) { throw "inx missing" }
+          ./install.ps1 -Dest $dest -Uninstall
+          if (Test-Path (Join-Path $dest "sciink")) { throw "uninstall failed" }
+          "PS-INSTALL-OK"
+      - name: install.ps1 (windows, PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP "ext51 with space"
           ./install.ps1 -Zip dist/out/sciink-windows-x64.zip -Dest $dest
           if (-not (Test-Path (Join-Path $dest "sciink\bin\sciink.exe"))) { throw "not installed" }
           if (-not (Test-Path (Join-Path $dest "sciink\about.inx"))) { throw "inx missing" }
