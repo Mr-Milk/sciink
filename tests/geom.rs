@@ -186,6 +186,17 @@ fn arcs_become_cubics_and_degenerate_arcs_become_lines() {
 }
 
 #[test]
+fn hostile_arc_radii_fall_back_to_a_line_instead_of_hanging() {
+    let t0 = std::time::Instant::now();
+    let p = parse_d("M 0 0 A 1e308 1e308 0 0 1 20 0").unwrap();
+    assert!(
+        t0.elapsed() < std::time::Duration::from_secs(2),
+        "must fall back to a line instantly instead of subdividing an absurd arc"
+    );
+    assert_eq!(p.path.elements()[1], PathEl::LineTo(pt(20.0, 0.0)));
+}
+
+#[test]
 fn fmt_d_is_absolute_and_round_trips() {
     let p = parse_d("M 0 0 h 10 v 10 z").unwrap();
     assert_eq!(fmt_d(&p.path), "M 0,0 L 10,0 L 10,10 Z");
@@ -234,7 +245,9 @@ fn shapes_convert_to_paths() {
          <polygon id=\"pg\" points=\"0,0 10,0 10,10\"/>\
          <path id=\"p\" d=\"M 0 0 L 1 1\"/>\
          <text id=\"t\">x</text>\
-         <rect id=\"bad\" width=\"50%\" height=\"1\"/></svg>"
+         <rect id=\"bad\" width=\"50%\" height=\"1\"/>\
+         <rect id=\"bad2\" x=\"50%\" y=\"0\" width=\"1\" height=\"1\"/>\
+         <circle id=\"bad3\" cx=\"1\" cy=\"1\" r=\"10%\"/></svg>"
             .as_bytes(),
     )
     .unwrap();
@@ -274,6 +287,14 @@ fn shapes_convert_to_paths() {
     assert!(
         shape_path(&d, d.by_id("bad").unwrap()).is_none(),
         "percent lengths are unsupported"
+    );
+    assert!(
+        shape_path(&d, d.by_id("bad2").unwrap()).is_none(),
+        "a percent x must fail the whole shape, not silently default to 0"
+    );
+    assert!(
+        shape_path(&d, d.by_id("bad3").unwrap()).is_none(),
+        "a percent r must fail the whole shape"
     );
 }
 

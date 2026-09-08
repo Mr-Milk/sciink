@@ -105,21 +105,35 @@ pub fn parse_d(d: &str) -> Option<ParsedPath> {
                 y,
             } => {
                 let p = pt(abs, cur, x, y);
-                let svg_arc = SvgArc {
-                    from: cur,
-                    to: p,
-                    radii: Vec2::new(rx.abs(), ry.abs()),
-                    x_rotation: x_axis_rotation.to_radians(),
-                    large_arc,
-                    sweep,
-                };
-                match Arc::from_svg_arc(&svg_arc) {
-                    Some(arc) => {
-                        for el in arc.append_iter(1e-4) {
-                            path.push(el);
+                // Hostile radii (non-finite, or so large the ellipse is locally
+                // flat) make `Arc::from_svg_arc`'s cubic-subdivision count grow
+                // with radius/tolerance without bound, hanging the process; fall
+                // back to a straight line instead of feeding it something absurd.
+                let hostile = !rx.is_finite()
+                    || !ry.is_finite()
+                    || !x.is_finite()
+                    || !y.is_finite()
+                    || rx.abs() > 1e15
+                    || ry.abs() > 1e15;
+                if hostile {
+                    path.line_to(p);
+                } else {
+                    let svg_arc = SvgArc {
+                        from: cur,
+                        to: p,
+                        radii: Vec2::new(rx.abs(), ry.abs()),
+                        x_rotation: x_axis_rotation.to_radians(),
+                        large_arc,
+                        sweep,
+                    };
+                    match Arc::from_svg_arc(&svg_arc) {
+                        Some(arc) => {
+                            for el in arc.append_iter(1e-4) {
+                                path.push(el);
+                            }
                         }
+                        None => path.line_to(p),
                     }
-                    None => path.line_to(p),
                 }
                 cur = p;
             }
@@ -258,16 +272,30 @@ pub fn bbox_rough(path: &BezPath) -> Option<Rect> {
 /// Geometry of a shape element as a path in its own coordinates (`cache.py:426-467`,
 /// `inkex/elements/_polygons.py:350-362`). `None` for non-shapes or unusable attributes.
 pub fn shape_path(doc: &Doc, n: NodeId) -> Option<ParsedPath> {
-    let num_attr = |name: &str| doc.attr(n, name).and_then(ipx);
+    // `None` = attribute absent (a caller may apply its own default);
+    // `Some(None)` = attribute present but unusable (e.g. a `%` length, which
+    // needs a viewport we don't compute) — every caller must propagate that as
+    // a hard failure of the whole shape, never silently substitute a default.
+    let raw = |name: &str| doc.attr(n, name).map(ipx);
+    // Required attribute: bail (return `None` from `shape_path`) on absent OR unusable.
+    let req = |name: &str| raw(name).flatten();
+    // Attribute that defaults to `default` when absent; still bails when
+    // present but unusable.
+    let opt = |name: &str, default: f64| match raw(name) {
+        None => Some(default),
+        Some(v) => v,
+    };
     let f = num::fmt;
     match doc.tag(n) {
         "path" => parse_d(doc.attr(n, "d")?),
         "rect" => {
-            let (x, y) = (num_attr("x").unwrap_or(0.0), num_attr("y").unwrap_or(0.0));
-            let w = doc.attr(n, "width").map(ipx)?;
-            let h = doc.attr(n, "height").map(ipx)?;
-            let (w, h) = (w?, h?);
-            let (rx0, ry0) = (num_attr("rx"), num_attr("ry"));
+            let (x, y) = (opt("x", 0.0)?, opt("y", 0.0)?);
+            let (w, h) = (req("width")?, req("height")?);
+            let (rx_raw, ry_raw) = (raw("rx"), raw("ry"));
+            if matches!(rx_raw, Some(None)) || matches!(ry_raw, Some(None)) {
+                return None;
+            }
+            let (rx0, ry0) = (rx_raw.flatten(), ry_raw.flatten());
             let d = match (rx0, ry0) {
                 (None, None) => format!("M {},{} h {} v {} h {} z", f(x), f(y), f(w), f(h), f(-w)),
                 _ => {
@@ -303,12 +331,12 @@ pub fn shape_path(doc: &Doc, n: NodeId) -> Option<ParsedPath> {
             parse_d(&d)
         }
         "circle" | "ellipse" => {
-            let (cx, cy) = (num_attr("cx").unwrap_or(0.0), num_attr("cy").unwrap_or(0.0));
+            let (cx, cy) = (opt("cx", 0.0)?, opt("cy", 0.0)?);
             let (rx, ry) = if doc.tag(n) == "circle" {
-                let r = num_attr("r")?;
+                let r = req("r")?;
                 (r, r)
             } else {
-                (num_attr("rx")?, num_attr("ry")?)
+                (req("rx")?, req("ry")?)
             };
             parse_d(&format!(
                 "M {},{} a {},{} 0 1 0 {},{} a {},{} 0 0 0 {},{} z",
@@ -326,10 +354,10 @@ pub fn shape_path(doc: &Doc, n: NodeId) -> Option<ParsedPath> {
         }
         "line" => parse_d(&format!(
             "M {},{} L {},{}",
-            f(num_attr("x1").unwrap_or(0.0)),
-            f(num_attr("y1").unwrap_or(0.0)),
-            f(num_attr("x2").unwrap_or(0.0)),
-            f(num_attr("y2").unwrap_or(0.0))
+            f(opt("x1", 0.0)?),
+            f(opt("y1", 0.0)?),
+            f(opt("x2", 0.0)?),
+            f(opt("y2", 0.0)?)
         )),
         "polyline" | "polygon" => {
             let pts: Vec<f64> = doc
