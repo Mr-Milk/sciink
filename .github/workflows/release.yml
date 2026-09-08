@@ -1,0 +1,89 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: macos-universal
+          - os: windows-latest
+            asset: windows-x64
+          - os: ubuntu-latest
+            asset: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tag must match the Cargo version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          v="$(cargo metadata --no-deps --format-version 1 | sed -n 's/.*"version":"\([^"]*\)".*/\1/p' | head -1)"
+          case "${GITHUB_REF_NAME#v}" in
+            "$v"|"$v"-*) echo "tag $GITHUB_REF_NAME matches Cargo version $v" ;;
+            *) echo "tag $GITHUB_REF_NAME does not match Cargo version $v"; exit 1 ;;
+          esac
+      - name: Build (macOS universal)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          export SCIINK_GIT_SHA="${GITHUB_SHA::7}" SCIINK_TARGET="universal-apple-darwin"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/sciink target/aarch64-apple-darwin/release/sciink target/x86_64-apple-darwin/release/sciink
+          codesign --force --sign - target/universal/sciink
+          echo "BIN=target/universal/sciink" >> "$GITHUB_ENV"
+      - name: Build (Linux musl, static)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          export SCIINK_GIT_SHA="${GITHUB_SHA::7}" SCIINK_TARGET="x86_64-unknown-linux-musl"
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --target x86_64-unknown-linux-musl
+          echo "BIN=target/x86_64-unknown-linux-musl/release/sciink" >> "$GITHUB_ENV"
+      - name: Build (Windows x64, static CRT)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          export SCIINK_GIT_SHA="${GITHUB_SHA::7}" SCIINK_TARGET="x86_64-pc-windows-msvc"
+          cargo build --release
+          echo "BIN=target/release/sciink.exe" >> "$GITHUB_ENV"
+      - name: Package
+        shell: bash
+        run: dist/package.sh ${{ matrix.asset }} "$BIN"
+      - name: Smoke-test the package
+        shell: bash
+        run: dist/test-package.sh dist/out/sciink-${{ matrix.asset }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sciink-${{ matrix.asset }}
+          path: dist/out/sciink-${{ matrix.asset }}.zip
+          if-no-files-found: error
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/out
+          merge-multiple: true
+      - name: List assets
+        run: ls -l dist/out
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/out/*.zip
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
