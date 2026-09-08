@@ -4,6 +4,7 @@
 
 pub mod cli;
 pub mod dom;
+pub mod geom;
 pub mod log;
 pub mod num;
 pub mod paths;
