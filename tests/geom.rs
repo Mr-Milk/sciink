@@ -333,3 +333,24 @@ fn upstream_paths_survive_parse_format_parse() {
         eprintln!("{}: {count} paths ok", file.display());
     }
 }
+
+#[test]
+fn hostile_arc_endpoints_degrade_to_a_line_quickly() {
+    use sciink::geom::path::parse_d;
+    // Endpoint 1e60 away: kurbo would scale the 5-unit radii to ~5e59.
+    let p = parse_d("M 0 0 A 5 5 0 0 1 1e60 1").expect("parses");
+    assert!(
+        p.path.elements().len() <= 3,
+        "expected MoveTo+LineTo, got {} elements",
+        p.path.elements().len()
+    );
+    // Huge but finite coordinates on both endpoints.
+    let p = parse_d("M 1e300 0 A 1 1 0 0 1 -1e300 0").expect("parses");
+    assert!(p.path.elements().len() <= 3);
+    // A sane arc still becomes cubics.
+    let p = parse_d("M 0 0 A 5 5 0 0 1 10 0").expect("parses");
+    assert!(
+        p.path.elements().len() > 3,
+        "a normal arc must be subdivided into cubics"
+    );
+}

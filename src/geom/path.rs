@@ -109,12 +109,19 @@ pub fn parse_d(d: &str) -> Option<ParsedPath> {
                 // flat) make `Arc::from_svg_arc`'s cubic-subdivision count grow
                 // with radius/tolerance without bound, hanging the process; fall
                 // back to a straight line instead of feeding it something absurd.
+                const LIMIT: f64 = 1e15;
                 let hostile = !rx.is_finite()
                     || !ry.is_finite()
-                    || !x.is_finite()
-                    || !y.is_finite()
-                    || rx.abs() > 1e15
-                    || ry.abs() > 1e15;
+                    || !p.x.is_finite()
+                    || !p.y.is_finite()
+                    || !cur.x.is_finite()
+                    || !cur.y.is_finite()
+                    || rx.abs() > LIMIT
+                    || ry.abs() > LIMIT
+                    || p.x.abs() > LIMIT
+                    || p.y.abs() > LIMIT
+                    || cur.x.abs() > LIMIT
+                    || cur.y.abs() > LIMIT;
                 if hostile {
                     path.line_to(p);
                 } else {
@@ -127,12 +134,19 @@ pub fn parse_d(d: &str) -> Option<ParsedPath> {
                         sweep,
                     };
                     match Arc::from_svg_arc(&svg_arc) {
-                        Some(arc) => {
+                        // kurbo may have scaled the radii up to reach the endpoint;
+                        // re-check them before subdividing.
+                        Some(arc)
+                            if arc.radii.x.is_finite()
+                                && arc.radii.y.is_finite()
+                                && arc.radii.x.abs() <= LIMIT
+                                && arc.radii.y.abs() <= LIMIT =>
+                        {
                             for el in arc.append_iter(1e-4) {
                                 path.push(el);
                             }
                         }
-                        None => path.line_to(p),
+                        _ => path.line_to(p),
                     }
                 }
                 cur = p;
