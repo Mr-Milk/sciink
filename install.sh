@@ -3,14 +3,19 @@
 #   curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | sh
 # Options (environment):
 #   SCIINK_VERSION=v0.1.0   install a specific release tag (default: latest)
-#   SCIINK_EXT_DIR=<dir>    Inkscape user extensions directory (default: detected)
+#   SCIINK_EXT_DIR=<dir>    Inkscape user extensions directory (default: detected;
+#                           set this for Snap/Flatpak or other non-default layouts)
 #   SCIINK_ZIP=<file>       install from a local zip instead of downloading
 # Flags: --uninstall        remove the sciink folder from the extensions directory
+#   curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | sh -s -- --uninstall
 set -eu
 
 main() {
   REPO="Mr-Milk/sciink"
   VERSION="${SCIINK_VERSION:-latest}"
+  if [ "$VERSION" != "latest" ]; then
+    VERSION="v${VERSION#v}"
+  fi
 
   os="$(uname -s)"
   arch="$(uname -m)"
@@ -43,6 +48,14 @@ main() {
     exit 0
   fi
 
+  # Start of the install path: clear any staging leftovers from a crashed
+  # previous run before doing anything else. Inkscape scans subdirectories
+  # for .inx files, so a stray staging dir would create duplicate menu
+  # entries. mkdir here (rather than down by the final swap) because the
+  # staging dir below is created inside $EXT and needs it to already exist.
+  mkdir -p "$EXT"
+  rm -rf "$EXT"/.sciink-stage.* 2>/dev/null || true
+
   # Verify we have the tools we'll need before touching anything on disk.
   if [ -z "${SCIINK_ZIP:-}" ]; then
     if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
@@ -55,44 +68,74 @@ main() {
     exit 1
   fi
 
-  if [ "$VERSION" = "latest" ]; then
-    url="https://github.com/$REPO/releases/latest/download/$asset"
-  else
-    url="https://github.com/$REPO/releases/download/$VERSION/$asset"
-  fi
+  fetch() {
+    # fetch <url> <dest> - download with curl or wget, whichever is available.
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL -o "$2" "$1"
+    else
+      wget -nv -O "$2" "$1"
+    fi
+  }
 
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  stage=""
+  cleanup() {
+    rm -rf "$tmp"
+    [ -z "$stage" ] || rm -rf "$stage"
+  }
+  trap cleanup EXIT
   zip="$tmp/$asset"
 
   if [ -n "${SCIINK_ZIP:-}" ]; then
     cp "$SCIINK_ZIP" "$zip"
-  else
+  elif [ "$VERSION" = "latest" ]; then
+    url="https://github.com/$REPO/releases/latest/download/$asset"
     echo "sciink: downloading $url"
-    if command -v curl >/dev/null 2>&1; then
-      curl -fsSL -o "$zip" "$url"
-    else
-      wget -qO "$zip" "$url"
+    if ! fetch "$url" "$zip"; then
+      # GitHub's "latest" release excludes pre-releases, so this 404s until
+      # the first stable release exists. Fall back to the newest release of
+      # any kind.
+      echo "sciink: no stable release yet, checking for a pre-release"
+      list="$tmp/releases.json"
+      fetch "https://api.github.com/repos/$REPO/releases?per_page=1" "$list" || {
+        echo "sciink: failed to query releases for $REPO" >&2
+        exit 1
+      }
+      tag="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$list" | head -1)"
+      [ -n "$tag" ] || { echo "sciink: no releases found for $REPO" >&2; exit 1; }
+      url="https://github.com/$REPO/releases/download/$tag/$asset"
+      echo "sciink: downloading $url"
+      fetch "$url" "$zip" || { echo "sciink: download failed: $url" >&2; exit 1; }
     fi
-  fi
-
-  # Stage the extraction in a scratch directory and validate it fully before
-  # touching the real extensions directory, so a bad download or a missing
-  # tool never destroys an existing install.
-  mkdir -p "$tmp/extract"
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -oq "$zip" -d "$tmp/extract"
   else
-    bsdtar -xf "$zip" -C "$tmp/extract"
+    url="https://github.com/$REPO/releases/download/$VERSION/$asset"
+    echo "sciink: downloading $url"
+    fetch "$url" "$zip" || { echo "sciink: download failed: $url" >&2; exit 1; }
   fi
-  test -f "$tmp/extract/sciink/bin/sciink" || { echo "sciink: archive did not contain sciink/bin/sciink" >&2; exit 1; }
-  chmod +x "$tmp/extract/sciink/bin/sciink"
-  "$tmp/extract/sciink/bin/sciink" --version >/dev/null 2>&1 || { echo "sciink: the downloaded binary does not run on this system ($os/$arch)" >&2; exit 1; }
 
-  mkdir -p "$EXT" && rm -rf "$EXT/sciink" && mv "$tmp/extract/sciink" "$EXT/sciink"
-  if [ "$os" = "Darwin" ]; then
-    xattr -dr com.apple.quarantine "$EXT/sciink" 2>/dev/null || true
+  # Stage the extraction inside the destination directory (not the system
+  # temp dir) so the final swap below is a same-volume rename, and validate
+  # it fully before touching the real extensions directory, so a bad
+  # download or a missing tool never destroys an existing install.
+  stage="$(mktemp -d "$EXT/.sciink-stage.XXXXXX")"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -oq "$zip" -d "$stage"
+  else
+    bsdtar -xf "$zip" -C "$stage"
   fi
+  test -f "$stage/sciink/bin/sciink" || { echo "sciink: archive did not contain sciink/bin/sciink" >&2; exit 1; }
+  chmod +x "$stage/sciink/bin/sciink"
+  if [ "$os" = "Darwin" ]; then
+    # Clear quarantine on the staged tree before we ever execute it: a zip
+    # passed via SCIINK_ZIP that was downloaded by a browser propagates the
+    # quarantine flag to the extracted binary, and Gatekeeper would kill the
+    # --version check below with a misleading "does not run" message.
+    xattr -dr com.apple.quarantine "$stage/sciink" 2>/dev/null || true
+  fi
+  "$stage/sciink/bin/sciink" --version >/dev/null 2>&1 || { echo "sciink: the downloaded binary does not run on this system ($os/$arch)" >&2; exit 1; }
+
+  rm -rf "$EXT/sciink"
+  mv "$stage/sciink" "$EXT/sciink"
 
   ver="$("$EXT/sciink/bin/sciink" --version)"
   echo "sciink: installed $ver into $EXT/sciink"
