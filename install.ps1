@@ -40,8 +40,11 @@ try {
     $stagedTarget = Join-Path $stage "sciink"
     $exe = Join-Path $stagedTarget "bin\sciink.exe"
     if (-not (Test-Path $exe)) { throw "sciink: archive did not contain sciink\bin\sciink.exe" }
-    $banner = & $exe --version
-    if ($LASTEXITCODE -ne 0) { throw "sciink: $exe --version failed with exit code $LASTEXITCODE" }
+    $versionFile = Join-Path $tmp "version.txt"
+    $proc = Start-Process -FilePath $exe -ArgumentList "--version" -Wait -NoNewWindow -PassThru -RedirectStandardOutput $versionFile
+    if ($proc.ExitCode -ne 0) { throw "sciink: the downloaded binary does not run on this system (exit code $($proc.ExitCode))" }
+    $banner = (Get-Content -Path $versionFile -Raw).Trim()
+    if (-not $banner.StartsWith("sciink ")) { throw "sciink: unexpected output from the downloaded binary: '$banner'" }
 
     if (Test-Path $target) { Remove-Item -Recurse -Force $target }
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
