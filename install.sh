@@ -44,6 +44,7 @@ main() {
 
   if [ "${1:-}" = "--uninstall" ]; then
     rm -rf "$EXT/sciink"
+    rm -rf "$EXT"/.sciink-stage.* 2>/dev/null || true
     echo "sciink: removed $EXT/sciink"
     exit 0
   fi
@@ -80,8 +81,10 @@ main() {
   tmp="$(mktemp -d)"
   stage=""
   cleanup() {
-    rm -rf "$tmp"
-    [ -z "$stage" ] || rm -rf "$stage"
+    # Each removal tolerates failure: under set -e a failing first rm would
+    # otherwise abort the trap and leave the staging dir inside $EXT.
+    rm -rf "$tmp" 2>/dev/null || true
+    [ -z "$stage" ] || rm -rf "$stage" 2>/dev/null || true
   }
   trap cleanup EXIT
   zip="$tmp/$asset"
