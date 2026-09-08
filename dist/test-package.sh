@@ -17,18 +17,24 @@ grep -q '@VERSION@' "$tmp"/sciink/*.inx && { echo "FAIL: @VERSION@ left unsubsti
 case "$zip" in
   *windows*)
     bin="$tmp/sciink/bin/sciink.exe"
-    grep -q '<command location="inx">bin/sciink.exe</command>' "$tmp/sciink/about.inx" || { echo "FAIL: windows inx must reference bin/sciink.exe"; exit 1; }
+    for f in "$tmp"/sciink/*.inx; do
+      grep -q '<command location="inx">bin/sciink.exe</command>' "$f" || { echo "FAIL: $(basename "$f") must reference bin/sciink.exe"; exit 1; }
+    done
     ;;
   *)
     bin="$tmp/sciink/bin/sciink"
-    grep -q '<command location="inx">bin/sciink</command>' "$tmp/sciink/about.inx" || { echo "FAIL: inx must reference bin/sciink"; exit 1; }
+    for f in "$tmp"/sciink/*.inx; do
+      grep -q '<command location="inx">bin/sciink</command>' "$f" || { echo "FAIL: $(basename "$f") must reference bin/sciink"; exit 1; }
+    done
     test -x "$bin" || { echo "FAIL: binary is not executable"; exit 1; }
     ;;
 esac
 test -f "$bin" || { echo "FAIL: binary missing at $bin"; exit 1; }
 
 "$bin" --version | grep -q '^sciink ' || { echo "FAIL: --version banner"; exit 1; }
-"$bin" --tool=about "$here/tests/data/edge/simple.svg" > "$tmp/out.svg" 2> "$tmp/err.txt"
+if ! "$bin" --tool=about "$here/tests/data/edge/simple.svg" > "$tmp/out.svg" 2> "$tmp/err.txt"; then
+  echo "FAIL: about exited non-zero"; cat "$tmp/err.txt"; exit 1
+fi
 cmp -s "$tmp/out.svg" "$here/tests/data/edge/simple.svg" || { echo "FAIL: about did not echo the document"; exit 1; }
 grep -q 'document: 3 elements' "$tmp/err.txt" || { echo "FAIL: about report missing"; cat "$tmp/err.txt"; exit 1; }
 echo "PACKAGE-OK $zip"
