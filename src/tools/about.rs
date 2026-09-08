@@ -19,7 +19,15 @@ pub struct AboutCli {
 }
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
-    let cli = AboutCli::try_parse_from(argv).map_err(|e| e.to_string())?;
+    // clap's `Display` is a multi-line usage block; the dialog Inkscape shows
+    // the user is one line, so keep only the first (the actual error message).
+    let cli = AboutCli::try_parse_from(argv).map_err(|e| {
+        e.to_string()
+            .lines()
+            .next()
+            .unwrap_or("invalid arguments")
+            .to_string()
+    })?;
     // ponytail: test hook for the process boundary's panic path (see tests/cli.rs)
     if std::env::var_os("SCIINK_TEST_PANIC").is_some() {
         panic!("injected test panic");

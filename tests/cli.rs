@@ -185,10 +185,13 @@ fn prescan_finds_tool_input_and_output_in_both_forms() {
 #[test]
 fn panic_in_tool_echoes_input_and_reports() {
     let p = tmp("panic.svg", SIMPLE);
+    let l = std::env::temp_dir().join(format!("sciink-test-{}-panic.log", std::process::id()));
+    let _ = std::fs::remove_file(&l);
     let out = bin()
         .arg("--tool=about")
         .arg(&p)
         .env("SCIINK_TEST_PANIC", "1")
+        .env("SCIINK_LOG", &l)
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -198,7 +201,16 @@ fn panic_in_tool_echoes_input_and_reports() {
     assert!(err.contains("injected test panic"), "{err}");
     assert!(!err.contains("panicked at"), "{err}");
     assert!(
+        !err.contains("about.rs"),
+        "the panic location must not leak into the dialog: {err}"
+    );
+    assert!(
         err.trim_end().ends_with("The document was left unchanged."),
         "{err}"
+    );
+    let log = std::fs::read_to_string(&l).unwrap();
+    assert!(
+        log.contains("at=src/tools/about.rs"),
+        "the log must record the injected panic's location: {log}"
     );
 }

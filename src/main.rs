@@ -8,6 +8,8 @@ use std::path::Path;
 use std::sync::Mutex;
 
 static LAST_PANIC: Mutex<Option<String>> = Mutex::new(None);
+/// `file:line:column` of the panic, for `SCIINK_LOG` only — never shown in the dialog.
+static LAST_PANIC_LOCATION: Mutex<Option<String>> = Mutex::new(None);
 
 fn main() {
     let argv: Vec<OsString> = std::env::args_os().collect();
@@ -38,6 +40,8 @@ fn main() {
         // which would leak a source path into the dialog Inkscape shows the user. Keep only
         // the payload for that message; the default hook (which would print the full form
         // to stderr) is replaced by this closure, so nothing but our own message is emitted.
+        // The location is still worth having for debugging, so it's captured separately
+        // and only ever read back into the `SCIINK_LOG` line below, never into the dialog.
         let payload = info
             .payload()
             .downcast_ref::<&str>()
@@ -46,6 +50,12 @@ fn main() {
             .unwrap_or_else(|| "unknown panic".to_string());
         if let Ok(mut g) = LAST_PANIC.lock() {
             *g = Some(payload);
+        }
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+        if let Ok(mut g) = LAST_PANIC_LOCATION.lock() {
+            *g = location;
         }
     }));
     let result = std::panic::catch_unwind(|| sciink::run(&argv, &input));
@@ -63,7 +73,12 @@ fn main() {
                 .ok()
                 .and_then(|g| g.clone())
                 .unwrap_or_else(|| "unknown panic".to_string());
-            sciink::log::line(&format!("tool={tool} panic={msg}"));
+            let loc = LAST_PANIC_LOCATION
+                .lock()
+                .ok()
+                .and_then(|g| g.clone())
+                .unwrap_or_else(|| "unknown".to_string());
+            sciink::log::line(&format!("tool={tool} panic={msg} at={loc}"));
             (
                 input.clone(),
                 vec![format!(
