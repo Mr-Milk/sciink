@@ -181,3 +181,24 @@ fn prescan_finds_tool_input_and_output_in_both_forms() {
     assert_eq!(p.output.as_deref().and_then(|x| x.to_str()), Some("o.svg"));
     assert_eq!(p.input.as_deref().and_then(|x| x.to_str()), Some("in.svg"));
 }
+
+#[test]
+fn panic_in_tool_echoes_input_and_reports() {
+    let p = tmp("panic.svg", SIMPLE);
+    let out = bin()
+        .arg("--tool=about")
+        .arg(&p)
+        .env("SCIINK_TEST_PANIC", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(out.stdout, SIMPLE.as_bytes());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("internal error (a bug)"), "{err}");
+    assert!(err.contains("injected test panic"), "{err}");
+    assert!(!err.contains("panicked at"), "{err}");
+    assert!(
+        err.trim_end().ends_with("The document was left unchanged."),
+        "{err}"
+    );
+}

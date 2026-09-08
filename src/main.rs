@@ -34,8 +34,18 @@ fn main() {
     };
     let tool = pre.tool.clone().unwrap_or_else(|| "?".to_string());
     std::panic::set_hook(Box::new(|info| {
+        // `PanicHookInfo`'s `Display` embeds "panicked at <file>:<line>:<col>:\n<payload>",
+        // which would leak a source path into the dialog Inkscape shows the user. Keep only
+        // the payload for that message; the default hook (which would print the full form
+        // to stderr) is replaced by this closure, so nothing but our own message is emitted.
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".to_string());
         if let Ok(mut g) = LAST_PANIC.lock() {
-            *g = Some(info.to_string());
+            *g = Some(payload);
         }
     }));
     let result = std::panic::catch_unwind(|| sciink::run(&argv, &input));
@@ -57,7 +67,7 @@ fn main() {
             (
                 input.clone(),
                 vec![format!(
-                    "sciink {tool}: internal error (a bug): {msg}\nThe document was left unchanged. Set SCIINK_LOG=<file> and report the log."
+                    "sciink {tool}: internal error (a bug): {msg}\nSet SCIINK_LOG=<file> and report the log. The document was left unchanged."
                 )],
             )
         }

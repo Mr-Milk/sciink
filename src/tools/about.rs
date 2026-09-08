@@ -20,6 +20,10 @@ pub struct AboutCli {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = AboutCli::try_parse_from(argv).map_err(|e| e.to_string())?;
+    // ponytail: test hook for the process boundary's panic path (see tests/cli.rs)
+    if std::env::var_os("SCIINK_TEST_PANIC").is_some() {
+        panic!("injected test panic");
+    }
     let t0 = Instant::now();
     let doc = Doc::parse(input).map_err(|e| e.to_string())?;
     let parse_ms = t0.elapsed().as_secs_f64() * 1000.0;
