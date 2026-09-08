@@ -63,8 +63,11 @@ if [ "$skip_negative" -eq 0 ]; then
   test -f "$ext/other_extension/keep.inx" || { echo "FAIL: missing-extractor run touched another extension"; exit 1; }
 fi
 
-# other extensions in the directory are untouched
+# other extensions in the directory are untouched, and a crash-leftover
+# staging dir is swept on uninstall too (not only on install)
+mkdir -p "$ext/.sciink-stage.leftover"
 SCIINK_EXT_DIR="$ext" sh "$here/install.sh" --uninstall
 test ! -e "$ext/sciink" || { echo "FAIL: uninstall left sciink/"; exit 1; }
+test ! -e "$ext/.sciink-stage.leftover" || { echo "FAIL: uninstall left a staging dir"; exit 1; }
 test -f "$ext/other_extension/keep.inx" || { echo "FAIL: uninstall touched another extension"; exit 1; }
 echo "INSTALL-OK"

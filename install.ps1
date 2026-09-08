@@ -26,6 +26,8 @@ $target = Join-Path $Dest "sciink"
 
 if ($Uninstall) {
     if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+    Get-ChildItem -Path $Dest -Filter ".sciink-stage-*" -Directory -Force -ErrorAction SilentlyContinue |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "sciink: removed $target"
     return
 }
@@ -59,7 +61,13 @@ try {
                 # until the first stable release exists. Fall back to the
                 # newest release of any kind.
                 Write-Host "sciink: no stable release yet, checking for a pre-release"
-                $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=1" -UseBasicParsing)
+                try {
+                    $releases = @(Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases?per_page=1" -UseBasicParsing)
+                } catch {
+                    # A rate limit or network failure here would otherwise
+                    # surface as a raw .NET exception.
+                    throw "sciink: could not query GitHub releases: $($_.Exception.Message)"
+                }
                 $tag = $releases[0].tag_name
                 if (-not $tag) { throw "sciink: no releases found for $repo" }
                 $url = "https://github.com/$repo/releases/download/$tag/$asset"
