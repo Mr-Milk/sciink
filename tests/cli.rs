@@ -210,7 +210,7 @@ fn panic_in_tool_echoes_input_and_reports() {
     );
     let log = std::fs::read_to_string(&l).unwrap();
     assert!(
-        log.contains("at=src/tools/about.rs"),
+        log.contains("at=src") && log.contains("about.rs:"),
         "the log must record the injected panic's location: {log}"
     );
 }

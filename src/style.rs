@@ -682,7 +682,7 @@ impl Doc {
                 decls.push(((imp, true, (0, 0, 0), idx), k, v.to_string()));
             }
         }
-        decls.sort_by(|a, b| a.0.cmp(&b.0));
+        decls.sort_by_key(|d| d.0);
         let mut st = Style::default();
         for (_, k, v) in decls {
             st.set_decl(&k, &v);
