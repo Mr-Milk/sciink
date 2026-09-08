@@ -4,8 +4,10 @@
 //! processing instructions, CDATA, attribute order, the whitespace before each
 //! attribute, the ` />` form, namespace prefixes as literal strings, all text.
 //! Normalized on output: attribute quotes are always `"`, text is re-escaped
-//! canonically (`& < >` in text, plus `"` and newline/tab/CR as char refs in
-//! attributes), and the DOCTYPE keyword is followed by exactly one space.
+//! canonically (`& < > "` in text), attribute values keep `&#9;`/`&#10;`/`&#13;`
+//! character references for tab/newline/CR (plus `"`) — kept because XML
+//! attribute-value normalization would otherwise turn them into spaces on
+//! re-parse — and the DOCTYPE keyword is followed by exactly one space.
 //! Namespace prefixes are never resolved: `svg:path` and `path`
 //! compare equal by local name (ponytail: standard prefixes are enforced at parse).
 
@@ -115,6 +117,12 @@ pub struct Doc {
     pub(crate) generation: Cell<u64>,
     /// Bumped when a `<style>` element or its text changes.
     pub(crate) sheet_generation: Cell<u64>,
+    /// Bumped only when a mutation can change some node's specified style: any
+    /// attach/detach (tree shape feeds selector combinators), a `<style>` text
+    /// change (via `bump_sheet`), or a `set_attr`/`remove_attr` touching
+    /// `style`/`class`/`id`/a presentation attribute. Geometry-only writes
+    /// (`d`, `transform`, …) leave it alone, so `Caches.specified` survives them.
+    pub(crate) style_generation: Cell<u64>,
     /// Style-cascade caches (owned here so `style.rs` can keep them on the document).
     pub(crate) caches: RefCell<crate::style::Caches>,
 }
@@ -140,6 +148,7 @@ impl Doc {
             next_auto_id: 1,
             generation: Cell::new(0),
             sheet_generation: Cell::new(0),
+            style_generation: Cell::new(0),
             caches: RefCell::new(crate::style::Caches::default()),
         };
         doc.nodes.push(Node::new(Kind::Document));
@@ -399,6 +408,15 @@ impl Doc {
         self.sheet_generation.get()
     }
 
+    /// Bumped whenever a mutation could change some node's specified style
+    /// (see the field doc on `style_generation`); unaffected by geometry-only
+    /// attribute writes. `style.rs` keys `Caches.specified` on this instead of
+    /// `generation()` so e.g. a `transform`/`d` write doesn't evict every
+    /// cached style under the mutated node.
+    pub fn style_generation(&self) -> u64 {
+        self.style_generation.get()
+    }
+
     pub fn kind(&self, n: NodeId) -> &Kind {
         &self.nodes[n as usize].kind
     }
@@ -547,6 +565,9 @@ impl Doc {
                 }),
             }
         }
+        if attr_affects_style(name) {
+            self.bump_style();
+        }
         self.bump();
     }
 
@@ -563,6 +584,9 @@ impl Doc {
         };
         let i = attrs.iter().position(|a| a.name == name)?;
         let removed = attrs.remove(i).value;
+        if attr_affects_style(name) {
+            self.bump_style();
+        }
         self.bump();
         Some(removed)
     }
@@ -677,6 +701,9 @@ impl Doc {
         if self.subtree_has_style(n) {
             self.bump_sheet();
         }
+        // Detaching changes the (now former) ancestor chain the subtree saw;
+        // see the comment in `after_attach`.
+        self.bump_style();
         self.bump();
     }
 
@@ -778,6 +805,13 @@ impl Doc {
 
     fn bump_sheet(&self) {
         self.sheet_generation.set(self.sheet_generation.get() + 1);
+        // A changed sheet can change what matches on any node, same as a sheet
+        // attach/detach.
+        self.bump_style();
+    }
+
+    fn bump_style(&self) {
+        self.style_generation.set(self.style_generation.get() + 1);
     }
 
     fn after_attach(&mut self, n: NodeId) {
@@ -785,6 +819,10 @@ impl Doc {
         if self.subtree_has_style(n) {
             self.bump_sheet();
         }
+        // Attaching changes the tree shape the attached subtree sees (its
+        // ancestor chain, and thus which descendant/child selectors match),
+        // regardless of whether a <style> element is involved.
+        self.bump_style();
         self.bump();
     }
 
@@ -865,12 +903,19 @@ fn parse_attributes(raw: &str) -> Result<(Vec<Attr>, String), DomError> {
     }
 }
 
+/// Whether writing/removing attribute `name` can change some node's cascade
+/// (a presentation attribute, or one a selector can key off: `style`, `class`, `id`).
+fn attr_affects_style(name: &str) -> bool {
+    matches!(name, "style" | "class" | "id") || crate::style::PRESENTATION_ATTRS.contains(&name)
+}
+
 fn escape_text(s: &str, out: &mut Vec<u8>) {
     for b in s.bytes() {
         match b {
             b'&' => out.extend_from_slice(b"&amp;"),
             b'<' => out.extend_from_slice(b"&lt;"),
             b'>' => out.extend_from_slice(b"&gt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
             _ => out.push(b),
         }
     }

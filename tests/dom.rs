@@ -28,6 +28,22 @@ fn edge_document_round_trips_byte_identically() {
 }
 
 #[test]
+fn quote_in_text_content_round_trips_byte_identically() {
+    // Inkscape's own serializer writes `&quot;` for `"` inside element text
+    // (not just attribute values); we must match it byte-for-byte.
+    let s = "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>a &quot;b&quot;</text></svg>";
+    assert_eq!(roundtrip(s), s);
+    let doc = Doc::parse(s.as_bytes()).unwrap();
+    let t = doc.children(doc.svg()).next().unwrap();
+    let txt = doc.first_child(t).unwrap();
+    assert_eq!(
+        doc.text(txt),
+        Some("a \"b\""),
+        "decoded in memory as a literal quote"
+    );
+}
+
+#[test]
 fn entities_are_decoded_in_memory() {
     let doc = Doc::parse(EDGE.as_bytes()).unwrap();
     let g1 = doc.by_id("g1").unwrap();
@@ -144,16 +160,7 @@ fn upstream_fixtures_round_trip_semantically() {
 #[test]
 fn upstream_fixtures_round_trip_byte_identically() {
     // Fixtures that legitimately cannot be byte-identical go here with a reason.
-    const KNOWN_DIFFERENT: &[&str] = &[
-        // Two <tspan> text nodes (byte offsets ~124248 and ~124368 in the source)
-        // spell a literal `"` as `&quot;` inside element text, e.g.
-        // `>Check with &quot;Insert SVG 1.1 </tspan>`. `"` needs no escaping in
-        // XML text content (only in attribute values), so we decode it and
-        // canonically re-emit the literal character; the source's redundant
-        // escape choice for that one character is the only difference in the
-        // whole 155KB file.
-        "Flow_tests.svg",
-    ];
+    const KNOWN_DIFFERENT: &[&str] = &[];
     for p in support::upstream_svgs() {
         let name = p.file_name().unwrap().to_string_lossy().to_string();
         if KNOWN_DIFFERENT.contains(&name.as_str()) {
