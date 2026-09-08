@@ -21,7 +21,7 @@ impl Style {
     /// declarations are skipped, the `font` shorthand is expanded.
     pub fn parse(css: &str) -> Style {
         let mut st = Style::default();
-        for decl in css.split(';') {
+        for decl in split_declarations(css) {
             let Some((k, v)) = decl.split_once(':') else {
                 continue;
             };
@@ -91,6 +91,10 @@ fn expand_font_shorthand(st: &mut Style, v: &str) {
             "small-caps" => st.set("font-variant", t),
             "bold" | "bolder" | "lighter" | "100" | "200" | "300" | "400" | "500" | "600"
             | "700" | "800" | "900" => st.set("font-weight", t),
+            "ultra-condensed" | "extra-condensed" | "condensed" | "semi-condensed"
+            | "semi-expanded" | "expanded" | "extra-expanded" | "ultra-expanded" => {
+                st.set("font-stretch", t)
+            }
             "normal" => {}
             _ => break,
         }
@@ -140,8 +144,13 @@ fn split_font_tokens(v: &str) -> Vec<String> {
     out
 }
 
-/// Attributes that Inkscape treats as presentation attributes (upstream
-/// `cache.py:267-332`, minus `clip`, `clip-path`, `mask`, `transform`).
+/// Attributes that Inkscape treats as presentation attributes. A superset of
+/// upstream `cache.py:267-332` (also minus `clip`, `clip-path`, `mask`,
+/// `transform`, which are geometry, not cascade, there too): adds `font`,
+/// `marker`, `paint-order`, `line-height`, `text-align`, `white-space`,
+/// `inline-size`, `shape-*`, `mix-blend-mode`, `isolation`, `vertical-align`,
+/// `font-kerning`, `font-variant-*`, `font-feature-settings`; omits
+/// `color-profile`, `kerning`.
 pub const PRESENTATION_ATTRS: &[&str] = &[
     "alignment-baseline",
     "baseline-shift",
@@ -461,7 +470,7 @@ fn skip_block(bytes: &[u8], open: usize) -> usize {
 
 fn parse_declarations(body: &str) -> Vec<(String, String, bool)> {
     let mut out = Vec::new();
-    for decl in body.split(';') {
+    for decl in split_declarations(body) {
         let Some((k, v)) = decl.split_once(':') else {
             continue;
         };
@@ -473,6 +482,39 @@ fn parse_declarations(body: &str) -> Vec<(String, String, bool)> {
         out.push((k, v.to_string(), important));
     }
     out
+}
+
+/// Splits a declaration list on `;`, the way CSS actually delimits
+/// declarations: a `;` inside a quoted string (`content:'a;b'`) or inside
+/// parentheses (`fill:url(data:image/png;base64,...)`) does not start a new
+/// declaration. Quotes and parens are tracked independently of the other, so
+/// a `;` is only a real separator when both are at depth zero.
+fn split_declarations(css: &str) -> impl Iterator<Item = &str> {
+    let bytes = css.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut quote: Option<u8> = None;
+    let mut depth = 0u32;
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = quote {
+            if b == q {
+                quote = None;
+            }
+            continue;
+        }
+        match b {
+            b'\'' | b'"' => quote = Some(b),
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b';' if depth == 0 => {
+                out.push(&css[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&css[start..]);
+    out.into_iter()
 }
 
 fn strip_important(v: &str) -> (&str, bool) {
@@ -536,6 +578,10 @@ fn parse_selector(text: &str) -> Option<Selector> {
     }
     if have_cur {
         parts.push((cur, pending.take()));
+    } else if pending.is_some() && !parts.is_empty() {
+        // A trailing combinator with nothing after it (`svg >`): the selector
+        // is malformed, not equivalent to dropping the combinator.
+        return None;
     }
     if parts.is_empty() {
         return None;
@@ -624,7 +670,7 @@ impl Doc {
             }
         }
         if let Some(inline) = self.attr(n, "style") {
-            for (idx, decl) in inline.split(';').enumerate() {
+            for (idx, decl) in split_declarations(inline).enumerate() {
                 let Some((k, v)) = decl.split_once(':') else {
                     continue;
                 };
@@ -646,7 +692,7 @@ impl Doc {
 
     /// Parent's specified style overridden by this element's cascaded style (cached).
     pub fn specified_style(&self, n: NodeId) -> Rc<Style> {
-        let g = self.generation.get();
+        let g = self.style_generation.get();
         if let Some(s) = self.cached_specified(n, g) {
             return s;
         }
@@ -664,11 +710,20 @@ impl Doc {
             chain.push(p);
             cur = self.parent(p);
         }
-        let mut acc: Style = base.map(|s| (*s).clone()).unwrap_or_default();
-        let mut result = None;
+        let mut acc: Style = base.as_ref().map(|s| (**s).clone()).unwrap_or_default();
+        // `result` doubles as "the Rc for the node just processed": when a node
+        // adds no declarations of its own, its specified style is identical to
+        // its parent's, so it shares that Rc instead of cloning `acc` into a
+        // fresh allocation (style-less `<g>` chains then cost one Rc total).
+        let mut result: Option<Rc<Style>> = base;
         for &node in chain.iter().rev() {
-            acc.merge_over(&self.cascaded_style(node));
-            let rc = Rc::new(acc.clone());
+            let cascaded = self.cascaded_style(node);
+            let rc = if cascaded.is_empty() {
+                result.clone().unwrap_or_else(|| Rc::new(Style::default()))
+            } else {
+                acc.merge_over(&cascaded);
+                Rc::new(acc.clone())
+            };
             self.caches
                 .borrow_mut()
                 .specified

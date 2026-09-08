@@ -1,3 +1,5 @@
+mod support;
+
 use sciink::dom::{Doc, NodeId};
 use sciink::style::Style;
 
@@ -130,6 +132,30 @@ fn matplotlib_universal_rule_and_font_shorthand() {
 }
 
 #[test]
+fn declarations_split_on_semicolons_outside_quotes_and_parens() {
+    let s = Style::parse("fill:url(\"data:image/png;base64,AAAA\");stroke:red");
+    assert_eq!(
+        s.0.len(),
+        2,
+        "the ';' inside url(\"...\") must not start a new declaration: {s:?}"
+    );
+    assert_eq!(
+        s.get("fill"),
+        Some("url(\"data:image/png;base64,AAAA\")"),
+        "the fill value must survive intact"
+    );
+    assert_eq!(s.get("stroke"), Some("red"));
+}
+
+#[test]
+fn font_shorthand_accepts_font_stretch_keywords() {
+    let s = Style::parse("font: condensed 10px Arial");
+    assert_eq!(s.get("font-stretch"), Some("condensed"));
+    assert_eq!(s.get("font-size"), Some("10px"));
+    assert_eq!(s.get("font-family"), Some("Arial"));
+}
+
+#[test]
 fn child_combinator_and_unsupported_selectors() {
     let d = doc(&format!(
         "<svg {NS}><style>svg > rect{{fill:red}} a:hover{{fill:pink}} rect[x]{{fill:pink}} g rect{{stroke:blue}}</style>\
@@ -143,6 +169,19 @@ fn child_combinator_and_unsupported_selectors() {
     );
     assert_eq!(d.computed(id(&d, "b"), "stroke"), "blue");
     assert_eq!(d.computed(id(&d, "a"), "stroke"), "none");
+}
+
+#[test]
+fn dangling_combinator_drops_the_rule() {
+    let d = doc(&format!(
+        "<svg {NS}><style>svg > {{fill:red}} rect{{fill:blue}}</style><rect id=\"r\"/></svg>"
+    ));
+    assert_eq!(d.computed(id(&d, "r"), "fill"), "blue");
+    assert_eq!(
+        d.computed(d.svg(), "fill"),
+        "black",
+        "a trailing '>' with nothing after it must not fall back to matching 'svg' alone"
+    );
 }
 
 #[test]
@@ -185,26 +224,108 @@ fn sheet_changes_invalidate_the_cache() {
 }
 
 #[test]
+fn geometry_attribute_writes_keep_the_style_cache() {
+    let mut d = doc(&format!(
+        "<svg {NS}><g style=\"fill:red\"><path id=\"p\"/></g></svg>"
+    ));
+    let p = id(&d, "p");
+    assert_eq!(d.specified(p, "fill"), Some("red".to_string()));
+    let sg0 = d.style_generation();
+    let gen0 = d.generation();
+
+    d.set_attr(p, "transform", "translate(1,2)");
+    d.set_attr(p, "d", "M 0,0");
+    assert_eq!(
+        d.style_generation(),
+        sg0,
+        "geometry-only attribute writes must not bump style_generation"
+    );
+    assert!(
+        d.generation() > gen0,
+        "geometry-only attribute writes must still bump generation"
+    );
+    assert_eq!(
+        d.specified(p, "fill"),
+        Some("red".to_string()),
+        "the cached specified style survived the geometry writes"
+    );
+
+    let sg1 = d.style_generation();
+    d.set_attr(p, "fill", "blue");
+    assert!(
+        d.style_generation() > sg1,
+        "a presentation-attribute write must bump style_generation"
+    );
+    assert_eq!(d.specified(p, "fill"), Some("blue".to_string()));
+
+    let sg2 = d.style_generation();
+    d.set_attr(p, "class", "c");
+    assert!(
+        d.style_generation() > sg2,
+        "writing class must bump style_generation"
+    );
+
+    let sg3 = d.style_generation();
+    d.set_attr(p, "style", "fill:green");
+    assert!(
+        d.style_generation() > sg3,
+        "writing style must bump style_generation"
+    );
+    assert_eq!(d.specified(p, "fill"), Some("green".to_string()));
+}
+
+#[test]
+fn style_less_child_shares_the_parent_specified_style_allocation() {
+    let d = doc(&format!(
+        "<svg {NS}><g id=\"g\" style=\"fill:red\"><g id=\"child\"/></g></svg>"
+    ));
+    let g = id(&d, "g");
+    let child = id(&d, "child");
+    assert!(
+        std::rc::Rc::ptr_eq(&d.specified_style(child), &d.specified_style(g)),
+        "a <g> with no declarations of its own must share its parent's Rc<Style>"
+    );
+}
+
+#[test]
 fn upstream_fixture_styles_resolve() {
-    // Text_tests.svg uses class sheets (`class="st38 st39"`); every text must resolve a font-family.
-    let Some(dir) = std::env::var_os("SCIINK_UPSTREAM_TESTS")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            let p =
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/upstream/data");
-            p.join("svg").is_dir().then_some(p)
-        })
-    else {
+    // Text_tests.svg uses class sheets (`class="st38 st39"`); most text elements
+    // resolve their font-family from a class rule via the cascade, not the SVG
+    // default — so unlike `computed` (which always falls back to `sans-serif`
+    // and so can never fail here), this checks `specified` directly.
+    let Some(dir) = support::upstream_data_dir() else {
         eprintln!("SKIP: upstream fixtures not found");
         return;
     };
     let d = Doc::parse(&std::fs::read(dir.join("svg/Text_tests.svg")).unwrap()).unwrap();
     let mut texts = 0;
+    let mut with_font_family = 0;
     for n in d.descendants(d.svg()) {
         if d.tag(n) == "text" {
             texts += 1;
-            assert!(!d.computed(n, "font-family").is_empty());
+            if d.specified(n, "font-family").is_some() {
+                with_font_family += 1;
+            }
         }
     }
     assert!(texts > 100, "expected many text elements, found {texts}");
+    assert!(
+        with_font_family >= 170,
+        "expected most texts to resolve a font-family from a class rule, found {with_font_family} of {texts}"
+    );
+
+    // The fixture's <style> sheets define `.st1{font-family:'DejaVu Sans';}`;
+    // confirm a real element wearing that class resolves it through the cascade.
+    let has_st1 = |n: NodeId| {
+        d.attr(n, "class")
+            .is_some_and(|c| c.split_ascii_whitespace().any(|cls| cls == "st1"))
+    };
+    let st1 = d
+        .descendants(d.svg())
+        .find(|&n| matches!(d.tag(n), "text" | "tspan") && has_st1(n))
+        .expect("no text/tspan with class \"st1\" in Text_tests.svg");
+    assert_eq!(
+        d.specified(st1, "font-family"),
+        Some("'DejaVu Sans'".to_string())
+    );
 }
