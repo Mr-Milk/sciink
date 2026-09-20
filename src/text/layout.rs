@@ -26,7 +26,7 @@ pub fn unrendered_space(pt: &ParsedText, li: usize, ci: usize) -> bool {
         && matches!(pt.chars[last].c, ' ' | '\u{A0}')
 }
 
-fn dadv(prev: &TChar, cur: &TChar) -> f64 {
+pub(crate) fn dadv(prev: &TChar, cur: &TChar) -> f64 {
     if prev.loc.node == cur.loc.node && prev.loc.tail == cur.loc.tail {
         cur.prop.dadvs.get(&prev.c).copied().unwrap_or(0.0) * cur.utfs
     } else {

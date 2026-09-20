@@ -11,8 +11,8 @@ use crate::dom::{Doc, NodeId};
 use crate::num;
 use crate::style::Style;
 
-use super::layout::{full_extent, unrendered_space};
-use super::parse::{CharLoc, ParsedText, TChar, TextLengthAdj, XY_TOL};
+use super::layout::{dadv, full_extent, unrendered_space};
+use super::parse::{CharLoc, ParsedText, TextLengthAdj, XY_TOL};
 
 /// The node whose style a character carries: the node itself for a text run, its parent for a tail
 /// (upstream `CLoc.sel`).
@@ -27,16 +27,6 @@ pub fn sel(doc: &Doc, loc: &CharLoc) -> NodeId {
 /// Order-insensitive value equality (upstream compares `Style` dicts).
 pub fn style_eq(a: &Style, b: &Style) -> bool {
     a.0.len() == b.0.len() && a.0.iter().all(|(k, v)| b.get(k) == Some(v.as_str()))
-}
-
-/// Pair kerning between two adjacent characters, as `layout::chunk_geom` applies it: only within one
-/// text node and only for pairs the char table measured.
-fn dadv(prev: &TChar, cur: &TChar) -> f64 {
-    if prev.loc.node == cur.loc.node && prev.loc.tail == cur.loc.tail {
-        cur.prop.dadvs.get(&prev.c).copied().unwrap_or(0.0) * cur.utfs
-    } else {
-        0.0
-    }
 }
 
 /// Rebuild `chars`, the snapshot vectors and every index from the line → chunk → character

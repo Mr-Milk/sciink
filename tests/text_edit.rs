@@ -234,7 +234,7 @@ fn remove_textlength_restores_widths_and_records_the_transform() {
     assert!(lsp > 0.0);
     let before = positions(&pt);
     remove_textlength(&mut pt);
-    assert_eq!(positions(&pt), before);
+    assert_pos(&positions(&pt), &before);
     assert_eq!(
         pt.chars[0].sty.get("letter-spacing"),
         Some(sciink::num::fmt(lsp).as_str())
