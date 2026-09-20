@@ -13,7 +13,7 @@ use crate::num;
 use crate::text::Warnings;
 use crate::text::fonts::FontSystem;
 use crate::text::layout::{
-    char_extents, char_pts_ink_ut, chunk_extents, chunk_geom, full_extent, full_ink_bbox,
+    char_pts_ink_ut, char_pts_ut, chunk_extents, chunk_geom, full_extent, full_ink_bbox,
     line_extents, pts_bbox,
 };
 use crate::text::parse::ParsedText;
@@ -33,19 +33,27 @@ pub struct TextHighlightCli {
 const STYLE_EVEN: &str = "fill:#007575;fill-opacity:0.4675";
 const STYLE_ODD: &str = "fill:#007575;fill-opacity:0.5675";
 
-/// Untransformed ink box per character, in `pt.chars` order.
-fn char_ink_extents(pt: &ParsedText) -> Vec<Rect> {
+/// Per-character rectangles paired with their `pt.chars` index (extent or ink box), so
+/// `data-family` can never drift if a character is skipped.
+fn char_rects(pt: &ParsedText, ink: bool) -> Vec<(usize, Rect)> {
     let mut out: Vec<(usize, Rect)> = Vec::new();
     for (li, ln) in pt.lines.iter().enumerate() {
         for (ci, ch) in ln.chunks.iter().enumerate() {
             let g = chunk_geom(pt, li, ci);
             for (wi, &c) in ch.chars.iter().enumerate() {
-                out.push((c, pts_bbox(&char_pts_ink_ut(pt, &g, c, wi))));
+                let p = if ink {
+                    char_pts_ink_ut(pt, &g, c, wi)
+                } else {
+                    char_pts_ut(pt, &g, wi)
+                };
+                if !p[0].y.is_nan() {
+                    out.push((c, pts_bbox(&p)));
+                }
             }
         }
     }
     out.sort_by_key(|(c, _)| *c);
-    out.into_iter().map(|(_, r)| r).collect()
+    out
 }
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
@@ -75,17 +83,25 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
             nflow += 1;
             continue;
         }
-        let per_char = matches!(cli.htype.as_str(), "char" | "charink");
-        let exts: Vec<Rect> = match cli.htype.as_str() {
-            "char" => char_extents(&pt),
-            "charink" => char_ink_extents(&pt),
-            "chunk" => chunk_extents(&pt),
-            "line" => line_extents(&pt),
-            "full" => full_extent(&pt).into_iter().collect(),
-            _ => full_ink_bbox(&pt).into_iter().collect(),
+        // `Option<usize>` carries each rect's original `pt.chars` index for the two
+        // per-char modes, so `data-family` stays attached to the right character even if
+        // `char_rects` ever drops an entry (a NaN baseline) ahead of it in the list.
+        let exts: Vec<(Option<usize>, Rect)> = match cli.htype.as_str() {
+            "char" => char_rects(&pt, false)
+                .into_iter()
+                .map(|(c, r)| (Some(c), r))
+                .collect(),
+            "charink" => char_rects(&pt, true)
+                .into_iter()
+                .map(|(c, r)| (Some(c), r))
+                .collect(),
+            "chunk" => chunk_extents(&pt).into_iter().map(|r| (None, r)).collect(),
+            "line" => line_extents(&pt).into_iter().map(|r| (None, r)).collect(),
+            "full" => full_extent(&pt).into_iter().map(|r| (None, r)).collect(),
+            _ => full_ink_bbox(&pt).into_iter().map(|r| (None, r)).collect(),
         };
         let tr = fmt_transform(pt.transform);
-        for (i, e) in exts.iter().enumerate() {
+        for (i, &(idx, e)) in exts.iter().enumerate() {
             let r = doc.new_element("rect");
             doc.set_attr(r, "x", num::fmt(e.x0));
             doc.set_attr(r, "y", num::fmt(e.y0));
@@ -95,8 +111,8 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
                 doc.set_attr(r, "transform", t.clone());
             }
             doc.set_attr(r, "style", if i % 2 == 0 { STYLE_EVEN } else { STYLE_ODD });
-            if per_char {
-                if let Some(face) = pt.chars.get(i).and_then(|c| c.face) {
+            if let Some(c) = idx {
+                if let Some(face) = pt.chars[c].face {
                     doc.set_attr(r, "data-family", ct.fonts.face_info(face).family.clone());
                 }
             }
