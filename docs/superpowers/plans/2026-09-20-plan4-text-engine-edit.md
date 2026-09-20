@@ -735,7 +735,7 @@ fn remove_textlength_restores_widths_and_records_the_transform() {
     assert!(lsp > 0.0);
     let before = positions(&pt);
     remove_textlength(&mut pt);
-    assert_eq!(positions(&pt), before);
+    assert_pos(&positions(&pt), &before);
     assert_eq!(pt.chars[0].sty.get("letter-spacing"), Some(sciink::num::fmt(lsp).as_str()));
     assert!(sciink::geom::is_identity(pt.transform_extra));
 
@@ -768,7 +768,7 @@ use crate::dom::{Doc, NodeId};
 use crate::num;
 use crate::style::Style;
 
-use super::layout::{chunk_char_pts, chunk_geom, full_extent, unrendered_space};
+use super::layout::{chunk_char_pts, chunk_geom, dadv, full_extent, unrendered_space};
 use super::parse::{CharLoc, ParsedText, TChar, TextLengthAdj, XY_TOL};
 
 /// The node whose style a character carries: the node itself for a text run, its parent for a tail
@@ -784,16 +784,6 @@ pub fn sel(doc: &Doc, loc: &CharLoc) -> NodeId {
 /// Order-insensitive value equality (upstream compares `Style` dicts).
 pub fn style_eq(a: &Style, b: &Style) -> bool {
     a.0.len() == b.0.len() && a.0.iter().all(|(k, v)| b.get(k) == Some(v.as_str()))
-}
-
-/// Pair kerning between two adjacent characters, as `layout::chunk_geom` applies it: only within one
-/// text node and only for pairs the char table measured.
-fn dadv(prev: &TChar, cur: &TChar) -> f64 {
-    if prev.loc.node == cur.loc.node && prev.loc.tail == cur.loc.tail {
-        cur.prop.dadvs.get(&prev.c).copied().unwrap_or(0.0) * cur.utfs
-    } else {
-        0.0
-    }
 }
 
 /// Rebuild `chars`, the snapshot vectors and every index from the line → chunk → character
@@ -919,7 +909,7 @@ pub fn remove_textlength(pt: &mut ParsedText) {
 }
 ```
 
-`Style` must derive `Clone` and `Default` (check `src/style.rs:16`; add the derives if missing — `Debug, Clone, Default, PartialEq, Eq`). Add `pub mod edit;` to `src/text/mod.rs` (keep the module list sorted: `edit`, `fonts`, `layout`, …). Unused imports (`chunk_char_pts`, `chunk_geom`) will be needed by later tasks — remove them for this commit if clippy complains and re-add when used.
+`delete_char` must apply pair kerning exactly as `layout::chunk_geom` does, so it shares the helper instead of copying it: in `src/text/layout.rs` change `fn dadv(prev: &TChar, cur: &TChar) -> f64` to `pub(crate) fn dadv(…)` (same body) and import it in `edit.rs` as shown. `Style` already derives `Clone, Debug, Default, PartialEq, Eq` (`src/style.rs:16`). Add `pub mod edit;` to `src/text/mod.rs` (keep the module list sorted: `edit`, `fonts`, `layout`, …). Unused imports (`chunk_char_pts`, `chunk_geom`) will be needed by later tasks — remove them for this commit if clippy complains and re-add when used.
 
 - [ ] **Step 4: Run the tests**
 
@@ -929,7 +919,7 @@ Expected: 4 passed. Then `cargo fmt --check && cargo clippy --all-targets -- -D 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/text/edit.rs src/text/mod.rs tests/text_edit.rs src/style.rs
+git add src/text/edit.rs src/text/layout.rs src/text/mod.rs tests/text_edit.rs
 git commit -m "feat(text): edit primitives — reindex, remove_chars, delete_char (P:4029–4118), remove_textlength (stage 2)"
 ```
 
