@@ -1,6 +1,7 @@
 //! Font discovery and selection (spec §A.3). fontdb enumerates faces; matching is
 //! ours so it is case-insensitive and follows CSS weight rules like fontconfig does.
 
+use crate::style::Style;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,6 +42,8 @@ pub struct FontSystem {
     by_family: HashMap<String, Vec<FaceKey>>,
     data: RefCell<HashMap<FaceKey, Rc<Vec<u8>>>>,
     load_ms: f64,
+    ladder_memo: HashMap<FontSpec, Vec<FaceKey>>,
+    char_memo: HashMap<(FontSpec, char), Option<FaceKey>>,
 }
 
 impl FontSystem {
@@ -153,6 +156,8 @@ impl FontSystem {
             by_family,
             data: RefCell::new(HashMap::new()),
             load_ms: t0.elapsed().as_secs_f64() * 1000.0,
+            ladder_memo: HashMap::new(),
+            char_memo: HashMap::new(),
         }
     }
 
@@ -337,4 +342,255 @@ fn face_metrics(face: &ttf_parser::Face<'_>) -> (f64, f64, f64, f64, f64, f64, f
         })
         .unwrap_or(0.7);
     (upem, asc, desc, asc_max, desc_max, x_height, cap_height)
+}
+
+/// fontconfig 60-latin.conf preference order (spec §A.3 step 3).
+pub const GENERIC_SANS: &[&str] = &[
+    "DejaVu Sans",
+    "Bitstream Vera Sans",
+    "Verdana",
+    "Arial",
+    "Albany AMT",
+    "Luxi Sans",
+    "Nimbus Sans L",
+    "Nimbus Sans",
+    "Helvetica",
+    "Lucida Sans Unicode",
+    "Tahoma",
+    "Noto Sans",
+];
+pub const GENERIC_SERIF: &[&str] = &[
+    "DejaVu Serif",
+    "Bitstream Vera Serif",
+    "Times New Roman",
+    "Thorndale AMT",
+    "Luxi Serif",
+    "Nimbus Roman No9 L",
+    "Nimbus Roman",
+    "Times",
+    "Noto Serif",
+];
+pub const GENERIC_MONO: &[&str] = &[
+    "DejaVu Sans Mono",
+    "Bitstream Vera Sans Mono",
+    "Inconsolata",
+    "Andale Mono",
+    "Courier New",
+    "Cumberland AMT",
+    "Luxi Mono",
+    "Nimbus Mono L",
+    "Nimbus Mono PS",
+    "Courier",
+    "Noto Sans Mono",
+];
+/// fontconfig 30-metric-aliases.conf groups (spec §A.3 step 2).
+pub const METRIC_ALIASES: &[&[&str]] = &[
+    &[
+        "Helvetica",
+        "Arial",
+        "Liberation Sans",
+        "Nimbus Sans",
+        "Nimbus Sans L",
+        "Arimo",
+        "Albany",
+        "Albany AMT",
+    ],
+    &[
+        "Times",
+        "Times New Roman",
+        "Liberation Serif",
+        "Nimbus Roman",
+        "Nimbus Roman No9 L",
+        "Tinos",
+        "Thorndale",
+        "Thorndale AMT",
+    ],
+    &[
+        "Courier",
+        "Courier New",
+        "Liberation Mono",
+        "Nimbus Mono",
+        "Nimbus Mono L",
+        "Nimbus Mono PS",
+        "Cousine",
+        "Cumberland",
+        "Cumberland AMT",
+    ],
+    &["Calibri", "Carlito"],
+    &["Cambria", "Caladea"],
+    &["Georgia", "Gelasio"],
+];
+/// Curated wide-coverage fallbacks tried before "any face".
+pub const WIDE_COVERAGE: &[&str] = &[
+    "Noto Sans",
+    "Noto Sans Symbols",
+    "Noto Sans Symbols 2",
+    "Noto Sans Math",
+    "DejaVu Sans",
+    "Arial Unicode MS",
+    "Segoe UI Symbol",
+    "Cambria Math",
+    "Apple Symbols",
+    "STIX Two Math",
+    "Symbola",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FontSpec {
+    pub families: Vec<String>,
+    pub weight: u16,
+    pub style: FontStyle,
+    pub width: u16,
+}
+
+impl FontSpec {
+    /// The four properties that select a font (upstream `font_style`, FP:357–370).
+    pub fn from_style(st: &Style) -> FontSpec {
+        let fam = st.get("font-family").unwrap_or("sans-serif");
+        let families: Vec<String> = fam
+            .split(',')
+            .map(|f| {
+                f.trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .trim()
+                    .to_string()
+            })
+            .filter(|f| !f.is_empty())
+            .collect();
+        let families = if families.is_empty() {
+            vec!["sans-serif".to_string()]
+        } else {
+            families
+        };
+        let weight = match st.get("font-weight").map(str::trim).unwrap_or("normal") {
+            "bold" => 700,
+            w => w
+                .parse::<u16>()
+                .ok()
+                .filter(|v| (100..=1000).contains(v) && v % 50 == 0)
+                .unwrap_or(400), // normal, bolder, lighter, semibold, … → Inkscape uses normal
+        };
+        let style = match st.get("font-style").map(str::trim).unwrap_or("normal") {
+            "italic" => FontStyle::Italic,
+            "oblique" => FontStyle::Oblique,
+            _ => FontStyle::Normal,
+        };
+        let width = match st.get("font-stretch").map(str::trim).unwrap_or("normal") {
+            "ultra-condensed" => 1,
+            "extra-condensed" => 2,
+            "condensed" => 3,
+            "semi-condensed" => 4,
+            "semi-expanded" => 6,
+            "expanded" => 7,
+            "extra-expanded" => 8,
+            "ultra-expanded" => 9,
+            _ => 5,
+        };
+        FontSpec {
+            families,
+            weight,
+            style,
+            width,
+        }
+    }
+
+    /// Upstream's `fsty` key: quoted, comma-joined families plus weight/style/width.
+    pub fn key(&self) -> String {
+        let fams: Vec<String> = self.families.iter().map(|f| format!("'{f}'")).collect();
+        let sty = match self.style {
+            FontStyle::Normal => "normal",
+            FontStyle::Italic => "italic",
+            FontStyle::Oblique => "oblique",
+        };
+        format!("{}|{}|{}|{}", fams.join(","), self.weight, sty, self.width)
+    }
+}
+
+fn generic_list(family: &str) -> Option<&'static [&'static str]> {
+    match family.to_ascii_lowercase().as_str() {
+        "sans-serif" | "sans" | "system-ui" | "ui-sans-serif" => Some(GENERIC_SANS),
+        "serif" | "ui-serif" => Some(GENERIC_SERIF),
+        "monospace" | "mono" | "ui-monospace" => Some(GENERIC_MONO),
+        "cursive" | "fantasy" => Some(GENERIC_SANS),
+        _ => None,
+    }
+}
+
+impl FontSystem {
+    fn push_family(&self, out: &mut Vec<FaceKey>, family: &str, spec: &FontSpec) {
+        if let Some(k) = self.pick(
+            self.family_faces(family),
+            spec.weight,
+            spec.style,
+            spec.width,
+        ) {
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        }
+    }
+
+    /// The whole ordered fallback ladder for `spec` (spec §A.3), each face once.
+    pub fn candidates(&self, spec: &FontSpec) -> Vec<FaceKey> {
+        let mut out = Vec::new();
+        for fam in &spec.families {
+            self.push_family(&mut out, fam, spec);
+            for group in METRIC_ALIASES {
+                if group.iter().any(|g| g.eq_ignore_ascii_case(fam)) {
+                    for g in *group {
+                        self.push_family(&mut out, g, spec);
+                    }
+                }
+            }
+            if let Some(list) = generic_list(fam) {
+                for g in list {
+                    self.push_family(&mut out, g, spec);
+                }
+            }
+        }
+        for g in GENERIC_SANS.iter().chain(WIDE_COVERAGE) {
+            self.push_family(&mut out, g, spec);
+        }
+        // last resort: every remaining face, same style first, nearest weight, then family
+        let mut rest: Vec<FaceKey> = self.faces().filter(|k| !out.contains(k)).collect();
+        rest.sort_by_key(|&k| {
+            let i = self.face_info(k);
+            (
+                (i.style != spec.style) as u8,
+                (i.weight as i32 - spec.weight as i32).abs(),
+                i.family.clone(),
+                k,
+            )
+        });
+        out.extend(rest);
+        out
+    }
+
+    /// The face Inkscape would pick for the whole run (`true_style`).
+    pub fn resolve(&mut self, spec: &FontSpec) -> Option<FaceKey> {
+        self.ladder(spec).first().copied()
+    }
+
+    /// The face that actually renders `c` under `spec`; `None` = no installed font has the glyph.
+    pub fn resolve_for_char(&mut self, spec: &FontSpec, c: char) -> Option<FaceKey> {
+        if let Some(r) = self.char_memo.get(&(spec.clone(), c)) {
+            return *r;
+        }
+        let r = self
+            .ladder(spec)
+            .iter()
+            .copied()
+            .find(|&k| self.has_glyph(k, c));
+        self.char_memo.insert((spec.clone(), c), r);
+        r
+    }
+
+    fn ladder(&mut self, spec: &FontSpec) -> Vec<FaceKey> {
+        if let Some(v) = self.ladder_memo.get(spec) {
+            return v.clone();
+        }
+        let v = self.candidates(spec);
+        self.ladder_memo.insert(spec.clone(), v.clone());
+        v
+    }
 }
