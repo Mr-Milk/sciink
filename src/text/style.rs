@@ -142,7 +142,7 @@ fn local_baseline(doc: &Doc, el: NodeId) -> f64 {
             .filter(|&p| doc.is_element(p))
             .unwrap_or_else(|| doc.svg());
         let f = composed_font_size(doc, par);
-        (f.tfs / f.scf) * p.trim().parse::<f64>().unwrap_or(0.0) / 100.0
+        f.utfs * p.trim().parse::<f64>().unwrap_or(0.0) / 100.0
     } else {
         ipx(v).unwrap_or(0.0)
     }

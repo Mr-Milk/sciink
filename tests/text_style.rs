@@ -141,3 +141,17 @@ fn relative_size_on_the_root_resolves_against_the_initial_value_without_recursin
     ));
     assert!((composed_width(&d3, id(&d3, "p"), "stroke-width").utfs - 2.0).abs() < 1e-9);
 }
+
+#[test]
+fn baseline_shift_survives_a_singular_parent_transform() {
+    // scale(0) makes tfs and scf both 0; the parent's untransformed size (10px) must still drive super = +40%.
+    let d = doc(&format!(
+        r#"<svg {NS}><g transform="scale(0)"><text id="u" style="font-size:10px">a<tspan id="sup" style="font-size:65%;baseline-shift:super">b</tspan></text></g></svg>"#
+    ));
+    let st = d.specified_style(id(&d, "sup"));
+    let bs = baseline_shift(&d, id(&d, "sup"), &st);
+    assert!(
+        (bs - 4.0).abs() < 1e-9,
+        "expected 4.0 (40% of 10px), got {bs}"
+    );
+}
