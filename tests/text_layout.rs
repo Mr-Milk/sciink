@@ -125,7 +125,17 @@ fn dy_baseline_shift_and_multi_chunk_lines() {
     assert!(close(pt.chars[2].caph, 0.729 * 5.0) || (pt.chars[2].caph - 3.645).abs() < 0.03);
     assert_eq!(chunk_extents(&pt).len(), 3);
     assert_eq!(line_extents(&pt).len(), 2);
-    assert_eq!(char_extents(&pt).len(), 3);
+    // char_extents carries each rect's index into pt.chars, in index order, so a consumer
+    // keying anything off the character cannot drift if a NaN-baseline char is dropped
+    let exts = char_extents(&pt);
+    assert_eq!(exts.len(), 3);
+    assert_eq!(
+        exts.iter().map(|&(i, _)| i).collect::<Vec<_>>(),
+        [0, 1, 2],
+        "indices into pt.chars, ascending"
+    );
+    // char 2 lives on the second line, whose chunk starts at x=60
+    assert!(close(exts[2].1.x0, g2.left[0]));
 }
 
 #[test]

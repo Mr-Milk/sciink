@@ -13,7 +13,7 @@ use crate::num;
 use crate::text::Warnings;
 use crate::text::fonts::FontSystem;
 use crate::text::layout::{
-    char_pts_ink_ut, char_pts_ut, chunk_extents, chunk_geom, full_extent, full_ink_bbox,
+    char_extents, char_pts_ink_ut, chunk_extents, chunk_geom, full_extent, full_ink_bbox,
     line_extents, pts_bbox,
 };
 use crate::text::parse::ParsedText;
@@ -34,18 +34,18 @@ const STYLE_EVEN: &str = "fill:#007575;fill-opacity:0.4675";
 const STYLE_ODD: &str = "fill:#007575;fill-opacity:0.5675";
 
 /// Per-character rectangles paired with their `pt.chars` index (extent or ink box), so
-/// `data-family` can never drift if a character is skipped.
+/// `data-family` can never drift if a character is skipped. The extent variant is
+/// `layout::char_extents`; only the ink box has no public twin.
 fn char_rects(pt: &ParsedText, ink: bool) -> Vec<(usize, Rect)> {
+    if !ink {
+        return char_extents(pt);
+    }
     let mut out: Vec<(usize, Rect)> = Vec::new();
     for (li, ln) in pt.lines.iter().enumerate() {
         for (ci, ch) in ln.chunks.iter().enumerate() {
             let g = chunk_geom(pt, li, ci);
             for (wi, &c) in ch.chars.iter().enumerate() {
-                let p = if ink {
-                    char_pts_ink_ut(pt, &g, c, wi)
-                } else {
-                    char_pts_ut(pt, &g, wi)
-                };
+                let p = char_pts_ink_ut(pt, &g, c, wi);
                 if !p[0].y.is_nan() {
                     out.push((c, pts_bbox(&p)));
                 }

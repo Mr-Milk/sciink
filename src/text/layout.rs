@@ -149,8 +149,12 @@ fn each_char(pt: &ParsedText, mut f: impl FnMut(usize, &ChunkGeom, usize)) {
     }
 }
 
-/// One rectangle per character in `pt.chars` order (chars with a NaN baseline are skipped).
-pub fn char_extents(pt: &ParsedText) -> Vec<Rect> {
+/// One rectangle per character, paired with its index into `pt.chars` and in index order.
+///
+/// Characters with a NaN baseline are skipped, so the vector is *not* a dense mirror of
+/// `pt.chars`; the index rides along so a consumer that keys anything off the character
+/// (its face, its style, its location) can never drift when one is dropped.
+pub fn char_extents(pt: &ParsedText) -> Vec<(usize, Rect)> {
     let mut out: Vec<(usize, Rect)> = Vec::new();
     each_char(pt, |c, g, wi| {
         let p = char_pts_ut(pt, g, wi);
@@ -159,7 +163,7 @@ pub fn char_extents(pt: &ParsedText) -> Vec<Rect> {
         }
     });
     out.sort_by_key(|(c, _)| *c);
-    out.into_iter().map(|(_, r)| r).collect()
+    out
 }
 
 pub fn chunk_extents(pt: &ParsedText) -> Vec<Rect> {
@@ -184,7 +188,7 @@ pub fn line_extents(pt: &ParsedText) -> Vec<Rect> {
 pub fn full_extent(pt: &ParsedText) -> Option<Rect> {
     char_extents(pt)
         .into_iter()
-        .fold(None, |acc, r| union(acc, Some(r)))
+        .fold(None, |acc, (_, r)| union(acc, Some(r)))
 }
 
 pub fn full_ink_bbox(pt: &ParsedText) -> Option<Rect> {
