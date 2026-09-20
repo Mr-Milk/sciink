@@ -205,3 +205,40 @@ fn fixture_text_elements_all_have_finite_bboxes() {
         "parsed {parsed_n}, flows {flows}"
     );
 }
+
+#[test]
+fn vendored_inkscape_document_parses_end_to_end() {
+    // One real Inkscape document, vendored under tests/data so this runs on all three CI
+    // OSes (the upstream fixture corpus is dev-machine-only). Single <text>, "Test",
+    // font-size 148.615px inside a uniform matrix(0.264583, …) scale.
+    let src = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/corpus/Simple_text.svg"),
+    )
+    .unwrap();
+    let mut d = Doc::parse(&src).unwrap();
+    let texts: Vec<NodeId> = d
+        .descendants(d.svg())
+        .filter(|&n| d.is_element(n) && d.tag(n) == "text")
+        .collect();
+    assert_eq!(texts.len(), 1);
+    let mut w = Warnings::default();
+    let mut ct = CharTable::build(&d, &texts, fonts(), &mut w);
+    let pt = ParsedText::parse(&mut d, texts[0], &mut ct, &mut w).expect("parsed");
+    assert_eq!(pt.text(), "Test");
+    let exts = char_extents(&pt);
+    assert_eq!(exts.len(), 4);
+    assert_eq!(
+        exts.iter().map(|&(i, _)| i).collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert!(exts.iter().all(|(_, r)| r.x1 > r.x0 && r.y1 > r.y0));
+    let bb = text_bbox(&pt).expect("bbox");
+    assert!(
+        bb.x0.is_finite() && bb.y0.is_finite() && bb.x1 > bb.x0 && bb.y1 > bb.y0,
+        "{bb:?}"
+    );
+    // max tfs = the element's font-size × its matrix scale
+    let expect = 148.615 * 0.264583;
+    let got = max_tfs(&pt).expect("max_tfs");
+    assert!((got - expect).abs() < 1e-6, "{got} vs {expect}");
+}

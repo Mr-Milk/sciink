@@ -166,6 +166,17 @@ fn debugparser_reference_agreement() {
         eprintln!("SKIP: set SCIINK_SYSTEM_FONTS=1 to compare against the upstream reference");
         return;
     }
+    // This test goes straight to `sciink::run` (never through `with_vendored_fonts`), but it
+    // shares a process with three tests that set the vendored-font env vars behind a `Once`.
+    // If one of them got there first the comparison would be meaningless, so skip loudly
+    // rather than report a green run on DejaVu-only measurements.
+    if std::env::var_os("SCIINK_NO_SYSTEM_FONTS").is_some() {
+        eprintln!(
+            "SKIP: SCIINK_NO_SYSTEM_FONTS is set in this process (another test in this binary \
+             set it); run this test alone: cargo test --test text_tools -- --ignored debugparser"
+        );
+        return;
+    }
     let Some(dir) = support::upstream_data_dir() else {
         return;
     };
@@ -236,6 +247,16 @@ fn debugparser_reference_agreement() {
             .fold(f64::INFINITY, f64::min);
         per_family.entry(fam.clone()).or_default().push(best);
     }
+    // Every `assert!` below is gated on one of these four families appearing as a
+    // `data-family`; with none of them present the test would report green having checked
+    // nothing at all.
+    const GATED: [&str; 4] = ["Arial", "Tahoma", "Verdana", "Roboto"];
+    assert!(
+        per_family.keys().any(|f| GATED.contains(&f.as_str())),
+        "no gated family found — system fonts not loaded? run this test alone: \
+         cargo test --test text_tools -- --ignored debugparser (saw: {:?})",
+        per_family.keys().collect::<Vec<_>>()
+    );
     eprintln!(
         "{:<24}{:>6}{:>10}{:>10}",
         "family", "chars", "median", "p90"
@@ -245,7 +266,7 @@ fn debugparser_reference_agreement() {
         let med = v[v.len() / 2];
         let p90 = v[(v.len() * 9 / 10).min(v.len() - 1)];
         eprintln!("{fam:<24}{:>6}{med:>10.3}{p90:>10.3}", v.len());
-        if ["Arial", "Tahoma", "Verdana", "Roboto"].contains(&fam.as_str()) {
+        if GATED.contains(&fam.as_str()) {
             assert!(med < 0.5, "{fam}: median deviation {med} px");
         }
     }
