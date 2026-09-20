@@ -1518,6 +1518,58 @@ fn append_chunks_middle_anchor_moves_the_anchor_by_half_the_added_width() {
     }
     assert!(pts[0].lines[0].chunks[0].x > 50.0, "anchor moved right by half the appended width");
 }
+
+#[test]
+fn append_chunks_host_follows_upstream_for_nested_and_shallow_chunk_ends() {
+    // `inner` is the content of <text id="a">; <text id="b">yo</text> sits one space after a's end
+    let build = |inner: &str| -> (Doc, Vec<ParsedText>, CharTable) {
+        let probe = format!(r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">{inner}</text></svg>"#);
+        let mut pd = Doc::parse(probe.as_bytes()).unwrap();
+        let (ppt, _) = parsed(&mut pd, "a");
+        let last = &ppt.chars[ppt.chars.len() - 1];
+        let g = chunk_geom(&ppt, last.line, last.chunk);
+        let x2 = g.right[g.right.len() - 1] + last.spw;
+        let svg = format!(
+            r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">{inner}</text><text id="b" xml:space="preserve" style="{DV};font-size:10px" x="{x2}" y="0">yo</text></svg>"#
+        );
+        let mut d = Doc::parse(svg.as_bytes()).unwrap();
+        let els: Vec<NodeId> = ["a", "b"].iter().map(|i| id(&d, i)).collect();
+        let mut w = Warnings::default();
+        let mut ct = CharTable::build(&d, &els, fonts(), &mut w);
+        let mut pts: Vec<ParsedText> = els.iter().map(|&e| ParsedText::parse(&mut d, e, &mut ct, &mut w).unwrap()).collect();
+        for pt in pts.iter_mut() {
+            snapshot_parsed(pt);
+        }
+        (d, pts, ct)
+    };
+    // the chunk ends INSIDE a nested tspan while it starts in the text's own run: the new
+    // characters are typed into the tspan's tail and sized by the <text> (host = first node),
+    // not by the 20px tspan
+    let (d, mut pts, mut ct) = build(r#"H<tspan id="s" style="font-size:20px">i</tspan>"#);
+    assert_eq!(pts[0].lines[0].chunks.len(), 1, "one chunk spanning text and tspan");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming { chunk: (1, pts[1].chunk(0, 0).id), wtype: WType::Normal, max_spaces: None };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    assert_eq!(pts[0].text(), "Hi yo");
+    let o = pts[0].chars.iter().find(|c| c.c == 'o').unwrap();
+    assert_eq!((o.loc.node, o.loc.tail), (id(&d, "s"), true), "typed into the tspan's tail");
+    assert_eq!(sel(&d, &o.loc), id(&d, "a"));
+    assert!(close(o.utfs, 10.0), "sized by the <text>, not the tspan: {}", o.utfs);
+    assert_ne!(o.sty.get("font-size"), Some("50%"), "no size correction against the tspan's 20px");
+    // the chunk ends in the element's OWN tail text after a nested tspan (last character LESS
+    // nested than the first): upstream's climb runs off the document, so the characters join the
+    // last character's own node — the tspan's tail — never a node outside the element
+    let (d, mut pts, mut ct) = build(r#"<tspan id="s">Hi</tspan> ya"#);
+    assert_eq!(pts[0].lines[0].chunks.len(), 1);
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming { chunk: (1, pts[1].chunk(0, 0).id), wtype: WType::Normal, max_spaces: None };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    assert_eq!(pts[0].text(), "Hi ya yo");
+    let o = pts[0].chars.iter().find(|c| c.c == 'o').unwrap();
+    assert_eq!((o.loc.node, o.loc.tail), (id(&d, "s"), true));
+    assert_eq!(sel(&d, &o.loc), id(&d, "a"));
+    assert!(close(o.utfs, 10.0));
+}
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -1643,31 +1695,45 @@ pub fn append_chunks(
     //    Only the host's font size and specified style matter to the model (and `loc` for kerning).
     let first_sel = sel(doc, &pts[tp].chars[first_idx].loc);
     let lchr_sel = sel(doc, &lchr.loc);
-    let (host_loc, host_utfs, host_tfs, host_sty): (CharLoc, f64, f64, Rc<Style>) = if lchr_sel == first_sel {
+    let same_host = || -> (CharLoc, f64, f64, Rc<Style>) {
         (
             CharLoc { node: lchr.loc.node, tail: lchr.loc.tail, idx: u32::MAX },
             lchr.utfs,
             lchr.tfs,
             lchr.sty.clone(),
         )
+    };
+    let (host_loc, host_utfs, host_tfs, host_sty) = if lchr_sel == first_sel {
+        same_host()
     } else {
+        // Climb from the last character's node until the parent is the first character's node or
+        // the element (P:3170–3175). Upstream's `totail` is None when the climb runs off the
+        // document — the chunk ends in a node LESS nested than its first character
+        // (`<text><tspan>Hi</tspan> ya</text>`) — and the characters then join the last
+        // character's own node (P:3217–3223); never a node outside the element.
         let el = pts[tp].el;
         let mut cel = lchr_sel;
+        let mut stop: Option<NodeId> = None;
         while let Some(p) = doc.parent(cel) {
             if p == first_sel || p == el {
+                stop = Some(p);
                 break;
             }
             cel = p;
         }
-        let parent = doc.parent(cel).unwrap_or(el);
-        let (u, t, s) = if parent == first_sel {
-            let f = &pts[tp].chars[first_idx];
-            (f.utfs, f.tfs, f.sty.clone())
-        } else {
-            let fs = super::style::composed_font_size(doc, el);
-            (fs.utfs, fs.tfs, doc.specified_style(el))
-        };
-        (CharLoc { node: cel, tail: true, idx: u32::MAX }, u, t, s)
+        match stop {
+            None => same_host(),
+            Some(parent) => {
+                let (u, t, s) = if parent == first_sel {
+                    let f = &pts[tp].chars[first_idx];
+                    (f.utfs, f.tfs, f.sty.clone())
+                } else {
+                    let fs = super::style::composed_font_size(doc, el);
+                    (fs.utfs, fs.tfs, doc.specified_style(el))
+                };
+                (CharLoc { node: cel, tail: true, idx: u32::MAX }, u, t, s)
+            }
+        }
     };
 
     // 4. Remove the moved characters from their sources (P:3178–3205); a source may be the target element.
@@ -1695,7 +1761,8 @@ pub fn append_chunks(
             (Some("sub"), WType::Normal) => WType::Sub,
             (_, w) => w,
         };
-        let sizechanged = (c.tfs - host_tfs).abs() > 1e-4;
+        // a zero-size host cannot be compared against (and would print `inf%`)
+        let sizechanged = host_tfs > 0.0 && (c.tfs - host_tfs).abs() > 1e-4;
         if !style_eq(&c.sty, &host_sty) || matches!(ntype, WType::Super | WType::Sub) || sizechanged {
             let mut s = (*c.sty).clone();
             match ntype {
@@ -1746,7 +1813,7 @@ pub fn append_chunks(
 
 - [ ] **Step 4: Run the tests, fmt, clippy, full suite**
 
-Run: `cargo test --test text_edit 2>&1 | tail -15` → 11 passed; `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test 2>&1 | grep -E "^test result|FAILED"`.
+Run: `cargo test --test text_edit 2>&1 | tail -15` → 14 passed; `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test 2>&1 | grep -E "^test result|FAILED"`.
 
 - [ ] **Step 5: Commit**
 
