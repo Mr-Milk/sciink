@@ -69,3 +69,102 @@ fn char_table_collects_faces_preceders_and_warnings() {
             .any(|m| m == "no installed font has the character U+10348")
     );
 }
+
+use sciink::text::parse::{SprlType, line_specs, positions};
+use sciink::text::style::Anchor;
+use sciink::text::tree::TextTree;
+
+#[test]
+fn positions_effective_sprl_types_and_inheritance() {
+    // dds: 0 text, 1 tspan(role line, x,y) , 2 inner tspan (no pos), 3 tspan (role line but 2 x values) , 4 tspan (no role, x only)
+    let d = doc(&format!(
+        r#"<svg {NS} xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">
+      <text id="t" style="font-size:10px"><tspan id="a" sodipodi:role="line" x="5" y="10"><tspan id="b">ab</tspan></tspan><tspan id="c" sodipodi:role="line" x="1 2" y="20">cd</tspan><tspan id="e" x="7">e</tspan></text></svg>"#
+    ));
+    let tree = TextTree::new(&d, id(&d, "t"));
+    let p = positions(&d, &tree);
+    assert_eq!(p.esprl, [false, true, false, false, false]);
+    assert_eq!(
+        p.types,
+        [
+            SprlType::Normal,
+            SprlType::TlvlSprl,
+            SprlType::Normal,
+            SprlType::Normal,
+            SprlType::Normal
+        ]
+    );
+    // b cannot inherit from a: an effective sprl blocks the window (its chars will join a's line instead)
+    assert_eq!(p.x[2], [None]);
+    assert_eq!(p.xsrc[2], 2);
+    assert_eq!(p.x[3], [Some(1.0), Some(2.0)]);
+    assert_eq!(p.x[0], [Some(0.0)], "root without x gets [0]");
+    // e has x but no y; nothing in its window supplies one (only node 0 gets the [0] default)
+    assert_eq!(p.y[4], [None]);
+    assert_eq!(p.ysrc[4], 4);
+    assert_eq!(p.x[4], [Some(7.0)]);
+    // an sprl whose only text sits in a positioned descendant is disabled
+    let d2 = doc(&format!(
+        r#"<svg {NS} xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">
+      <text id="t"><tspan id="a" sodipodi:role="line" x="5" y="10"><tspan id="b" x="9">ab</tspan></tspan></text></svg>"#
+    ));
+    let tree2 = TextTree::new(&d2, id(&d2, "t"));
+    assert_eq!(positions(&d2, &tree2).esprl, [false, false, false]);
+}
+
+#[test]
+fn line_starts_for_inkscape_multiline_text() {
+    // Text_tests-style element: three sodipodi lines; line 2 has no y → sprl inherits y + line height
+    let d = doc(&format!(
+        r#"<svg {NS} xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">
+      <text id="t" style="font-size:10px;line-height:1.25;text-anchor:middle" x="3" y="4" transform="scale(2)"><tspan id="a" sodipodi:role="line" x="3" y="4">one</tspan><tspan id="b" sodipodi:role="line" x="3" y="16.5">two</tspan><tspan id="c" sodipodi:role="line" x="3" y="29">three</tspan></text></svg>"#
+    ));
+    let tree = TextTree::new(&d, id(&d, "t"));
+    let runs = tree.runs(&d);
+    let pos = positions(&d, &tree);
+    let lines = line_specs(&d, &tree, &runs, &pos);
+    assert_eq!(lines.len(), 3);
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.sprl && l.anchor == Anchor::Middle && !l.rtl)
+    );
+    assert_eq!(lines[0].x, [Some(3.0)]);
+    assert_eq!(lines[0].y, [Some(4.0)]);
+    // sprl lines ignore their own y: y = previous sprl y + line height (1.25 × 10) in untransformed units
+    assert_eq!(lines[1].y, [Some(16.5)]);
+    assert_eq!(lines[2].y, [Some(29.0)]);
+    assert_eq!(
+        lines.iter().map(|l| l.tlvlno).collect::<Vec<_>>(),
+        [Some(0), Some(1), Some(2)]
+    );
+    assert_eq!(
+        lines[1].xsrc,
+        id(&d, "t"),
+        "sprl lines inherit x from the first line's source"
+    );
+    // a normal (non-sprl) positioned tspan after sprl lines opens a line with continue flags
+    let d2 = doc(&format!(
+        r#"<svg {NS}><text id="t" x="1" y="2" style="direction:rtl;text-anchor:start">ab<tspan id="s" x="5">cd</tspan><tspan id="u" y="9">ef</tspan></text></svg>"#
+    ));
+    let tree2 = TextTree::new(&d2, id(&d2, "t"));
+    let runs2 = tree2.runs(&d2);
+    let pos2 = positions(&d2, &tree2);
+    let l2 = line_specs(&d2, &tree2, &runs2, &pos2);
+    assert_eq!(l2.len(), 3);
+    assert_eq!(
+        (l2[0].anchor, l2[0].rtl),
+        (Anchor::End, true),
+        "rtl swaps start/end"
+    );
+    assert_eq!(
+        (l2[1].x.clone(), l2[1].continue_x, l2[1].continue_y),
+        (vec![Some(5.0)], false, true)
+    );
+    assert_eq!(l2[1].y, [Some(2.0)], "y continues from the previous line");
+    assert_eq!((l2[2].y.clone(), l2[2].continue_x), (vec![Some(9.0)], true));
+    assert_eq!(l2[2].x, [Some(5.0)]);
+    assert_eq!(l2[0].first_run, 0);
+    assert_eq!(l2[0].tlvlno, Some(0));
+    assert_eq!(l2[1].tlvlno, Some(0), "s is the first direct child");
+}

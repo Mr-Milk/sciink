@@ -2,6 +2,7 @@
 
 pub mod fonts;
 pub mod metrics;
+pub mod parse;
 pub mod style;
 pub mod table;
 pub mod tree;
