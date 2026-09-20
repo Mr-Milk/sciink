@@ -253,3 +253,130 @@ fn remove_textlength_restores_widths_and_records_the_transform() {
     remove_textlength(&mut pt);
     assert!(!pt.text_length_removed);
 }
+
+use sciink::text::edit::{make_next_chain, rechunk_absolute, unique_reps};
+
+#[test]
+fn unique_reps_keeps_the_first_of_each_cluster() {
+    assert_eq!(
+        unique_reps(&[3.0, 1.0, 1.0005, 2.0, 3.0004], 0.001),
+        [1.0, 2.0, 3.0]
+    );
+    assert!(unique_reps(&[], 0.1).is_empty());
+}
+
+#[test]
+fn next_chain_links_chunks_on_one_baseline_in_x_order() {
+    // three chunks of the root run written out of x order ("abe" at 60, 0, 90), a fourth chunk on
+    // the same baseline from a positioned tspan (own x, inherited y), and one on another baseline.
+    // (A position list longer than an element's OWN text is truncated by depathologize — Plan 3's
+    // sanctioned simplification of P:4759–4835 — so per-character x values must sit on the run
+    // whose characters they position.)
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="60 0 90" y="0">abe<tspan id="s" x="30">c</tspan><tspan x="0" y="20">d</tspan></text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    assert_eq!(pt.lines.len(), 3);
+    assert!(
+        pt.lines[1].spec.continue_y && close(pt.lines[1].chunks[0].y, 0.0),
+        "'c' continues the baseline"
+    );
+    make_next_chain(&d, &mut pt);
+    let by_char = |c: char| -> (usize, usize) {
+        let tc = pt.chars.iter().find(|t| t.c == c).unwrap();
+        (tc.line, tc.chunk)
+    };
+    let chunk = |c: char| pt.chunk(by_char(c).0, by_char(c).1).clone();
+    // x order is b (0), c (30), a (60), e (90)
+    assert_eq!(chunk('b').next, Some(chunk('c').id));
+    assert_eq!(chunk('c').next, Some(chunk('a').id));
+    assert_eq!(chunk('a').next, Some(chunk('e').id));
+    assert_eq!(chunk('e').next, None);
+    assert_eq!(chunk('b').prev, None);
+    assert_eq!(chunk('a').prev, Some(chunk('c').id));
+    assert_eq!(chunk('e').prev, Some(chunk('a').id));
+    assert_eq!(
+        (chunk('d').next, chunk('d').prev),
+        (None, None),
+        "other baseline"
+    );
+    // c sits in <tspan id="s">, its neighbours in the text node: different style nodes;
+    // a and e share the text node
+    assert!(!chunk('c').prev_same_tspan);
+    assert!(!chunk('a').prev_same_tspan);
+    assert!(chunk('e').prev_same_tspan);
+}
+
+#[test]
+fn next_chain_swaps_a_space_sitting_on_the_next_chunk() {
+    // PDF-import bug (P:717–720): a " " chunk with the same x as the following chunk is ordered after it
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 20 20" y="0">a b</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    make_next_chain(&d, &mut pt);
+    let ids: Vec<u32> = pt.chunks().map(|(l, c)| pt.chunk(l, c).id).collect();
+    // chunks: a (id 0), " " (id 1), b (id 2); sorted by centre " " comes before b, then swapped
+    assert_eq!(pt.chunk(0, 0).next, Some(ids[2]), "a → b");
+    assert_eq!(pt.chunk(0, 2).next, Some(ids[1]), "b → space");
+    assert_eq!(pt.chunk(0, 1).next, None);
+}
+
+#[test]
+fn rechunk_absolute_turns_dx_into_new_lines_without_moving_glyphs() {
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="50" y="0" dx="0 0 3 0 -2">abcde</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    assert!(pt.any_dx);
+    let before = positions(&pt);
+    rechunk_absolute(&mut pt);
+    assert!(!pt.any_dx);
+    assert!(pt.chars.iter().all(|c| c.dx == 0.0));
+    // 'c' and 'e' carried dx → each opens a new line: "ab" | "cd" | "e"
+    let texts: Vec<String> = (0..pt.lines.len()).map(|li| pt.line_text(li)).collect();
+    assert_eq!(texts, ["ab", "cd", "e"]);
+    assert!(pt.lines.iter().all(|l| l.chunks.len() == 1));
+    assert!(!pt.lines[1].spec.sprl && !pt.lines[1].spec.continue_x);
+    let after = positions(&pt);
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        assert!(close(b.1, a.1) && close(b.2, a.2), "{b:?} vs {a:?}");
+    }
+    // middle anchor: the new chunk's x is the anchor point of its glyph run (P:1676)
+    let g = sciink::text::layout::chunk_geom(&pt, 1, 0);
+    assert!(close(
+        pt.lines[1].chunks[0].x,
+        0.5 * (g.left[0] + g.right[1])
+    ));
+
+    // dy only → new line with continue_x resolved to the end of the previous line
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0" dx="0 1" dy="0 0 4">abc</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    let before = positions(&pt);
+    rechunk_absolute(&mut pt);
+    let texts: Vec<String> = (0..pt.lines.len()).map(|li| pt.line_text(li)).collect();
+    assert_eq!(texts, ["a", "b", "c"]);
+    assert!(pt.lines[2].spec.continue_x && !pt.lines[2].spec.continue_y);
+    assert!(close(pt.lines[2].chunks[0].y, 4.0));
+    let after = positions(&pt);
+    for (b, a) in before.iter().zip(&after) {
+        assert!(close(b.1, a.1) && close(b.2, a.2), "{b:?} vs {a:?}");
+    }
+
+    // no dx: untouched (dy alone does not trigger the conversion, P:1667)
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0" y="0" dy="0 4">ab</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    rechunk_absolute(&mut pt);
+    assert_eq!(pt.lines.len(), 1);
+    assert!(close(pt.chars[1].dy, 4.0));
+}
