@@ -75,8 +75,8 @@ impl Metrics {
                         [
                             r.x_min as f64 / upem,
                             -(r.y_max as f64) / upem,
-                            (r.x_max - r.x_min) as f64 / upem,
-                            (r.y_max - r.y_min) as f64 / upem,
+                            (r.x_max as f64 - r.x_min as f64) / upem,
+                            (r.y_max as f64 - r.y_min as f64) / upem,
                         ]
                     })
                     .unwrap_or([0.0; 4])
