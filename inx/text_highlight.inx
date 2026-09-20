@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Text Highlight (sciink)</name>
+    <id>org.sciink.text-highlight</id>
+    <param name="tool" type="string" gui-hidden="true">text-highlight</param>
+    <param name="htype" type="optiongroup" appearance="combo" gui-text="Highlight">
+        <option value="char">Character extents</option>
+        <option value="charink">Character ink</option>
+        <option value="chunk">Chunks</option>
+        <option value="line">Lines</option>
+        <option value="full">Whole element</option>
+        <option value="fullink">Whole element ink</option>
+    </param>
+    <effect needs-live-preview="true">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific">
+                <submenu name="Debug"/>
+            </submenu>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>

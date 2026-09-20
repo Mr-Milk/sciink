@@ -18,6 +18,8 @@ pub enum ToolName {
     CombineByColor,
     FavoriteMarkers,
     About,
+    FontProbe,
+    TextHighlight,
 }
 
 /// Arguments every tool accepts. Tools `#[command(flatten)]` this into their own struct.
