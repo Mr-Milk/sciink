@@ -9,6 +9,7 @@ pub mod log;
 pub mod num;
 pub mod paths;
 pub mod style;
+pub mod text;
 pub mod tools;
 
 use std::ffi::OsString;
