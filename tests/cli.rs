@@ -214,3 +214,29 @@ fn panic_in_tool_echoes_input_and_reports() {
         "the log must record the injected panic's location: {log}"
     );
 }
+
+#[test]
+fn text_highlight_runs_through_the_binary_with_vendored_fonts() {
+    let p = tmp(
+        "highlight.svg",
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><text style="font-family:'DejaVu Sans'" x="0" y="0">Hi</text></svg>"#,
+    );
+    let out = bin()
+        .args(["--tool=text-highlight", "--htype=char"])
+        .arg(&p)
+        .env("SCIINK_NO_SYSTEM_FONTS", "1")
+        .env(
+            "SCIINK_FONT_DIRS",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts"),
+        )
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(
+        s.matches("<rect").count(),
+        2,
+        "{s}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

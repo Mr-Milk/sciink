@@ -452,3 +452,36 @@ fn mutations_bump_generation_and_style_changes_bump_sheet_generation() {
         "detaching <style> must bump sheet_generation"
     );
 }
+
+#[test]
+fn xml_space_href_and_new_id_accessors() {
+    let mut d = Doc::parse(
+        br##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs><path id="m1" d="M0,0"/></defs>
+  <text id="t" xml:space="preserve"><tspan id="s"> a </tspan></text>
+  <text id="u" xml:space="default"><tspan id="v">b</tspan></text>
+  <use id="c" xlink:href="#m1"/><use id="e" href="#nope"/><use id="f" href="m1"/>
+  <path id="FMArrowstart1" d="M0,0"/></svg>"##,
+    )
+    .unwrap();
+    let id = |d: &Doc, i: &str| d.by_id(i).unwrap();
+    assert!(d.xml_space_preserve(id(&d, "s")));
+    assert!(d.xml_space_preserve(id(&d, "t")));
+    assert!(!d.xml_space_preserve(id(&d, "v")));
+    assert!(!d.xml_space_preserve(id(&d, "m1")));
+    assert_eq!(d.resolve_href(id(&d, "c")), Some(id(&d, "m1")));
+    assert_eq!(d.resolve_href(id(&d, "e")), None);
+    assert_eq!(
+        d.resolve_href(id(&d, "f")),
+        None,
+        "only fragment hrefs resolve"
+    );
+    assert_eq!(d.new_id("FMArrowstart"), "FMArrowstart2");
+    assert_eq!(d.new_id("sciink-x"), "sciink-x1");
+    // new_id does not reserve: the same answer twice until something takes it
+    assert_eq!(d.new_id("FMArrowstart"), "FMArrowstart2");
+    let n = d.new_element("path");
+    d.set_attr(n, "id", "FMArrowstart2");
+    d.append_child(d.svg(), n);
+    assert_eq!(d.new_id("FMArrowstart"), "FMArrowstart3");
+}

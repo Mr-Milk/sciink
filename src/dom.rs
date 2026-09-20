@@ -628,6 +628,34 @@ impl Doc {
         }
     }
 
+    /// `true` when the nearest `xml:space` on the element or an ancestor is `preserve`.
+    pub fn xml_space_preserve(&self, n: NodeId) -> bool {
+        std::iter::once(n)
+            .chain(self.ancestors(n))
+            .filter(|&a| self.is_element(a))
+            .find_map(|a| self.attr(a, "xml:space"))
+            .is_some_and(|v| v.trim() == "preserve")
+    }
+
+    /// Target of an `href`/`xlink:href` of the form `#id`.
+    pub fn resolve_href(&self, n: NodeId) -> Option<NodeId> {
+        let h = self.href(n)?.trim();
+        let id = h.strip_prefix('#')?;
+        self.by_id(id)
+    }
+
+    /// `prefix` + the smallest positive integer giving an unused id (not reserved).
+    pub fn new_id(&mut self, prefix: &str) -> String {
+        let mut i = 1u32;
+        loop {
+            let cand = format!("{prefix}{i}");
+            if !self.ids.contains_key(&cand) {
+                return cand;
+            }
+            i += 1;
+        }
+    }
+
     /// New detached element written as `<name/>` until children are added.
     pub fn new_element(&mut self, name: &str) -> NodeId {
         self.alloc(Kind::Element {

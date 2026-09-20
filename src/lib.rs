@@ -9,6 +9,7 @@ pub mod log;
 pub mod num;
 pub mod paths;
 pub mod style;
+pub mod text;
 pub mod tools;
 
 use std::ffi::OsString;
@@ -35,6 +36,8 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     })?;
     match tool.as_str() {
         "about" => tools::about::run(argv, input),
+        "font-probe" => tools::font_probe::run(argv, input),
+        "text-highlight" => tools::text_highlight::run(argv, input),
         "flattener" | "scaler" | "homogenizer" | "text-ghoster" | "combine-by-color"
         | "favorite-markers" => Err(format!("the {tool} tool is not implemented yet")),
         other => Err(format!("unknown tool '{other}'")),

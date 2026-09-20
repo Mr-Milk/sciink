@@ -77,7 +77,7 @@ primary if it covers the codepoint, else first fallback face that covers it, els
   char, collapse `[ \t\r\n\f\v]+` → one space, strip leading/trailing; keep one trailing space in a *text*
   that has element children and ended with whitespace; keep one leading space in a *tail* that started with
   whitespace. Then (non-flows, regardless of xml:space): in each whitespace run the first `\n`/`\r` becomes a
-  space, further newlines dropped (P:4888–4906); trailing newline in the very last span dropped (P:4908–4912).
+  space, further newlines dropped (P:4888–4906); a trailing newline in any leaf span's text (`len(el)==0`) and in any last-child tail is dropped rather than converted (P:4908–4912; `cleanup_returns` with `last_span`).
 - `condense_comments` P:4914–4930: move comment tails onto previous sibling's tail / parent's text.
 
 **1b Text-run sequence** (P:2453–2516): pre-order walk; emit `Text(node)` on entry, `Tail(node)` on exit
@@ -87,7 +87,10 @@ primary if it covers the codepoint, else first fallback face that covers it, els
 **1c Positions per element** (P:379–469). `get_xy` (P:821–827): split on whitespace, `"none"` → None, else
 unit→px (`units.py:31–44`, unitless = px). Effective `sodipodi:role="line"` (`esprl`, P:384–394): tspan is a
 *direct child* of `<text>`, has role=line, exactly one x and one y; disabled if it has no own text and a
-descendant with own text has x or y. Inactive roles stripped (P:396–401). Types (P:403–416): `NORMAL` (not
+descendant with own text has x or y. Inactive roles stripped (P:396–401): everything downstream must read the
+*pruned* flag, i.e. `esprl`, not the raw attribute (the anchor rule of 1d is the one place this shows). The
+attribute-removal half of P:396–401 mutates the document, so it is deferred to Plan 4's writer; a measure-only
+pipeline needs only the pruned flag. Types (P:403–416): `NORMAL` (not
 esprl); `PRECEDEDSPRL` (esprl but preceded by a non-None tail, or first child while `<text>` has own text —
 **continues the previous line**); `TLVLSPRL` otherwise. Missing x/y inheritance (P:419–469): walk
 parent/child links across empty-text non-esprl elements; prefer ancestors, then nearest; record `xsrc/ysrc`.
@@ -123,8 +126,11 @@ lsp`; `dx = [c0.dx … c(n−1).dx, 0]` (n+1); `dxlsp = [0, lsp0, lsp1, …]` (l
 i); `dadv[0]=0, dadv[i]=dadvs(c[i−1],c[i])`.
 
 **1g Flags:** `isflow` (P:286–290: flowRoot, `shape-inside` link, or nonzero `inline-size`); `isinkscape`
-(P:308–317: every top-level line after the first is sprl **and** every line's style has
-`-inkscape-font-specification`); `ismlinkscape` = isinkscape ∧ >1 lines. Empty lines pruned (P:642–644).
+(P:308–317: the set of top-level lines after the first is **non-empty** and every one of them is sprl, **and**
+every line's style has `-inkscape-font-specification`). The non-emptiness is load-bearing and easy to lose:
+Python evaluates `all(… for line in tlvllns) and tlvllns and …`, where an empty `tlvllns` list is falsy, so a
+single-line element is never `isinkscape` even though `all([])` is `True`. `ismlinkscape` = isinkscape ∧
+>1 lines. Empty lines pruned (P:642–644).
 `textLength` (P:648–671): `spacingAndGlyphs` → scale all `cwd` by `textLength/Σwidths`; else add
 `(textLength − Σwidths)/(nchars − nchunks)` to every `lsp`.
 
@@ -136,9 +142,14 @@ offx    = −anfr·(cstop[n−1] − (unrenderedspace ? cwd[n−1] : 0) − (rtl
 left[i] = x + cstrt[i] + offx;  right[i] = x + cstop[i] + offx
 base[i] = y + prefix_sum(dy)[i] − bshft[i];  top[i] = base[i] − caph[i]
 char pts_ut = [(left,base),(left,top),(right,top),(right,base)]        // BL, TL, TR, BR
-chunk: lx2 = min_i(left[i]) − dx[0] − dxlsp[0] (P:3640); rx2 = lx2 + cstop[n−1]; by2 = max base; ty2 = min top
+chunk: lx2 = min_i(left[i]) − dx[0] − dxlsp[0] (P:3640); rx2 = lx2 + (right[n−1] − left[0]); by2 = max base; ty2 = min top
 pts_t = composed_transform ∘ pts_ut
 ```
+Upstream is internally inconsistent here: the **scalar** `pts_ut` (P:3689–3692) uses `chkw = rgtx[−1] − lftx[0]`,
+i.e. `right[n−1] − left[0]`, while the **vectorised** path (P:180–181) uses `cstop[n−1]` — the two differ by
+`dx[0]` whenever `dx[0] ≠ 0`. The scalar form above is the one ported and the one Plan 4 must use for
+`get_ut_pts`.
+
 `unrenderedspace` (P:3560–3579): chunk has >1 chars, its last char is the line's last and is `" "`/NBSP.
 Ink bbox of a char (P:4202–4210): `x = left + inkbb.x·utfs`, `y_bottom = base + (inkbb.y+inkbb.h)·utfs`,
 size `inkbb.w·utfs × inkbb.h·utfs`. Extent APIs P:1690–1793: `get_full_extent` = union of char extents
@@ -322,6 +333,18 @@ element), complex-script shaping.
 the fallback tspans as positioned text for **bbox only**, exclude from stages 5–11 (deliberate deviation:
 upstream lets flows participate in merges). Do not port `parse_lines_flow` (P:1808–2383) in v1.
 
+### Deliberate defensive deviations from upstream
+
+The port is otherwise a faithful transcription, so record the three places where it is *deliberately* safer
+than the Python — a future parity reviewer must not "correct" them back:
+
+- `get_xy` on a whitespace-only attribute (`x=" "`) returns `[None]`; upstream returns `[]` and the next
+  `xvs[i][0]` raises `IndexError`.
+- Chunk x/y carry the last non-`None` coordinate forward when a list entry is `None`; upstream would put
+  `None` into the arithmetic.
+- `local_baseline` resolves a `%`/`super`/`sub` shift against the parent's **`utfs`**; upstream's `fs2/sf2`
+  is `0/0 = NaN` under a singular (e.g. `scale(0)`) parent transform.
+
 ## A.3 Metrics layer
 
 `CProp` (P:4244–4287), em units: `charw` (advance of char in isolation: Pango `width("I="+c+"=I") −
@@ -399,7 +422,8 @@ impl ParsedText {
     pub fn snapshot_parsed(&mut self);
     pub fn full_extent(&self, which: Which /*Current|Parsed*/) -> Option<Rect>;   // P:1776
     pub fn full_ink_bbox(&self) -> Option<Rect>;                                  // P:1701
-    pub fn char_extents(&self) -> Vec<Rect>; pub fn chunk_extents(&self) -> Vec<Rect>; pub fn line_extents(&self) -> Vec<Rect>;
+    pub fn char_extents(&self) -> Vec<(usize, Rect)>;   // index into `chars`: NaN-baseline chars are skipped
+    pub fn chunk_extents(&self) -> Vec<Rect>; pub fn line_extents(&self) -> Vec<Rect>;
     pub fn chars(&self) -> impl Iterator<Item = &TChar>;
     pub fn max_tfs(&self) -> Option<f64>;
 }

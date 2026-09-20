@@ -10,6 +10,7 @@ use clap::Parser;
 use crate::Output;
 use crate::cli::Common;
 use crate::dom::Doc;
+use crate::text::fonts::FontSystem;
 
 #[derive(Parser, Debug)]
 #[command(name = "sciink", disable_help_flag = true, disable_version_flag = true)]
@@ -57,6 +58,20 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         r,
         "document: {elements} elements ({texts} text, {paths} path), parsed in {parse_ms:.1} ms"
     );
+    let mut fs = FontSystem::load();
+    let _ = writeln!(
+        r,
+        "fonts: {} faces in {:.0} ms",
+        fs.face_count(),
+        fs.load_ms()
+    );
+    for fam in ["Arial", "DejaVu Sans", "sans-serif"] {
+        let _ = writeln!(
+            r,
+            "{}",
+            crate::tools::font_probe::describe_resolution(&mut fs, fam)
+        );
+    }
     let _ = writeln!(r, "selection: {} object(s)", cli.common.ids.len());
     crate::log::line(&format!(
         "tool=about phase=parse ms={parse_ms:.1} elements={elements}"

@@ -333,3 +333,75 @@ fn upstream_paths_survive_parse_format_parse() {
         eprintln!("{}: {count} paths ok", file.display());
     }
 }
+
+#[test]
+fn hostile_arc_endpoints_degrade_to_a_line_quickly() {
+    use sciink::geom::path::parse_d;
+    // Endpoint 1e60 away: caught by first-stage hostile check on endpoint coordinates.
+    let p = parse_d("M 0 0 A 5 5 0 0 1 1e60 1").expect("parses");
+    assert_eq!(
+        p.path.elements().len(),
+        2,
+        "expected MoveTo+LineTo only, got {} elements",
+        p.path.elements().len()
+    );
+    // Huge but finite coordinates on both endpoints: caught by first-stage check.
+    let p = parse_d("M 1e300 0 A 1 1 0 0 1 -1e300 0").expect("parses");
+    assert_eq!(p.path.elements().len(), 2);
+    // Both endpoints are inside the per-axis limit (9.99e14 < 1e15), so the first
+    // guard passes; the chord is ~2e15 long, so kurbo scales the radii to ~1.41e15,
+    // which the second guard (converted radii) must reject.
+    let p =
+        parse_d("M 999999999999999 999999999999999 A 5 5 0 0 1 -999999999999999 -999999999999999")
+            .expect("parses");
+    assert_eq!(
+        p.path.elements().len(),
+        2,
+        "converted-radii guard must degrade the arc to a line"
+    );
+    // Radii exceeding LIMIT: caught by first-stage check on radii magnitude.
+    let p = parse_d("M 0 0 A 1e16 1e16 0 0 1 10 0").expect("parses");
+    assert_eq!(p.path.elements().len(), 2);
+    // Non-finite coordinates cannot be written as literals (svgtypes rejects them),
+    // but a relative move can overflow the current point to +inf; the arc that
+    // follows must then degrade to a line: MoveTo + LineTo (the `l`) + LineTo (the arc).
+    let p = parse_d("M 1e308 0 l 1e308 0 A 5 5 0 0 1 10 0").expect("parses");
+    assert_eq!(
+        p.path.elements().len(),
+        3,
+        "non-finite current point must degrade the arc to a line"
+    );
+    // Normal arc: still subdivides into cubics (no regression).
+    let p = parse_d("M 0 0 A 5 5 0 0 1 10 0").expect("parses");
+    assert!(
+        p.path.elements().len() > 3,
+        "a normal arc must be subdivided into cubics"
+    );
+}
+
+#[test]
+fn composed_transform_excludes_root_svg_and_composes_outer_first() {
+    use kurbo::{Affine, Point};
+    use sciink::dom::Doc;
+    let d = Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg" transform="scale(100)">
+  <g id="a" transform="translate(10,20)"><g id="b" transform="scale(2)"><path id="p" d="M0,0" transform="translate(1,1)"/></g></g>
+  <path id="q" d="M0,0"/></svg>"#).unwrap();
+    let p = d.by_id("p").unwrap();
+    let t = d.composed_transform(p);
+    // outer-first: translate(10,20) * scale(2) * translate(1,1) maps (0,0) -> (12, 22)
+    let got = t * Point::new(0.0, 0.0);
+    assert!(
+        (got.x - 12.0).abs() < 1e-9 && (got.y - 22.0).abs() < 1e-9,
+        "{got:?}"
+    );
+    assert_eq!(
+        d.composed_transform(d.by_id("q").unwrap()),
+        Affine::IDENTITY
+    );
+    assert_eq!(d.composed_transform(d.svg()), Affine::IDENTITY);
+    assert_eq!(
+        d.transform(d.by_id("a").unwrap()),
+        Affine::translate((10.0, 20.0))
+    );
+    assert_eq!(d.transform(d.by_id("q").unwrap()), Affine::IDENTITY);
+}
