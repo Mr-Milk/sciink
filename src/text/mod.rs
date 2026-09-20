@@ -3,6 +3,7 @@
 pub mod fonts;
 pub mod metrics;
 pub mod style;
+pub mod tree;
 
 /// User-facing warnings collected while measuring/parsing (deduplicated).
 #[derive(Debug, Default)]
