@@ -1,6 +1,7 @@
 //! Text engine (spec docs/spec/01-text-engine.md): fonts → metrics → parse → layout.
 
 pub mod fonts;
+pub mod metrics;
 
 /// User-facing warnings collected while measuring/parsing (deduplicated).
 #[derive(Debug, Default)]
