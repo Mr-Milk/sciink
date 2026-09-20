@@ -952,33 +952,38 @@ fn unique_reps_keeps_the_first_of_each_cluster() {
 
 #[test]
 fn next_chain_links_chunks_on_one_baseline_in_x_order() {
-    // three chunks on y=0 written out of x order plus one on another baseline
+    // three chunks of the root run written out of x order ("abe" at 60, 0, 90), a fourth chunk on
+    // the same baseline from a positioned tspan (own x, inherited y), and one on another baseline.
+    // (A position list longer than an element's OWN text is truncated by depathologize — Plan 3's
+    // sanctioned simplification of P:4759–4835 — so per-character x values must sit on the run
+    // whose characters they position.)
     let mut d = Doc::parse(
-        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="60 0 30" y="0">a<tspan id="s">b</tspan>c<tspan x="0" y="20">d</tspan></text></svg>"#).as_bytes(),
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="60 0 90" y="0">abe<tspan id="s" x="30">c</tspan><tspan x="0" y="20">d</tspan></text></svg>"#).as_bytes(),
     )
     .unwrap();
     let (mut pt, _) = parsed(&mut d, "t");
+    assert_eq!(pt.lines.len(), 3);
+    assert!(pt.lines[1].spec.continue_y && close(pt.lines[1].chunks[0].y, 0.0), "'c' continues the baseline");
     make_next_chain(&d, &mut pt);
     let by_char = |c: char| -> (usize, usize) {
         let tc = pt.chars.iter().find(|t| t.c == c).unwrap();
         (tc.line, tc.chunk)
     };
-    let (la, ca) = by_char('a');
-    let (lb, cb) = by_char('b');
-    let (lc, cc) = by_char('c');
-    let (ld, cd) = by_char('d');
-    let chunk = |(l, c): (usize, usize)| pt.chunk(l, c).clone();
-    // x order is b (0), c (30), a (60)
-    assert_eq!(chunk((lb, cb)).next, Some(chunk((lc, cc)).id));
-    assert_eq!(chunk((lc, cc)).next, Some(chunk((la, ca)).id));
-    assert_eq!(chunk((la, ca)).next, None);
-    assert_eq!(chunk((lb, cb)).prev, None);
-    assert_eq!(chunk((la, ca)).prev, Some(chunk((lc, cc)).id));
-    assert_eq!(chunk((ld, cd)).next, None, "other baseline");
-    assert_eq!(chunk((ld, cd)).prev, None);
-    // b is in <tspan id="s">, c is the tspan's tail (style node = text) → different nodes; a and c share the text node
-    assert!(!chunk((lc, cc)).prev_same_tspan);
-    assert!(chunk((la, ca)).prev_same_tspan);
+    let chunk = |c: char| pt.chunk(by_char(c).0, by_char(c).1).clone();
+    // x order is b (0), c (30), a (60), e (90)
+    assert_eq!(chunk('b').next, Some(chunk('c').id));
+    assert_eq!(chunk('c').next, Some(chunk('a').id));
+    assert_eq!(chunk('a').next, Some(chunk('e').id));
+    assert_eq!(chunk('e').next, None);
+    assert_eq!(chunk('b').prev, None);
+    assert_eq!(chunk('a').prev, Some(chunk('c').id));
+    assert_eq!(chunk('e').prev, Some(chunk('a').id));
+    assert_eq!((chunk('d').next, chunk('d').prev), (None, None), "other baseline");
+    // c sits in <tspan id="s">, its neighbours in the text node: different style nodes;
+    // a and e share the text node
+    assert!(!chunk('c').prev_same_tspan);
+    assert!(!chunk('a').prev_same_tspan);
+    assert!(chunk('e').prev_same_tspan);
 }
 
 #[test]
