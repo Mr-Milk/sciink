@@ -76,7 +76,42 @@ fn faces_iterate_in_stable_order_and_env_is_respected() {
     // from_dirs never loads system fonts, so counts are exact regardless of the host.
     let empty = FontSystem::from_dirs(&[]);
     assert_eq!(empty.face_count(), 0);
-    assert!(fs.load_ms() >= 0.0);
+    assert!(fs.load_ms() > 0.0);
+}
+
+#[test]
+fn load_ms_covers_the_directory_scan_not_just_the_face_pass() {
+    // The timer must start before the database is populated: reading the four vendored
+    // files off disk is the bulk of the cost and used to be excluded entirely.
+    let t0 = std::time::Instant::now();
+    let fs = fonts();
+    let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    assert_eq!(fs.face_count(), 4);
+    assert!(fs.load_ms() > 0.0, "load_ms = {}", fs.load_ms());
+    assert!(
+        fs.load_ms() <= wall_ms,
+        "load_ms {} exceeds the wall time {wall_ms} of the whole call",
+        fs.load_ms()
+    );
+}
+
+#[test]
+fn face_bytes_are_cached_per_source_file() {
+    let fs = fonts();
+    let dv = fs.family_faces("DejaVu Sans");
+    let reg = fs.pick(dv, 400, FontStyle::Normal, 5).unwrap();
+    let bold = fs.pick(dv, 700, FontStyle::Normal, 5).unwrap();
+    let (a, _) = fs.face_data(reg).unwrap();
+    let (b, _) = fs.face_data(reg).unwrap();
+    assert!(std::rc::Rc::ptr_eq(&a, &b), "second read hits the cache");
+    // DejaVuSans.ttf and DejaVuSans-Bold.ttf are separate files, so separate buffers.
+    let (c, _) = fs.face_data(bold).unwrap();
+    assert!(
+        !std::rc::Rc::ptr_eq(&a, &c),
+        "distinct files must not share a buffer"
+    );
+    // No `.ttc` is vendored, so the "faces of one collection share one buffer" half of the
+    // per-file cache is exercised only by system fonts; nothing here can assert it cheaply.
 }
 
 use sciink::style::Style;

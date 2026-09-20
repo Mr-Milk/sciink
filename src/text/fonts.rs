@@ -41,6 +41,8 @@ pub struct FontSystem {
     infos: Vec<FaceInfo>,
     by_family: HashMap<String, Vec<FaceKey>>,
     data: RefCell<HashMap<FaceKey, Rc<Vec<u8>>>>,
+    /// Bytes keyed by source file, so the faces of a `.ttc` collection share one copy.
+    file_data: RefCell<HashMap<PathBuf, Rc<Vec<u8>>>>,
     load_ms: f64,
     ladder_memo: HashMap<FontSpec, Vec<FaceKey>>,
     char_memo: HashMap<(FontSpec, char), Option<FaceKey>>,
@@ -49,6 +51,9 @@ pub struct FontSystem {
 impl FontSystem {
     /// System fonts (unless `SCIINK_NO_SYSTEM_FONTS=1`) plus every dir in `SCIINK_FONT_DIRS`.
     pub fn load() -> FontSystem {
+        // `load_ms` is the whole cost of having a usable font system, so the clock starts
+        // before the filesystem scan — on macOS/Windows the scan dominates the face pass.
+        let t0 = Instant::now();
         let mut db = fontdb::Database::new();
         if std::env::var_os("SCIINK_NO_SYSTEM_FONTS").is_none_or(|v| v != "1") {
             db.load_system_fonts();
@@ -58,20 +63,20 @@ impl FontSystem {
                 db.load_fonts_dir(d);
             }
         }
-        Self::from_db(db)
+        Self::from_db(db, t0)
     }
 
     /// Only the given directories (tests).
     pub fn from_dirs(dirs: &[PathBuf]) -> FontSystem {
+        let t0 = Instant::now();
         let mut db = fontdb::Database::new();
         for d in dirs {
             db.load_fonts_dir(d);
         }
-        Self::from_db(db)
+        Self::from_db(db, t0)
     }
 
-    fn from_db(db: fontdb::Database) -> FontSystem {
-        let t0 = Instant::now();
+    fn from_db(db: fontdb::Database, t0: Instant) -> FontSystem {
         let mut entries: Vec<(fontdb::ID, FaceInfo)> = Vec::new();
         for f in db.faces() {
             let family = f
@@ -155,6 +160,7 @@ impl FontSystem {
             infos,
             by_family,
             data: RefCell::new(HashMap::new()),
+            file_data: RefCell::new(HashMap::new()),
             load_ms: t0.elapsed().as_secs_f64() * 1000.0,
             ladder_memo: HashMap::new(),
             char_memo: HashMap::new(),
@@ -275,15 +281,29 @@ impl FontSystem {
     }
 
     /// Font bytes and face index, read once and cached.
+    ///
+    /// The bytes are cached per *source file*, not per face: every face of a `.ttc`
+    /// collection is backed by the whole file, so keying by `FaceKey` alone would keep
+    /// one private copy of the collection per face (24 faces share one `PingFang.ttc` on
+    /// macOS). Faces with no path (`Source::Binary`) keep a per-face entry.
     pub fn face_data(&self, k: FaceKey) -> Option<(Rc<Vec<u8>>, u32)> {
         let info = self.face_info(k);
         if let Some(d) = self.data.borrow().get(&k) {
             return Some((d.clone(), info.index));
         }
+        if let Some(p) = &info.path {
+            if let Some(d) = self.file_data.borrow().get(p) {
+                self.data.borrow_mut().insert(k, d.clone());
+                return Some((d.clone(), info.index));
+            }
+        }
         let bytes = self
             .db
             .with_face_data(self.ids[k.0 as usize], |data, _| data.to_vec())?;
         let rc = Rc::new(bytes);
+        if let Some(p) = &info.path {
+            self.file_data.borrow_mut().insert(p.clone(), rc.clone());
+        }
         self.data.borrow_mut().insert(k, rc.clone());
         Some((rc, info.index))
     }
