@@ -168,3 +168,23 @@ fn line_starts_for_inkscape_multiline_text() {
     assert_eq!(l2[0].tlvlno, Some(0));
     assert_eq!(l2[1].tlvlno, Some(0), "s is the first direct child");
 }
+
+#[test]
+fn a_tail_that_opens_the_first_line_takes_its_parents_position() {
+    // The empty tspan's x="9" positions nothing; "Hello" is the <text>'s tail-of-child text
+    // and starts at the <text>'s own x/y (upstream: edi = dds.index(parent) for tails).
+    let d = doc(&format!(
+        r#"<svg {NS}><text id="t" x="5" y="7"><tspan id="e" x="9"/>Hello</text></svg>"#
+    ));
+    let tree = TextTree::new(&d, id(&d, "t"));
+    let runs = tree.runs(&d);
+    let pos = positions(&d, &tree);
+    let lines = line_specs(&d, &tree, &runs, &pos);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].x, [Some(5.0)]);
+    assert_eq!(lines[0].y, [Some(7.0)]);
+    assert!(
+        runs[lines[0].first_run].is_tail,
+        "the line was opened by the tail run"
+    );
+}

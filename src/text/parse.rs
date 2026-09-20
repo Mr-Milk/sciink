@@ -227,10 +227,18 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
             continue;
         }
 
-        // `ddi` already names the run's own node for both text and tail runs
-        // (tree::runs keeps a tail's `ddi` pointing at the node it is the tail
-        // of, not its style-lookup parent) so it is always "the node's own ddi".
-        let edi = r.ddi;
+        // A tail is positioned by its parent (the run's style source), never by
+        // the empty node it follows: `<text x="5"><tspan x="9"/>Hello</text>`
+        // opens its line at the `<text>`'s x=5, not the tspan's x=9 (upstream:
+        // `edi = dds.index(sel)` for a tail run).
+        let edi = if r.is_tail {
+            tree.dds
+                .iter()
+                .position(|&d| d == r.style_node)
+                .unwrap_or(0)
+        } else {
+            r.ddi
+        };
         let sel = r.style_node;
         let sty = doc.specified_style(sel);
         let (mut xv, mut xsrc, mut yv, mut ysrc) = (
@@ -297,8 +305,8 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
             }
         }
 
-        let tlvlno = if kids.contains(&tree.dds[edi]) {
-            kids.iter().position(|&k| k == tree.dds[edi])
+        let tlvlno = if r.ddi < tree.dds.len() && kids.contains(&tree.dds[r.ddi]) {
+            kids.iter().position(|&k| k == tree.dds[r.ddi])
         } else if edi == 0 {
             Some(0)
         } else {
