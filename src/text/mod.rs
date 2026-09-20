@@ -1,5 +1,6 @@
 //! Text engine (spec docs/spec/01-text-engine.md): fonts → metrics → parse → layout.
 
+pub mod edit;
 pub mod fonts;
 pub mod layout;
 pub mod metrics;
