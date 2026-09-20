@@ -1,5 +1,6 @@
 //! Debug tool: which face every font specification in the document resolves to (spec §A.5-1).
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fmt::Write as _;
 
@@ -61,9 +62,13 @@ pub fn text_elements(doc: &Doc, ids: &[String]) -> Vec<NodeId> {
         doc.selection(ids)
     };
     let mut out = Vec::new();
+    // `roots` can overlap (e.g. `--id=layer1 --id=t` where `t` is inside `layer1`), so the same
+    // node can turn up from more than one root; a `HashSet` keeps membership checks O(1) instead
+    // of an O(N) `Vec::contains` scan per candidate, while `out` still preserves document order.
+    let mut seen = HashSet::new();
     for r in roots {
         for n in doc.descendants(r) {
-            if doc.is_element(n) && matches!(doc.tag(n), "text" | "flowRoot") && !out.contains(&n) {
+            if doc.is_element(n) && matches!(doc.tag(n), "text" | "flowRoot") && seen.insert(n) {
                 out.push(n);
             }
         }
