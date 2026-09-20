@@ -87,7 +87,10 @@ primary if it covers the codepoint, else first fallback face that covers it, els
 **1c Positions per element** (P:379–469). `get_xy` (P:821–827): split on whitespace, `"none"` → None, else
 unit→px (`units.py:31–44`, unitless = px). Effective `sodipodi:role="line"` (`esprl`, P:384–394): tspan is a
 *direct child* of `<text>`, has role=line, exactly one x and one y; disabled if it has no own text and a
-descendant with own text has x or y. Inactive roles stripped (P:396–401). Types (P:403–416): `NORMAL` (not
+descendant with own text has x or y. Inactive roles stripped (P:396–401): everything downstream must read the
+*pruned* flag, i.e. `esprl`, not the raw attribute (the anchor rule of 1d is the one place this shows). The
+attribute-removal half of P:396–401 mutates the document, so it is deferred to Plan 4's writer; a measure-only
+pipeline needs only the pruned flag. Types (P:403–416): `NORMAL` (not
 esprl); `PRECEDEDSPRL` (esprl but preceded by a non-None tail, or first child while `<text>` has own text —
 **continues the previous line**); `TLVLSPRL` otherwise. Missing x/y inheritance (P:419–469): walk
 parent/child links across empty-text non-esprl elements; prefer ancestors, then nearest; record `xsrc/ysrc`.

@@ -157,6 +157,14 @@ fn line_starts_for_inkscape_multiline_text() {
         (Anchor::End, true),
         "rtl swaps start/end"
     );
+    // Upstream's double swap (parser.py:542–556): a non-sprl line inherits the previous
+    // line's *already swapped* anchor and then swaps it again under its own inherited
+    // direction:rtl, so `end` comes back to `start` and alternates down the element.
+    assert_eq!(
+        (l2[1].anchor, l2[2].anchor),
+        (Anchor::Start, Anchor::End),
+        "inherited anchor is swapped a second time by the line's own direction:rtl"
+    );
     assert_eq!(
         (l2[1].x.clone(), l2[1].continue_x, l2[1].continue_y),
         (vec![Some(5.0)], false, true)
@@ -167,6 +175,28 @@ fn line_starts_for_inkscape_multiline_text() {
     assert_eq!(l2[0].first_run, 0);
     assert_eq!(l2[0].tlvlno, Some(0));
     assert_eq!(l2[1].tlvlno, Some(0), "s is the first direct child");
+}
+
+#[test]
+fn an_inactive_sodipodi_role_does_not_block_anchor_inheritance() {
+    // `x="1 2"` has two values, so tspan `a`'s role=line is *inactive*: upstream strips the
+    // attribute in depathologize (P:396–401) and the line therefore inherits the previous
+    // line's anchor instead of using its own `text-anchor:end`.
+    let d = doc(&format!(
+        r#"<svg {NS} xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">
+      <text id="t" style="text-anchor:start" x="0" y="0"><tspan id="p" x="0" y="0">first</tspan><tspan id="a" sodipodi:role="line" x="1 2" y="20" style="text-anchor:end">second</tspan></text></svg>"#
+    ));
+    let tree = TextTree::new(&d, id(&d, "t"));
+    let runs = tree.runs(&d);
+    let pos = positions(&d, &tree);
+    assert_eq!(pos.esprl, [false, false, false], "a's role is inactive");
+    let lines = line_specs(&d, &tree, &runs, &pos);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(
+        (lines[0].anchor, lines[1].anchor),
+        (Anchor::Start, Anchor::Start),
+        "the inactive role must not keep the line's own text-anchor:end"
+    );
 }
 
 #[test]

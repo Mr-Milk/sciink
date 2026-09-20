@@ -325,7 +325,12 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
 
         let mut anchor = sty.get("text-anchor").and_then(Anchor::parse);
         if let Some(last) = lines.last() {
-            if !has_sprl_role(doc, sel) && edi > 0 {
+            // Upstream reads `nsprl[sel]`, which depathologize has already pruned down to
+            // `esprl` (P:396–401), so an *inactive* role — a role=line tspan with a
+            // multi-value x, say — does not stop the line inheriting the previous
+            // anchor. `sel == dds[edi]` for both text and tail runs, so `esprl[edi]` is
+            // that same flag.
+            if !pos.esprl[edi] && edi > 0 {
                 anchor = Some(last.anchor);
             }
         }
