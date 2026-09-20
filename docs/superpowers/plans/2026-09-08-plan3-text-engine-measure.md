@@ -3374,7 +3374,7 @@ fn chunk_geometry_start_anchor_with_dx_letter_spacing_and_kerning() {
 
 #[test]
 fn middle_and_end_anchors_and_trailing_space() {
-    let (pt, _) = parsed(&format!(r#"<svg {NS}><text id="t" style="{DV};font-size:10px;text-anchor:middle" x="0" y="0">ab </text></svg>"#), "t");
+    let (pt, _) = parsed(&format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="0" y="0">ab </text></svg>"#), "t");
     assert!(unrendered_space(&pt, 0, 0), "trailing space of the line's last chunk is not rendered");
     let g = chunk_geom(&pt, 0, 0);
     // middle anchor centres the *rendered* width: the chunk width minus the unrendered trailing space
