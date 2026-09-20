@@ -164,8 +164,13 @@ fn comment_tails_are_condensed_and_overflows_truncated() {
         None,
         "positions on an empty tspan are dropped"
     );
-    assert_eq!(w.0.len(), 3, "{:?}", w.0);
+    // `t`'s own text "ab" is followed by the comment's tail "cd" inside `t`'s subtree, so
+    // truncating its x/dx really does drop positions upstream would have redistributed → 2
+    // warnings. `s` is an empty leaf with nothing after it, so its surplus x is dropped
+    // silently.
+    assert_eq!(w.0.len(), 2, "{:?}", w.0);
     assert!(w.0[0].contains("t: x has more values than characters"));
+    assert!(w.0[1].contains("t: dx has more values than characters"));
     // the comment's tail "cd" moved onto the parent's text
     assert_eq!(d.text_content(t), "abcd");
     let runs = TextTree::new(&d, t).runs(&d);
@@ -178,4 +183,19 @@ fn comment_tails_are_condensed_and_overflows_truncated() {
             "tail:s=None"
         ]
     );
+}
+
+#[test]
+fn a_leaf_with_one_surplus_position_is_truncated_silently() {
+    // The Acid_tests PDF-import shape: a role=line tspan with one more x value than it has
+    // characters and no following text anywhere inside it. Upstream's redistribution has
+    // nowhere to put the surplus, so truncation loses nothing and must not warn.
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t"><tspan id="s" x="1 2 3 4" y="9">abc</tspan></text></svg>"#
+    ));
+    let mut w = Warnings::default();
+    let t = id(&d, "t");
+    depathologize(&mut d, t, false, &mut w);
+    assert_eq!(d.attr(id(&d, "s"), "x"), Some("1 2 3"));
+    assert!(w.0.is_empty(), "{:?}", w.0);
 }

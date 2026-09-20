@@ -25,23 +25,46 @@ fn label(doc: &Doc, n: NodeId) -> String {
         .unwrap_or_else(|| doc.tag(n).to_string())
 }
 
-fn remove_position_overflows(doc: &mut Doc, runs: &[Run], warn: &mut Warnings) {
-    for r in runs.iter().filter(|r| !r.is_tail) {
+/// Whether `j` is a strict descendant of `i` in the text tree.
+fn is_strict_descendant(tree: &TextTree, j: usize, i: usize) -> bool {
+    let mut p = tree.parent[j];
+    while let Some(pi) = p {
+        if pi == i {
+            return true;
+        }
+        p = tree.parent[pi];
+    }
+    false
+}
+
+fn remove_position_overflows(doc: &mut Doc, tree: &TextTree, runs: &[Run], warn: &mut Warnings) {
+    for (ri, r) in runs.iter().enumerate().filter(|(_, r)| !r.is_tail) {
         let n = r.node;
         if !doc.is_element(n) {
             continue;
         }
         let len = run_text(doc, r).map(|t| t.chars().count()).unwrap_or(0);
+        // Upstream redistributes the surplus values onto the characters that FOLLOW the
+        // element's own text inside its subtree (P:4833–4906), so truncating only loses
+        // information when such characters exist. A leaf with one surplus trailing value —
+        // the PDF-import shape, 22 of them in Acid_tests.svg — loses nothing, and 22
+        // identical lines in Inkscape's modal dialog are pure noise.
+        let lossy = runs[ri + 1..].iter().any(|s| {
+            is_strict_descendant(tree, s.ddi, r.ddi)
+                && run_text(doc, s).is_some_and(|t| !t.is_empty())
+        });
         for attr in ["x", "y", "dx", "dy"] {
             let vals = get_xy(doc, n, attr);
             let present = doc.attr(n, attr).is_some();
             if !present || vals.len() <= 1 || vals.len() <= len {
                 continue;
             }
-            warn.push(format!(
-                "{}: {attr} has more values than characters; extra values dropped",
-                label(doc, n)
-            ));
+            if lossy {
+                warn.push(format!(
+                    "{}: {attr} has more values than characters; extra values dropped",
+                    label(doc, n)
+                ));
+            }
             if len == 0 {
                 doc.remove_attr(n, attr);
             } else {
@@ -235,7 +258,7 @@ fn condense_comments(doc: &mut Doc, tree: &TextTree) {
 pub fn depathologize(doc: &mut Doc, el: NodeId, is_flow: bool, warn: &mut Warnings) {
     let tree = TextTree::new(doc, el);
     let runs = tree.runs(doc);
-    remove_position_overflows(doc, &runs, warn);
+    remove_position_overflows(doc, &tree, &runs, warn);
     cleanup_whitespace(doc, el, &runs, is_flow);
     condense_comments(doc, &tree);
 }
