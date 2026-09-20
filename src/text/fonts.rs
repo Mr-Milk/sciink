@@ -3,7 +3,7 @@
 
 use crate::style::Style;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
@@ -571,8 +571,11 @@ impl FontSystem {
         for g in GENERIC_SANS.iter().chain(WIDE_COVERAGE) {
             self.push_family(&mut out, g, spec);
         }
-        // last resort: every remaining face, same style first, nearest weight, then family
-        let mut rest: Vec<FaceKey> = self.faces().filter(|k| !out.contains(k)).collect();
+        // last resort: every remaining face, same style first, nearest weight, then family.
+        // `out` can already hold every family/generic/alias face tried above, so snapshot it
+        // into a set once rather than doing an O(L) `Vec::contains` scan per candidate face.
+        let seen: HashSet<FaceKey> = out.iter().copied().collect();
+        let mut rest: Vec<FaceKey> = self.faces().filter(|k| !seen.contains(k)).collect();
         rest.sort_by_key(|&k| {
             let i = self.face_info(k);
             (
