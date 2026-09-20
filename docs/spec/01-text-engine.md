@@ -77,7 +77,7 @@ primary if it covers the codepoint, else first fallback face that covers it, els
   char, collapse `[ \t\r\n\f\v]+` → one space, strip leading/trailing; keep one trailing space in a *text*
   that has element children and ended with whitespace; keep one leading space in a *tail* that started with
   whitespace. Then (non-flows, regardless of xml:space): in each whitespace run the first `\n`/`\r` becomes a
-  space, further newlines dropped (P:4888–4906); trailing newline in the very last span dropped (P:4908–4912).
+  space, further newlines dropped (P:4888–4906); a trailing newline in any leaf span's text (`len(el)==0`) and in any last-child tail is dropped rather than converted (P:4908–4912; `cleanup_returns` with `last_span`).
 - `condense_comments` P:4914–4930: move comment tails onto previous sibling's tail / parent's text.
 
 **1b Text-run sequence** (P:2453–2516): pre-order walk; emit `Text(node)` on entry, `Tail(node)` on exit
