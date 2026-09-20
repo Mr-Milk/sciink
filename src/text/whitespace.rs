@@ -25,37 +25,69 @@ fn label(doc: &Doc, n: NodeId) -> String {
         .unwrap_or_else(|| doc.tag(n).to_string())
 }
 
-/// Whether `j` is a strict descendant of `i` in the text tree.
-fn is_strict_descendant(tree: &TextTree, j: usize, i: usize) -> bool {
-    let mut p = tree.parent[j];
-    while let Some(pi) = p {
-        if pi == i {
-            return true;
+/// Position in `runs` of the run `{ ddi, is_tail: true }`, indexed by `ddi`; `runs.len()` for a
+/// `ddi` that has no tail run (only the root, `ddi == 0`, has none — see `TextTree::runs`).
+fn tail_positions(tree: &TextTree, runs: &[Run]) -> Vec<usize> {
+    let mut tail_pos = vec![runs.len(); tree.dds.len()];
+    for (pos, r) in runs.iter().enumerate() {
+        if r.is_tail {
+            tail_pos[r.ddi] = pos;
         }
-        p = tree.parent[pi];
     }
-    false
+    tail_pos
+}
+
+/// `texts_before[pos]` = how many runs among `runs[..pos]` have non-empty text; length is
+/// `runs.len() + 1`. `texts_before[b] > texts_before[a]` then answers "does `runs[a..b]` contain
+/// a non-empty-text run?" in O(1).
+fn text_prefix_counts(doc: &Doc, runs: &[Run]) -> Vec<usize> {
+    let mut texts_before = Vec::with_capacity(runs.len() + 1);
+    texts_before.push(0usize);
+    for r in runs {
+        let has_text = run_text(doc, r).is_some_and(|t| !t.is_empty());
+        let prev = *texts_before.last().expect("just pushed");
+        texts_before.push(prev + has_text as usize);
+    }
+    texts_before
 }
 
 fn remove_position_overflows(doc: &mut Doc, tree: &TextTree, runs: &[Run], warn: &mut Warnings) {
+    // `runs` walks `ddi` in pre-order, and a subtree's descendants occupy a contiguous `ddi`
+    // range (standard pre-order property — see `TextTree::runs`), so the runs strictly inside
+    // element `i`'s subtree, after its own text run, form the contiguous window
+    // `runs[ri+1..tail_pos[i]]`. Precomputing `tail_pos` and a text-run prefix count turns the
+    // old per-pair O(depth) ancestor walk (formerly `is_strict_descendant`, now removed) into
+    // two O(total) passes plus an O(1) lookup per element.
+    let tail_pos = tail_positions(tree, runs);
+    let texts_before = text_prefix_counts(doc, runs);
+
     for (ri, r) in runs.iter().enumerate().filter(|(_, r)| !r.is_tail) {
         let n = r.node;
         if !doc.is_element(n) {
             continue;
         }
         let len = run_text(doc, r).map(|t| t.chars().count()).unwrap_or(0);
+
+        // Read all four attributes first so the (still O(depth)-free, but non-trivial) `lossy`
+        // check only ever runs for an element that actually has a surplus to report or drop.
+        let mut attrs: Vec<(&str, bool, Vec<Option<f64>>)> = Vec::with_capacity(4);
+        for attr in ["x", "y", "dx", "dy"] {
+            attrs.push((attr, doc.attr(n, attr).is_some(), get_xy(doc, n, attr)));
+        }
+        let has_overflow = attrs
+            .iter()
+            .any(|(_, present, vals)| *present && vals.len() > 1 && vals.len() > len);
+        if !has_overflow {
+            continue;
+        }
         // Upstream redistributes the surplus values onto the characters that FOLLOW the
         // element's own text inside its subtree (P:4833–4906), so truncating only loses
         // information when such characters exist. A leaf with one surplus trailing value —
         // the PDF-import shape, 22 of them in Acid_tests.svg — loses nothing, and 22
         // identical lines in Inkscape's modal dialog are pure noise.
-        let lossy = runs[ri + 1..].iter().any(|s| {
-            is_strict_descendant(tree, s.ddi, r.ddi)
-                && run_text(doc, s).is_some_and(|t| !t.is_empty())
-        });
-        for attr in ["x", "y", "dx", "dy"] {
-            let vals = get_xy(doc, n, attr);
-            let present = doc.attr(n, attr).is_some();
+        let lossy = texts_before[tail_pos[r.ddi]] > texts_before[ri + 1];
+        for (attr, present, vals) in &attrs {
+            let present = *present;
             if !present || vals.len() <= 1 || vals.len() <= len {
                 continue;
             }

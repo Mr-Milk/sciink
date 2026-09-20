@@ -199,3 +199,84 @@ fn a_leaf_with_one_surplus_position_is_truncated_silently() {
     assert_eq!(d.attr(id(&d, "s"), "x"), Some("1 2 3"));
     assert!(w.0.is_empty(), "{:?}", w.0);
 }
+
+#[test]
+fn remove_position_overflows_stays_linear_at_8000_deep_nesting() {
+    // Regression test for the O(depth) ancestor walk `remove_position_overflows` used to run
+    // per following run (`is_strict_descendant`, since replaced by an O(1) lookup into
+    // `tail_positions`/`text_prefix_counts` — src/text/whitespace.rs). On this machine a chain
+    // of 2000 nested empty tspans already took ~3.5s pre-fix — regardless of whether any
+    // element even had a position attribute, since (a) was unfixed too — so 8000 deep needs
+    // well over 10s pre-fix; the fixed code finishes in well under a second, so a 10s bound
+    // here is nowhere near flaky.
+    const DEPTH: usize = 8000;
+
+    // Case 1: the outermost tspan carries a real overflow (3 `x` values); every tspan down to
+    // the last is an empty wrapper with no text of its own, and only the innermost holds text
+    // "x". The outer wrapper's own text is empty, so it has no character to anchor any of the
+    // 3 values to and the whole attribute is dropped — but a real character sits deeper in its
+    // subtree (the innermost leaf's "x"), so the drop is lossy and must still warn once.
+    let mut with_overflow = format!("<svg {NS}><text id=\"t\"><tspan x=\"1 2 3\">");
+    for _ in 1..DEPTH {
+        with_overflow.push_str("<tspan>");
+    }
+    with_overflow.push('x');
+    for _ in 0..DEPTH {
+        with_overflow.push_str("</tspan>");
+    }
+    with_overflow.push_str("</text></svg>");
+
+    let mut d = doc(&with_overflow);
+    let t = id(&d, "t");
+    let mut w = Warnings::default();
+    let t0 = std::time::Instant::now();
+    depathologize(&mut d, t, false, &mut w);
+    let elapsed = t0.elapsed();
+    eprintln!("remove_position_overflows: {DEPTH} deep with an overflow took {elapsed:?}");
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "depathologize took {elapsed:?} at {DEPTH} deep (pre-fix needs far more than 10s here)"
+    );
+    assert_eq!(w.0.len(), 1, "{:?}", w.0);
+    assert!(
+        w.0[0].contains("has more values than characters"),
+        "{:?}",
+        w.0
+    );
+    let outer = d
+        .children(t)
+        .find(|&c| d.is_element(c))
+        .expect("outermost tspan");
+    assert_eq!(
+        d.attr(outer, "x"),
+        None,
+        "the outer wrapper's own text is empty, so its surplus x values are dropped entirely"
+    );
+
+    // Case 2 exercises (a): with no position attribute anywhere in the 8000-deep chain, no
+    // element ever has anything to warn about or truncate, so this must produce zero warnings —
+    // and, pre-fix, `lossy` was computed unconditionally before checking attribute presence, so
+    // this shape was exactly as slow as case 1 above.
+    let mut no_attrs = format!("<svg {NS}><text id=\"t\">");
+    for _ in 0..DEPTH {
+        no_attrs.push_str("<tspan>");
+    }
+    no_attrs.push('x');
+    for _ in 0..DEPTH {
+        no_attrs.push_str("</tspan>");
+    }
+    no_attrs.push_str("</text></svg>");
+
+    let mut d2 = doc(&no_attrs);
+    let t2 = id(&d2, "t");
+    let mut w2 = Warnings::default();
+    let t1 = std::time::Instant::now();
+    depathologize(&mut d2, t2, false, &mut w2);
+    let elapsed2 = t1.elapsed();
+    eprintln!("remove_position_overflows: {DEPTH} deep with no position attrs took {elapsed2:?}");
+    assert!(
+        elapsed2 < std::time::Duration::from_secs(10),
+        "depathologize took {elapsed2:?} at {DEPTH} deep with no position attributes"
+    );
+    assert!(w2.0.is_empty(), "{:?}", w2.0);
+}
