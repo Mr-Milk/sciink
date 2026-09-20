@@ -5,8 +5,17 @@ Fast, dependency-free Inkscape extensions for scientific figures — a Rust rewr
 Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled binary, no Python,
 works with Inkscape 1.2 and later.
 
-Status: early development. The current release contains only the `Diagnostics` menu entry, which
-proves the installation works; the tools land one by one. Design specs live in `docs/spec/`.
+Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
+release ships three menu entries, all diagnostic:
+
+- **Extensions ▸ Scientific ▸ Diagnostics** — version, platform, the document's size and element counts,
+  and how many font faces were found (and how long that took). Proves the installation works.
+- **Extensions ▸ Scientific ▸ Debug ▸ Font Probe** — for every `font-family` the document asks for (and
+  for the generic families), the face the text engine actually measures with and the file it came from.
+  Use it when text is laid out as if a different font were installed.
+- **Extensions ▸ Scientific ▸ Debug ▸ Text Highlight** — draws the text engine's measurements as
+  rectangles over the document: per character (advance box or ink box), per chunk, per line, or one box
+  for the whole element. Use it to see exactly what the parser thinks your text is.
 
 ## Install
 
@@ -47,6 +56,17 @@ one-liner cannot take parameters.
 macOS note: a zip downloaded by a browser is quarantined and Gatekeeper silently blocks the
 binary. The `curl` installer never sets that flag; after a manual download run
 `xattr -dr com.apple.quarantine "$HOME/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions/sciink"`.
+
+## Fonts
+
+Text measurement uses the fonts installed on the machine, so a document measures differently where a
+family is missing (the tools say which substitute was used). Two environment variables override the
+search, mostly for tests and for reproducing a figure built elsewhere:
+
+- `SCIINK_FONT_DIRS` — extra directories to load fonts from, separated by the platform's path-list
+  separator (`:` on macOS/Linux, `;` on Windows). Loaded in addition to the system fonts.
+- `SCIINK_NO_SYSTEM_FONTS=1` — skip the system font scan entirely, so only `SCIINK_FONT_DIRS` is used.
+  With neither set and no system fonts, nothing can be measured.
 
 ## Developing
 
