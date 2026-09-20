@@ -1971,12 +1971,14 @@ fn whitespace_is_collapsed_unless_preserved() {
 
 #[test]
 fn preserved_newlines_and_last_span_rule() {
-    // "a\n\nb" → first newline → space, second dropped → "a b"; trailing "\n" in the last span is dropped
+    // "a\n\nb" in the parent (has children): first newline → space, second dropped → "a b". A
+    // trailing newline in a leaf span's text ("c\n") and in a last-child tail ("d\n") is DROPPED,
+    // not converted (upstream cleanup_returns, last_span rule).
     let mut d = doc(&format!("<svg {NS}><text id=\"t\" xml:space=\"preserve\">a\n\nb<tspan id=\"s\">c\n</tspan>d\n</text></svg>"));
     let mut w = Warnings::default();
     depathologize(&mut d, id(&d, "t"), false, &mut w);
-    assert_eq!(text_of(&d, "t"), "a bc d");
-    assert_eq!(text_of(&d, "s"), "c ");
+    assert_eq!(text_of(&d, "t"), "a bcd");
+    assert_eq!(text_of(&d, "s"), "c");
 }
 
 #[test]

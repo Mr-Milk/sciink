@@ -92,3 +92,90 @@ fn set_run_text_creates_replaces_and_removes() {
             .contains(r#"<text id="t">A<tspan id="s">bb</tspan></text>"#)
     );
 }
+
+use sciink::text::Warnings;
+use sciink::text::whitespace::{depathologize, get_xy};
+
+fn text_of(d: &Doc, i: &str) -> String {
+    d.text_content(id(d, i))
+}
+
+#[test]
+fn get_xy_parses_lists_units_and_none() {
+    let d = doc(&format!(
+        r#"<svg {NS}><text id="t" x="1 2.5 none 1in" y="" dx=" 3 "/></svg>"#
+    ));
+    let t = id(&d, "t");
+    assert_eq!(get_xy(&d, t, "x"), [Some(1.0), Some(2.5), None, Some(96.0)]);
+    assert_eq!(get_xy(&d, t, "y"), [None]);
+    assert_eq!(get_xy(&d, t, "dy"), [None]);
+    assert_eq!(get_xy(&d, t, "dx"), [Some(3.0)]);
+}
+
+#[test]
+fn whitespace_is_collapsed_unless_preserved() {
+    let mut d = doc(&format!(
+        "<svg {NS}><text id=\"t\">  Hello \n  <tspan id=\"s\">big\tworld  </tspan>\n   again </text><text id=\"p\" xml:space=\"preserve\">  a  \n b</text></svg>"
+    ));
+    let mut w = Warnings::default();
+    let t = id(&d, "t");
+    depathologize(&mut d, t, false, &mut w);
+    let p = id(&d, "p");
+    depathologize(&mut d, p, false, &mut w);
+    // text with element children keeps one trailing space; tail keeps one leading space
+    assert_eq!(text_of(&d, "t"), "Hello big world again");
+    assert_eq!(text_of(&d, "s"), "big world");
+    // preserved: whitespace kept, but the first newline of a run becomes a space and the rest vanish
+    assert_eq!(text_of(&d, "p"), "  a    b");
+    assert!(w.0.is_empty());
+}
+
+#[test]
+fn preserved_newlines_and_last_span_rule() {
+    // "a\n\nb" in the parent (has children): first newline → space, second dropped → "a b". A
+    // trailing newline in a leaf span's text ("c\n") and in a last-child tail ("d\n") is DROPPED,
+    // not converted (upstream cleanup_returns, last_span rule).
+    let mut d = doc(&format!(
+        "<svg {NS}><text id=\"t\" xml:space=\"preserve\">a\n\nb<tspan id=\"s\">c\n</tspan>d\n</text></svg>"
+    ));
+    let mut w = Warnings::default();
+    let t = id(&d, "t");
+    depathologize(&mut d, t, false, &mut w);
+    assert_eq!(text_of(&d, "t"), "a bcd");
+    assert_eq!(text_of(&d, "s"), "c");
+}
+
+#[test]
+fn comment_tails_are_condensed_and_overflows_truncated() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" x="1 2 3 4 5" dx="1 2 3">ab<!-- note -->cd<tspan id="s" x="7 8"/></text></svg>"#
+    ));
+    let mut w = Warnings::default();
+    let t = id(&d, "t");
+    depathologize(&mut d, t, false, &mut w);
+    assert_eq!(
+        d.attr(t, "x"),
+        Some("1 2"),
+        "5 values for 2 chars → truncated"
+    );
+    assert_eq!(d.attr(t, "dx"), Some("1 2"));
+    assert_eq!(
+        d.attr(id(&d, "s"), "x"),
+        None,
+        "positions on an empty tspan are dropped"
+    );
+    assert_eq!(w.0.len(), 3, "{:?}", w.0);
+    assert!(w.0[0].contains("t: x has more values than characters"));
+    // the comment's tail "cd" moved onto the parent's text
+    assert_eq!(d.text_content(t), "abcd");
+    let runs = TextTree::new(&d, t).runs(&d);
+    assert_eq!(
+        describe(&d, &runs),
+        [
+            "text:t=Some(\"abcd\")",
+            "tail:<!-->=None",
+            "text:s=None",
+            "tail:s=None"
+        ]
+    );
+}
