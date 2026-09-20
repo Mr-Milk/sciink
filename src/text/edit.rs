@@ -508,46 +508,59 @@ pub fn append_chunks(
     //    Only the host's font size and specified style matter to the model (and `loc` for kerning).
     let first_sel = sel(doc, &pts[tp].chars[first_idx].loc);
     let lchr_sel = sel(doc, &lchr.loc);
-    let (host_loc, host_utfs, host_tfs, host_sty): (CharLoc, f64, f64, Rc<Style>) =
-        if lchr_sel == first_sel {
-            (
-                CharLoc {
-                    node: lchr.loc.node,
-                    tail: lchr.loc.tail,
-                    idx: u32::MAX,
-                },
-                lchr.utfs,
-                lchr.tfs,
-                lchr.sty.clone(),
-            )
-        } else {
-            let el = pts[tp].el;
-            let mut cel = lchr_sel;
-            while let Some(p) = doc.parent(cel) {
-                if p == first_sel || p == el {
-                    break;
-                }
-                cel = p;
+    let same_host = || -> (CharLoc, f64, f64, Rc<Style>) {
+        (
+            CharLoc {
+                node: lchr.loc.node,
+                tail: lchr.loc.tail,
+                idx: u32::MAX,
+            },
+            lchr.utfs,
+            lchr.tfs,
+            lchr.sty.clone(),
+        )
+    };
+    let (host_loc, host_utfs, host_tfs, host_sty) = if lchr_sel == first_sel {
+        same_host()
+    } else {
+        // Climb from the last character's node until the parent is the first character's node or
+        // the element (P:3170–3175). Upstream's `totail` is None when the climb runs off the
+        // document — the chunk ends in a node LESS nested than its first character
+        // (`<text><tspan>Hi</tspan> ya</text>`) — and the characters then join the last
+        // character's own node (P:3217–3223); never a node outside the element.
+        let el = pts[tp].el;
+        let mut cel = lchr_sel;
+        let mut stop: Option<NodeId> = None;
+        while let Some(p) = doc.parent(cel) {
+            if p == first_sel || p == el {
+                stop = Some(p);
+                break;
             }
-            let parent = doc.parent(cel).unwrap_or(el);
-            let (u, t, s) = if parent == first_sel {
-                let f = &pts[tp].chars[first_idx];
-                (f.utfs, f.tfs, f.sty.clone())
-            } else {
-                let fs = composed_font_size(doc, el);
-                (fs.utfs, fs.tfs, doc.specified_style(el))
-            };
-            (
-                CharLoc {
-                    node: cel,
-                    tail: true,
-                    idx: u32::MAX,
-                },
-                u,
-                t,
-                s,
-            )
-        };
+            cel = p;
+        }
+        match stop {
+            None => same_host(),
+            Some(parent) => {
+                let (u, t, s) = if parent == first_sel {
+                    let f = &pts[tp].chars[first_idx];
+                    (f.utfs, f.tfs, f.sty.clone())
+                } else {
+                    let fs = composed_font_size(doc, el);
+                    (fs.utfs, fs.tfs, doc.specified_style(el))
+                };
+                (
+                    CharLoc {
+                        node: cel,
+                        tail: true,
+                        idx: u32::MAX,
+                    },
+                    u,
+                    t,
+                    s,
+                )
+            }
+        }
+    };
 
     // 4. Remove the moved characters from their sources (P:3178–3205); a source may be the target element.
     for b in &blocks {
@@ -578,7 +591,8 @@ pub fn append_chunks(
             (Some("sub"), WType::Normal) => WType::Sub,
             (_, w) => w,
         };
-        let sizechanged = (c.tfs - host_tfs).abs() > 1e-4;
+        // a zero-size host cannot be compared against (and would print `inf%`)
+        let sizechanged = host_tfs > 0.0 && (c.tfs - host_tfs).abs() > 1e-4;
         if !style_eq(&c.sty, &host_sty) || matches!(ntype, WType::Super | WType::Sub) || sizechanged
         {
             let mut s = (*c.sty).clone();
