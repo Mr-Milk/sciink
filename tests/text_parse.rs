@@ -70,6 +70,32 @@ fn char_table_collects_faces_preceders_and_warnings() {
     );
 }
 
+#[test]
+fn control_and_whitespace_characters_never_warn_or_walk_the_ladder() {
+    // The table is built on the RAW text, so the newline of a pretty-printed two-line
+    // <text> reaches it; depathologize deletes it moments later and no font maps it.
+    // Warning about U+000A would fire on any multi-line SVG with a lean font set.
+    let d = doc(&format!(
+        "<svg {NS}><text id=\"t\" style=\"font-family:Helvetica\">one\ntwo</text></svg>"
+    ));
+    let mut w = Warnings::default();
+    let mut ct = CharTable::build(&d, &[id(&d, "t")], fonts(), &mut w);
+    assert_eq!(
+        w.0,
+        ["font-family \"Helvetica\" not installed; measured with \"DejaVu Sans\""],
+        "the newline must not produce a warning of its own"
+    );
+    let helv = FontSpec::from_style(&Style::parse("font-family:Helvetica"));
+    let nl = ct.char_face(&helv, '\n');
+    assert_eq!(nl, None, "unrendered, zero width");
+    assert_eq!(ct.prop(nl, '\n').charw, 0.0);
+    // ' ' and NBSP still measure: `spacew` and the per-character space face need them
+    let sp = ct.char_face(&helv, ' ');
+    assert!(sp.is_some());
+    assert!(ct.prop(sp, ' ').charw > 0.0);
+    assert!(ct.char_face(&helv, '\u{A0}').is_some());
+}
+
 use sciink::text::parse::{SprlType, line_specs, positions};
 use sciink::text::style::Anchor;
 use sciink::text::tree::TextTree;

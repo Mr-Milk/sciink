@@ -32,6 +32,12 @@ fn is_generic(f: &str) -> bool {
     )
 }
 
+/// Characters no font can draw: controls and every whitespace except the two that carry a
+/// real advance (`' '` drives `spacew` and the per-character space face, NBSP is drawn).
+fn cannot_render(c: char) -> bool {
+    c.is_control() || (c.is_whitespace() && c != ' ' && c != '\u{A0}')
+}
+
 impl CharTable {
     pub fn build(
         doc: &Doc,
@@ -73,6 +79,15 @@ impl CharTable {
                 }
             }
             for &c in chars {
+                if cannot_render(c) {
+                    // `\n`, `\r`, `\t`, U+000B/U+000C and friends survive into the char set
+                    // because the table is built on the raw text, but depathologize is about
+                    // to delete them and no font maps them anyway. Walking the fallback
+                    // ladder for one would touch every installed face and then warn the user
+                    // about a character that never renders.
+                    char_style.insert((spec.clone(), c), None);
+                    continue;
+                }
                 let f = fonts.resolve_for_char(spec, c);
                 if f.is_none() {
                     warn.push(format!(
@@ -84,6 +99,11 @@ impl CharTable {
             }
         }
         // 3. preceders per (face, char): the previous char when drawn by the same face, plus ' '
+        // Indexing `char_style` directly is total here: step 1 put every character of every
+        // run into `per_spec[spec]` under that run's own spec, and step 2 inserted an entry
+        // for every (spec, char) pair in `per_spec` — including the unrenderable ones, which
+        // map to `None`. `runs_txt` holds exactly those (text, spec) pairs, so no lookup below
+        // can miss.
         let mut preceders: HashMap<(FaceKey, char), Vec<char>> = HashMap::new();
         for (txt, spec) in &runs_txt {
             let cs: Vec<char> = txt.chars().collect();
