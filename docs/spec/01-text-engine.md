@@ -126,8 +126,11 @@ lsp`; `dx = [c0.dx … c(n−1).dx, 0]` (n+1); `dxlsp = [0, lsp0, lsp1, …]` (l
 i); `dadv[0]=0, dadv[i]=dadvs(c[i−1],c[i])`.
 
 **1g Flags:** `isflow` (P:286–290: flowRoot, `shape-inside` link, or nonzero `inline-size`); `isinkscape`
-(P:308–317: every top-level line after the first is sprl **and** every line's style has
-`-inkscape-font-specification`); `ismlinkscape` = isinkscape ∧ >1 lines. Empty lines pruned (P:642–644).
+(P:308–317: the set of top-level lines after the first is **non-empty** and every one of them is sprl, **and**
+every line's style has `-inkscape-font-specification`). The non-emptiness is load-bearing and easy to lose:
+Python evaluates `all(… for line in tlvllns) and tlvllns and …`, where an empty `tlvllns` list is falsy, so a
+single-line element is never `isinkscape` even though `all([])` is `True`. `ismlinkscape` = isinkscape ∧
+>1 lines. Empty lines pruned (P:642–644).
 `textLength` (P:648–671): `spacingAndGlyphs` → scale all `cwd` by `textLength/Σwidths`; else add
 `(textLength − Σwidths)/(nchars − nchunks)` to every `lsp`.
 
@@ -139,9 +142,14 @@ offx    = −anfr·(cstop[n−1] − (unrenderedspace ? cwd[n−1] : 0) − (rtl
 left[i] = x + cstrt[i] + offx;  right[i] = x + cstop[i] + offx
 base[i] = y + prefix_sum(dy)[i] − bshft[i];  top[i] = base[i] − caph[i]
 char pts_ut = [(left,base),(left,top),(right,top),(right,base)]        // BL, TL, TR, BR
-chunk: lx2 = min_i(left[i]) − dx[0] − dxlsp[0] (P:3640); rx2 = lx2 + cstop[n−1]; by2 = max base; ty2 = min top
+chunk: lx2 = min_i(left[i]) − dx[0] − dxlsp[0] (P:3640); rx2 = lx2 + (right[n−1] − left[0]); by2 = max base; ty2 = min top
 pts_t = composed_transform ∘ pts_ut
 ```
+Upstream is internally inconsistent here: the **scalar** `pts_ut` (P:3689–3692) uses `chkw = rgtx[−1] − lftx[0]`,
+i.e. `right[n−1] − left[0]`, while the **vectorised** path (P:180–181) uses `cstop[n−1]` — the two differ by
+`dx[0]` whenever `dx[0] ≠ 0`. The scalar form above is the one ported and the one Plan 4 must use for
+`get_ut_pts`.
+
 `unrenderedspace` (P:3560–3579): chunk has >1 chars, its last char is the line's last and is `" "`/NBSP.
 Ink bbox of a char (P:4202–4210): `x = left + inkbb.x·utfs`, `y_bottom = base + (inkbb.y+inkbb.h)·utfs`,
 size `inkbb.w·utfs × inkbb.h·utfs`. Extent APIs P:1690–1793: `get_full_extent` = union of char extents
@@ -325,6 +333,18 @@ element), complex-script shaping.
 the fallback tspans as positioned text for **bbox only**, exclude from stages 5–11 (deliberate deviation:
 upstream lets flows participate in merges). Do not port `parse_lines_flow` (P:1808–2383) in v1.
 
+### Deliberate defensive deviations from upstream
+
+The port is otherwise a faithful transcription, so record the three places where it is *deliberately* safer
+than the Python — a future parity reviewer must not "correct" them back:
+
+- `get_xy` on a whitespace-only attribute (`x=" "`) returns `[None]`; upstream returns `[]` and the next
+  `xvs[i][0]` raises `IndexError`.
+- Chunk x/y carry the last non-`None` coordinate forward when a list entry is `None`; upstream would put
+  `None` into the arithmetic.
+- `local_baseline` resolves a `%`/`super`/`sub` shift against the parent's **`utfs`**; upstream's `fs2/sf2`
+  is `0/0 = NaN` under a singular (e.g. `scale(0)`) parent transform.
+
 ## A.3 Metrics layer
 
 `CProp` (P:4244–4287), em units: `charw` (advance of char in isolation: Pango `width("I="+c+"=I") −
@@ -402,7 +422,8 @@ impl ParsedText {
     pub fn snapshot_parsed(&mut self);
     pub fn full_extent(&self, which: Which /*Current|Parsed*/) -> Option<Rect>;   // P:1776
     pub fn full_ink_bbox(&self) -> Option<Rect>;                                  // P:1701
-    pub fn char_extents(&self) -> Vec<Rect>; pub fn chunk_extents(&self) -> Vec<Rect>; pub fn line_extents(&self) -> Vec<Rect>;
+    pub fn char_extents(&self) -> Vec<(usize, Rect)>;   // index into `chars`: NaN-baseline chars are skipped
+    pub fn chunk_extents(&self) -> Vec<Rect>; pub fn line_extents(&self) -> Vec<Rect>;
     pub fn chars(&self) -> impl Iterator<Item = &TChar>;
     pub fn max_tfs(&self) -> Option<f64>;
 }
