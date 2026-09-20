@@ -1,10 +1,20 @@
 //! `<text>` → lines / chunks / characters (spec §A.1 stage 1, §A.2; upstream parser.py:280–650, 2696–2716).
 
-use crate::dom::{Doc, NodeId};
+use std::rc::Rc;
 
-use super::style::{Anchor, composed_font_size, composed_line_height};
+use crate::dom::{Doc, NodeId};
+use crate::geom::{Affine, ipx};
+use crate::style::Style;
+
+use super::Warnings;
+use super::fonts::{FaceKey, FontSpec};
+use super::metrics::CProp;
+use super::style::{
+    Anchor, baseline_shift, composed_font_size, composed_line_height, letter_spacing,
+};
+use super::table::CharTable;
 use super::tree::{Run, TextTree, run_text};
-use super::whitespace::get_xy;
+use super::whitespace::{depathologize, get_xy};
 
 pub const XY_TOL: f64 = 1e-6;
 
@@ -348,4 +358,313 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
         }
     }
     lines
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CharLoc {
+    pub node: NodeId,
+    pub tail: bool,
+    pub idx: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct TChar {
+    pub c: char,
+    pub loc: CharLoc,
+    pub sty: Rc<Style>,
+    pub spec: FontSpec,
+    pub face: Option<FaceKey>,
+    pub prop: Rc<CProp>,
+    pub utfs: f64,
+    pub tfs: f64,
+    pub cwd: f64,
+    pub caph: f64,
+    pub spw: f64,
+    pub dx: f64,
+    pub dy: f64,
+    pub lsp: f64,
+    pub bshft: f64,
+    pub line: usize,
+    pub chunk: usize,
+    pub windex: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct TChunk {
+    pub x: f64,
+    pub y: f64,
+    pub chars: Vec<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TLine {
+    pub spec: LineSpec,
+    pub style: Rc<Style>,
+    pub chars: Vec<usize>,
+    pub chunks: Vec<TChunk>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextLengthAdj {
+    SpacingAndGlyphs(f64),
+    Spacing(f64),
+}
+
+pub struct ParsedText {
+    pub el: NodeId,
+    pub transform: Affine,
+    pub chars: Vec<TChar>,
+    pub lines: Vec<TLine>,
+    pub is_flow: bool,
+    pub is_inkscape: bool,
+    pub is_ml_inkscape: bool,
+    pub text_length: Option<TextLengthAdj>,
+    pub any_dx: bool,
+    pub any_dy: bool,
+}
+
+fn is_flow(doc: &Doc, el: NodeId) -> bool {
+    if doc.tag(el) == "flowRoot" {
+        return true;
+    }
+    let sty = doc.specified_style(el);
+    let shape = sty
+        .get("shape-inside")
+        .and_then(|v| {
+            v.trim()
+                .strip_prefix("url(#")
+                .and_then(|r| r.strip_suffix(')'))
+        })
+        .is_some_and(|id| doc.by_id(id.trim()).is_some());
+    shape
+        || sty
+            .get("inline-size")
+            .and_then(ipx)
+            .is_some_and(|v| v != 0.0)
+}
+
+impl ParsedText {
+    pub fn parse(
+        doc: &mut Doc,
+        el: NodeId,
+        ct: &mut CharTable,
+        warn: &mut Warnings,
+    ) -> Option<ParsedText> {
+        let flow = is_flow(doc, el);
+        depathologize(doc, el, flow, warn);
+        let transform = doc.composed_transform(el);
+        let mut pt = ParsedText {
+            el,
+            transform,
+            chars: Vec::new(),
+            lines: Vec::new(),
+            is_flow: flow,
+            is_inkscape: false,
+            is_ml_inkscape: false,
+            text_length: None,
+            any_dx: false,
+            any_dy: false,
+        };
+        if flow {
+            return Some(pt); // v1: flows are detected, never parsed (spec §A.2 "Flowed text v1")
+        }
+        let tree = TextTree::new(doc, el);
+        let runs = tree.runs(doc);
+        let pos = positions(doc, &tree);
+        let specs = line_specs(doc, &tree, &runs, &pos);
+        if specs.is_empty() {
+            return None;
+        }
+        let mut lines: Vec<TLine> = specs
+            .iter()
+            .map(|s| TLine {
+                spec: s.clone(),
+                style: doc.specified_style(s.style_node),
+                chars: Vec::new(),
+                chunks: Vec::new(),
+            })
+            .collect();
+        let mut next_line = 0usize; // index of the next LineSpec whose first_run we have not reached
+        let mut cur: Option<usize> = None;
+        for (ri, r) in runs.iter().enumerate() {
+            while next_line < specs.len() && specs[next_line].first_run == ri {
+                cur = Some(next_line);
+                next_line += 1;
+            }
+            let Some(txt) = run_text(doc, r) else {
+                continue;
+            };
+            if txt.is_empty() {
+                continue;
+            }
+            let Some(li) = cur else { continue };
+            let sty = doc.specified_style(r.style_node);
+            let fs = composed_font_size(doc, r.style_node);
+            let spec = FontSpec::from_style(&sty);
+            let tsty = ct.true_face(&spec).or_else(|| ct.fonts.resolve(&spec));
+            let chars: Vec<char> = txt.chars().collect();
+            let n = chars.len();
+            let list = |v: &Vec<Option<f64>>| -> Vec<f64> {
+                if r.is_tail || v[0].is_none() {
+                    vec![0.0; n]
+                } else {
+                    let mut out: Vec<f64> = v.iter().map(|x| x.unwrap_or(0.0)).collect();
+                    out.resize(n, 0.0);
+                    out
+                }
+            };
+            let dxv = list(&pos.dx[r.ddi]);
+            let dyv = list(&pos.dy[r.ddi]);
+            let lsp = letter_spacing(doc, r.style_node, &sty);
+            let bshft = baseline_shift(doc, r.style_node, &sty);
+            for (j, &c) in chars.iter().enumerate() {
+                let face = font_picker(ct, &chars, j, &spec, tsty);
+                let prop = ct.prop(face, c);
+                let idx = pt.chars.len();
+                pt.chars.push(TChar {
+                    c,
+                    loc: CharLoc {
+                        node: r.node,
+                        tail: r.is_tail,
+                        idx: j as u32,
+                    },
+                    sty: sty.clone(),
+                    spec: spec.clone(),
+                    face,
+                    utfs: fs.utfs,
+                    tfs: fs.tfs,
+                    cwd: prop.charw * fs.utfs,
+                    caph: prop.caph * fs.utfs,
+                    spw: prop.spacew * fs.utfs,
+                    prop,
+                    dx: dxv[j],
+                    dy: dyv[j],
+                    lsp,
+                    bshft,
+                    line: li,
+                    chunk: 0,
+                    windex: 0,
+                });
+                lines[li].chars.push(idx);
+            }
+        }
+        // chunks (P:2696–2716)
+        for ln in lines.iter_mut() {
+            let (xs, ys) = (&ln.spec.x, &ln.spec.y);
+            let (mut px, mut py) = (xs[0].unwrap_or(0.0), ys[0].unwrap_or(0.0));
+            for (i, &ci) in ln.chars.iter().enumerate() {
+                let opens = i == 0
+                    || xs.get(i).is_some_and(Option::is_some)
+                    || ys.get(i).is_some_and(Option::is_some);
+                if opens {
+                    px = xs.get(i.min(xs.len() - 1)).copied().flatten().unwrap_or(px);
+                    py = ys.get(i.min(ys.len() - 1)).copied().flatten().unwrap_or(py);
+                    ln.chunks.push(TChunk {
+                        x: px,
+                        y: py,
+                        chars: vec![ci],
+                    });
+                } else {
+                    ln.chunks
+                        .last_mut()
+                        .expect("opened at i == 0")
+                        .chars
+                        .push(ci);
+                }
+            }
+        }
+        lines.retain(|l| !l.chars.is_empty());
+        for (li, ln) in lines.iter().enumerate() {
+            for (ci, ch) in ln.chunks.iter().enumerate() {
+                for (wi, &c) in ch.chars.iter().enumerate() {
+                    let tc = &mut pt.chars[c];
+                    tc.line = li;
+                    tc.chunk = ci;
+                    tc.windex = wi;
+                }
+            }
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        pt.lines = lines;
+        pt.any_dx = pt.chars.iter().any(|c| c.dx.abs() > XY_TOL);
+        pt.any_dy = pt.chars.iter().any(|c| c.dy.abs() > XY_TOL);
+        let tlvl: Vec<&TLine> = pt
+            .lines
+            .iter()
+            .filter(|l| l.spec.tlvlno.is_some_and(|n| n > 0))
+            .collect();
+        pt.is_inkscape = !tlvl.is_empty()
+            && tlvl.iter().all(|l| l.spec.sprl)
+            && pt
+                .lines
+                .iter()
+                .all(|l| l.style.get("-inkscape-font-specification").is_some());
+        pt.is_ml_inkscape = pt.is_inkscape && pt.lines.len() > 1;
+        // textLength (P:648–671)
+        if let Some(tl) = doc.attr(el, "textLength").and_then(ipx) {
+            // ponytail: Σ cwd stands in for Σ chunk widths; exact when the element has no dx/letter-spacing
+            let total: f64 = pt.chars.iter().map(|c| c.cwd).sum();
+            let nchunks: usize = pt.lines.iter().map(|l| l.chunks.len()).sum();
+            if doc.attr(el, "lengthAdjust").map(str::trim) == Some("spacingAndGlyphs") {
+                let adj = if total != 0.0 { tl / total } else { 1.0 };
+                for c in pt.chars.iter_mut() {
+                    c.cwd *= adj;
+                }
+                pt.text_length = Some(TextLengthAdj::SpacingAndGlyphs(adj));
+            } else {
+                let gaps = pt.chars.len().saturating_sub(nchunks);
+                let adj = if pt.chars.len() > 1 && gaps > 0 {
+                    (tl - total) / gaps as f64
+                } else {
+                    0.0
+                };
+                for c in pt.chars.iter_mut() {
+                    c.lsp += adj;
+                }
+                pt.text_length = Some(TextLengthAdj::Spacing(adj));
+            }
+        }
+        Some(pt)
+    }
+
+    pub fn chunks(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+        self.lines
+            .iter()
+            .enumerate()
+            .flat_map(|(li, l)| (0..l.chunks.len()).map(move |ci| (li, ci)))
+    }
+
+    pub fn chunk(&self, li: usize, ci: usize) -> &TChunk {
+        &self.lines[li].chunks[ci]
+    }
+
+    pub fn text(&self) -> String {
+        self.chars.iter().map(|c| c.c).collect()
+    }
+}
+
+/// Which face Pango uses for a character (P:727–754): spaces borrow their neighbours' fallback face.
+fn font_picker(
+    ct: &mut CharTable,
+    txt: &[char],
+    j: usize,
+    spec: &FontSpec,
+    tsty: Option<FaceKey>,
+) -> Option<FaceKey> {
+    if txt[j] != ' ' {
+        return ct.char_face(spec, txt[j]);
+    }
+    let before = txt[..j].iter().rev().find(|c| !c.is_whitespace()).copied();
+    let after = txt[j + 1..].iter().find(|c| !c.is_whitespace()).copied();
+    match (before, after) {
+        (Some(b), Some(a)) => {
+            let (fb, fa) = (ct.char_face(spec, b), ct.char_face(spec, a));
+            if fb == fa { fb } else { tsty }
+        }
+        (None, Some(a)) => ct.char_face(spec, a),
+        (Some(b), None) => ct.char_face(spec, b),
+        (None, None) => tsty,
+    }
 }

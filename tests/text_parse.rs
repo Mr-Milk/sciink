@@ -188,3 +188,113 @@ fn a_tail_that_opens_the_first_line_takes_its_parents_position() {
         "the line was opened by the tail run"
     );
 }
+
+use sciink::text::parse::{ParsedText, TextLengthAdj};
+
+fn parsed(svg: &str, el: &str) -> (Doc, ParsedText, CharTable) {
+    let mut d = doc(svg);
+    let mut w = Warnings::default();
+    let n = id(&d, el);
+    let mut ct = CharTable::build(&d, &[n], fonts(), &mut w);
+    let pt = ParsedText::parse(&mut d, n, &mut ct, &mut w).expect("parsed");
+    (d, pt, ct)
+}
+
+#[test]
+fn chars_chunks_and_flags_for_a_simple_element() {
+    let (_, pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><g transform="scale(2)"><text id="t" style="font-family:'DejaVu Sans';font-size:10px" x="1 2" y="3">AV <tspan id="s" style="font-size:50%;letter-spacing:1px" dx="0.5 0.25">bc</tspan></text></g></svg>"#
+        ),
+        "t",
+    );
+    assert_eq!(pt.text(), "AV bc");
+    assert_eq!(pt.lines.len(), 1);
+    let ln = &pt.lines[0];
+    // x="1 2": the second char opens a new chunk; the tspan without x/y joins the current chunk
+    assert_eq!(ln.chunks.len(), 2);
+    assert_eq!((ln.chunks[0].x, ln.chunks[0].y), (1.0, 3.0));
+    assert_eq!((ln.chunks[1].x, ln.chunks[1].y), (2.0, 3.0));
+    assert_eq!(ln.chunks[1].chars.len(), 4, "V, space, b, c");
+    let a = &pt.chars[0];
+    assert_eq!((a.c, a.utfs, a.tfs), ('A', 10.0, 20.0));
+    assert!((a.cwd - a.prop.charw * 10.0).abs() < 1e-12);
+    assert!((a.caph - 7.29).abs() < 0.05);
+    assert_eq!((a.dx, a.dy, a.lsp, a.bshft), (0.0, 0.0, 0.0, 0.0));
+    let b = &pt.chars[3];
+    assert_eq!((b.c, b.utfs), ('b', 5.0));
+    assert_eq!((b.dx, b.lsp), (0.5, 1.0));
+    assert_eq!(pt.chars[4].dx, 0.25);
+    assert_eq!((b.line, b.chunk, b.windex), (0, 1, 2));
+    assert_eq!(b.loc.node, pt.chars[4].loc.node);
+    assert_eq!((b.loc.tail, b.loc.idx), (false, 0));
+    assert!(pt.any_dx && !pt.any_dy);
+    assert!(!pt.is_flow && !pt.is_inkscape && !pt.is_ml_inkscape);
+    assert_eq!(pt.transform, kurbo::Affine::scale(2.0));
+    assert_eq!(pt.text_length, None);
+    // the 'V' after 'A' carries the pair adjustment
+    assert!(pt.chars[1].prop.dadvs.contains_key(&'A'));
+}
+
+#[test]
+fn inkscape_multiline_flags_and_sprl_chunks() {
+    let (_, pt, _) = parsed(
+        &format!(
+            r#"<svg {NS} xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd">
+          <text id="t" style="font-size:10px;line-height:1.25;font-family:'DejaVu Sans';-inkscape-font-specification:'DejaVu Sans'" x="0" y="0"><tspan id="a" sodipodi:role="line" x="0" y="0">ab</tspan><tspan id="b" sodipodi:role="line" x="0" y="12.5">cd</tspan></text></svg>"#
+        ),
+        "t",
+    );
+    assert_eq!(pt.lines.len(), 2);
+    assert!(pt.is_inkscape && pt.is_ml_inkscape);
+    assert_eq!(pt.lines[1].chunks[0].y, 12.5);
+    assert_eq!(pt.lines[1].chars, [2, 3]);
+    assert_eq!(pt.chars[2].line, 1);
+}
+
+#[test]
+fn text_length_adjustments_and_flows() {
+    let (_, pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" style="font-family:'DejaVu Sans';font-size:10px" textLength="100" lengthAdjust="spacingAndGlyphs">ab</text></svg>"#
+        ),
+        "t",
+    );
+    let natural: f64 = pt.chars.iter().map(|c| c.prop.charw * 10.0).sum();
+    let Some(TextLengthAdj::SpacingAndGlyphs(s)) = pt.text_length else {
+        panic!("{:?}", pt.text_length)
+    };
+    assert!((s - 100.0 / natural).abs() < 1e-9);
+    assert!((pt.chars.iter().map(|c| c.cwd).sum::<f64>() - 100.0).abs() < 1e-9);
+    let (_, pt2, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" style="font-family:'DejaVu Sans';font-size:10px" textLength="100">abc</text></svg>"#
+        ),
+        "t",
+    );
+    let natural2: f64 = pt2.chars.iter().map(|c| c.prop.charw * 10.0).sum();
+    let Some(TextLengthAdj::Spacing(extra)) = pt2.text_length else {
+        panic!()
+    };
+    assert!(
+        (extra - (100.0 - natural2) / 2.0).abs() < 1e-9,
+        "spread over nchars − nchunks = 2 gaps"
+    );
+    assert!(pt2.chars.iter().all(|c| (c.lsp - extra).abs() < 1e-9));
+    // flows are recognised but not parsed in v1
+    let (_, fl, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" style="font-size:3px;inline-size:24;font-family:'DejaVu Sans'"><tspan x="0" y="1">flowed</tspan></text></svg>"#
+        ),
+        "t",
+    );
+    assert!(fl.is_flow && fl.lines.is_empty() && fl.chars.is_empty());
+    let mut d = doc(&format!(r#"<svg {NS}><text id="e"/></svg>"#));
+    let mut w = Warnings::default();
+    let n = id(&d, "e");
+    let mut ct = CharTable::build(&d, &[n], fonts(), &mut w);
+    assert!(
+        ParsedText::parse(&mut d, n, &mut ct, &mut w).is_none(),
+        "no text → no model"
+    );
+}
