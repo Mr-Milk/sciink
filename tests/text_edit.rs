@@ -448,3 +448,211 @@ fn rechunk_absolute_y_only_chunks_carry_x_and_continue_lines_read_the_last_chunk
     );
     assert!(pt.chars.iter().all(|c| c.dx == 0.0 && c.dy == 0.0));
 }
+
+use kurbo::Point;
+use sciink::text::edit::{Incoming, WType, append_chunks};
+use sciink::text::layout::{chunk_geom, snapshot_parsed};
+
+/// Two <text> elements, the second placed `gap_spaces` space-widths after the first.
+fn two_texts(gap_spaces: f64, second_style: &str) -> (Doc, Vec<ParsedText>, CharTable) {
+    let probe = format!(
+        r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">Hello</text></svg>"#
+    );
+    let mut pd = Doc::parse(probe.as_bytes()).unwrap();
+    let (ppt, _) = parsed(&mut pd, "a");
+    let g = chunk_geom(&ppt, 0, 0);
+    let x2 = g.right[4] + gap_spaces * ppt.chars[0].spw;
+    let svg = format!(
+        r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">Hello</text><text id="b" xml:space="preserve" style="{DV};font-size:10px;{second_style}" x="{x2}" y="0">world</text></svg>"#
+    );
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let els: Vec<NodeId> = ["a", "b"].iter().map(|i| id(&d, i)).collect();
+    let mut w = Warnings::default();
+    let mut ct = CharTable::build(&d, &els, fonts(), &mut w);
+    let mut pts: Vec<ParsedText> = els
+        .iter()
+        .map(|&e| ParsedText::parse(&mut d, e, &mut ct, &mut w).unwrap())
+        .collect();
+    for pt in pts.iter_mut() {
+        snapshot_parsed(pt);
+    }
+    (d, pts, ct)
+}
+
+fn all_positions(pts: &[ParsedText]) -> Vec<(char, f64, f64)> {
+    let mut v: Vec<(char, f64, f64)> = pts
+        .iter()
+        .flat_map(|pt| {
+            positions(pt).into_iter().map(|(c, x, y)| {
+                let p = pt.transform * Point::new(x, y);
+                (c, p.x, p.y)
+            })
+        })
+        .filter(|p| p.0 != ' ')
+        .collect();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v
+}
+
+#[test]
+fn append_chunks_inserts_the_right_number_of_spaces_and_keeps_glyphs_in_place() {
+    let (d, mut pts, mut ct) = two_texts(1.0, "");
+    let before = all_positions(&pts);
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    assert_eq!(pts[0].text(), "Hello world");
+    assert!(
+        pts[1].chars.is_empty() && pts[1].lines.is_empty(),
+        "source emptied"
+    );
+    assert_eq!(pts[0].lines[0].chunks.len(), 1);
+    let after = all_positions(&pts);
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        assert!(
+            (b.1 - a.1).abs() < 1e-6 && (b.2 - a.2).abs() < 1e-6,
+            "{b:?} vs {a:?}"
+        );
+    }
+    // the inserted space is a copy of 'o' with c=' ', dx = −lsp (0 here), no snapshot
+    let sp = &pts[0].chars[5];
+    assert_eq!(sp.c, ' ');
+    assert!(close(sp.dx, 0.0) && close(sp.dy, 0.0));
+    assert_eq!(pts[0].parsed_ut[5], None);
+    assert!(
+        pts[0].parsed_ut[6].is_some(),
+        "moved chars keep their snapshot"
+    );
+    // moved chars' parsed points were re-expressed in the target frame (identity here → unchanged)
+    assert_eq!(pts[0].parsed_ut[6], pts[0].parsed_t[6]);
+    // model indices are consistent
+    for (i, c) in pts[0].chars.iter().enumerate() {
+        assert_eq!((c.line, c.chunk, c.windex), (0, 0, i));
+    }
+
+    // max_spaces = Some(0) drops the gap: text has no space, 'w' now touches 'o'
+    let (d, mut pts, mut ct) = two_texts(1.0, "");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: Some(0),
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    assert_eq!(pts[0].text(), "Helloworld");
+
+    // a 2.4-space gap rounds to 2 spaces
+    let (d, mut pts, mut ct) = two_texts(2.4, "");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    assert_eq!(pts[0].text(), "Hello  world");
+}
+
+#[test]
+fn append_chunks_nativizes_superscripts_and_percent_sizes() {
+    // superscript: smaller text merged as Super gets 65 % size and +40 % baseline of the host
+    let (d, mut pts, mut ct) = two_texts(0.0, "font-size:6px");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Super,
+        max_spaces: Some(0),
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    let w = &pts[0].chars[5];
+    assert_eq!(w.c, 'w');
+    assert!(close(w.utfs, 6.5) && close(w.bshft, 4.0));
+    assert_eq!(w.sty.get("baseline-shift"), Some("super"));
+    assert_eq!(w.sty.get("font-size"), Some("65%"));
+    assert!(close(w.cwd, w.prop.charw * 6.5));
+    assert!(!sciink::text::edit::style_eq(&w.sty, &pts[0].chars[4].sty));
+
+    // a differently sized Normal merge is size-corrected to a whole percent of the host size
+    let (d, mut pts, mut ct) = two_texts(1.0, "font-size:8px");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    let w = pts[0].chars.iter().find(|c| c.c == 'w').unwrap();
+    assert_eq!(w.sty.get("font-size"), Some("80%"));
+    assert!(close(w.utfs, 8.0) && close(w.bshft, 0.0));
+
+    // same style, same size → untouched style (no "100%" needed)
+    let (d, mut pts, mut ct) = two_texts(1.0, "");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    let sty_before = pts[1].chars[0].sty.clone();
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    let w = pts[0].chars.iter().find(|c| c.c == 'w').unwrap();
+    assert!(sciink::text::edit::style_eq(&w.sty, &sty_before));
+
+    // a merge that no longer exists (chunk id gone) is skipped silently
+    let (d, mut pts, mut ct) = two_texts(1.0, "");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, 99),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    assert_eq!(pts[0].text(), "Hello");
+}
+
+#[test]
+fn append_chunks_middle_anchor_moves_the_anchor_by_half_the_added_width() {
+    let probe = format!(
+        r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="50" y="0">Hello</text></svg>"#
+    );
+    let mut pd = Doc::parse(probe.as_bytes()).unwrap();
+    let (ppt, _) = parsed(&mut pd, "a");
+    let g = chunk_geom(&ppt, 0, 0);
+    let x2 = g.right[4] + ppt.chars[0].spw; // start of "12345", one space later (digits: no pair
+    // kerning, so Σ(cwd + dx) is the exact appended width and the anchor correction is exact)
+    let svg = format!(
+        r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="50" y="0">Hello</text><text id="b" xml:space="preserve" style="{DV};font-size:10px" x="{x2}" y="0">12345</text></svg>"#
+    );
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let els: Vec<NodeId> = ["a", "b"].iter().map(|i| id(&d, i)).collect();
+    let mut w = Warnings::default();
+    let mut ct = CharTable::build(&d, &els, fonts(), &mut w);
+    let mut pts: Vec<ParsedText> = els
+        .iter()
+        .map(|&e| ParsedText::parse(&mut d, e, &mut ct, &mut w).unwrap())
+        .collect();
+    for pt in pts.iter_mut() {
+        snapshot_parsed(pt);
+    }
+    let before = all_positions(&pts);
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    let after = all_positions(&pts);
+    for (b, a) in before.iter().zip(&after) {
+        assert!((b.1 - a.1).abs() < 1e-6, "{b:?} vs {a:?}");
+    }
+    assert!(
+        pts[0].lines[0].chunks[0].x > 50.0,
+        "anchor moved right by half the appended width"
+    );
+}

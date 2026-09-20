@@ -8,11 +8,14 @@ use std::rc::Rc;
 use kurbo::Affine;
 
 use crate::dom::{Doc, NodeId};
+use crate::geom::inverse;
 use crate::num;
 use crate::style::Style;
 
-use super::layout::{chunk_geom, dadv, full_extent, unrendered_space};
-use super::parse::{CharLoc, ParsedText, TextLengthAdj, XY_TOL};
+use super::layout::{chunk_geom, dadv, full_extent, transform_pts, unrendered_space};
+use super::parse::{CharLoc, ParsedText, TChar, TextLengthAdj, XY_TOL};
+use super::style::composed_font_size;
+use super::table::CharTable;
 
 /// The node whose style a character carries: the node itself for a text run, its parent for a tail
 /// (upstream `CLoc.sel`).
@@ -369,4 +372,262 @@ pub fn rechunk_absolute(pt: &mut ParsedText) {
             }
         }
     }
+}
+
+/// `(index into the ParsedText arena, chunk id)` — how merge plans name a chunk across elements.
+pub type ChunkRef = (usize, u32);
+
+/// How a merged chunk relates to the text it joins (`Perform_Merges`' `wtypes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WType {
+    Normal,
+    Sub,
+    Super,
+}
+
+pub struct Incoming {
+    pub chunk: ChunkRef,
+    pub wtype: WType,
+    /// Cap on the spaces inserted before this block (`None` = as many as the gap says).
+    pub max_spaces: Option<usize>,
+}
+
+/// P:3120–3326 (`append_chks`): type the incoming chunks after the target chunk's last character.
+pub fn append_chunks(
+    doc: &Doc,
+    pts: &mut [ParsedText],
+    ct: &mut CharTable,
+    target: ChunkRef,
+    incoming: &[Incoming],
+) {
+    let (tp, tid) = target;
+    let Some((tli, tci)) = pts[tp].find_chunk(tid) else {
+        return;
+    };
+    let Some(inv) = inverse(pts[tp].transform) else {
+        return;
+    };
+    let anfr = pts[tp].lines[tli].spec.anchor.anfr();
+
+    // 1. Incoming characters, cloned, with their parsed points re-expressed in the target frame (P:3126–3128).
+    // A character's optional frozen corner snapshot (`parsed_ut`/`parsed_t`'s element type).
+    type Snap = Option<[kurbo::Point; 4]>;
+    struct Block {
+        chars: Vec<(TChar, Snap, Snap)>,
+        wtype: WType,
+        max_spaces: Option<usize>,
+        src: ChunkRef,
+    }
+    let mut blocks: Vec<Block> = Vec::new();
+    for inc in incoming {
+        let (sp, sid) = inc.chunk;
+        let Some((li, ci)) = pts[sp].find_chunk(sid) else {
+            continue; // already merged away (RK:623–624)
+        };
+        let src = &pts[sp];
+        let chars = src.lines[li].chunks[ci]
+            .chars
+            .iter()
+            .map(|&c| {
+                let t = src.parsed_t.get(c).copied().flatten();
+                (src.chars[c].clone(), t.map(|p| transform_pts(inv, p)), t)
+            })
+            .collect();
+        blocks.push(Block {
+            chars,
+            wtype: inc.wtype,
+            max_spaces: inc.max_spaces,
+            src: (sp, sid),
+        });
+    }
+    if blocks.is_empty() {
+        return;
+    }
+
+    // 2. Spaces before each block: round((bl2x − br1x) / spw of the target's last char), capped (P:3131–3164).
+    let (lchr, first_idx) = {
+        let t = &pts[tp];
+        let ch = &t.lines[tli].chunks[tci];
+        (
+            t.chars[*ch.chars.last().expect("non-empty chunk")].clone(),
+            ch.chars[0],
+        )
+    };
+    let mut br1x = {
+        let t = &pts[tp];
+        t.lines[tli].chunks[tci]
+            .chars
+            .iter()
+            .filter_map(|&c| t.parsed_ut.get(c).copied().flatten())
+            .map(|p| p[3].x)
+            .fold(f64::NEG_INFINITY, f64::max)
+    };
+    let space_prop = ct.prop(ct.true_face(&lchr.spec), ' ');
+    // (char, parsed_ut, parsed_t, wtype, first of its block)
+    let mut new_chars: Vec<(TChar, Snap, Snap, WType, bool)> = Vec::new();
+    for b in &blocks {
+        let bl2x = b
+            .chars
+            .iter()
+            .filter_map(|(_, ut, _)| *ut)
+            .map(|p| p[0].x)
+            .fold(f64::INFINITY, f64::min);
+        let br2x = b
+            .chars
+            .iter()
+            .filter_map(|(_, ut, _)| *ut)
+            .map(|p| p[3].x)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let mut numsp = if lchr.spw > 0.0 && bl2x.is_finite() && br1x.is_finite() {
+            ((bl2x - br1x) / lchr.spw).round().max(0.0) as usize
+        } else {
+            0
+        };
+        if let Some(m) = b.max_spaces {
+            numsp = numsp.min(m);
+        }
+        if br2x.is_finite() {
+            br1x = br2x;
+        }
+        for i in 0..numsp {
+            let mut sp = lchr.clone();
+            sp.c = ' ';
+            sp.prop = space_prop.clone();
+            sp.cwd = space_prop.charw * sp.utfs;
+            sp.dx = -lchr.lsp;
+            sp.dy = 0.0;
+            new_chars.push((sp, None, None, b.wtype, i == 0));
+        }
+        for (j, (c, ut, t)) in b.chars.iter().enumerate() {
+            new_chars.push((c.clone(), *ut, *t, b.wtype, numsp == 0 && j == 0));
+        }
+    }
+
+    // 3. Where the new characters live (P:3166–3176): the target's last node, or — when that node is
+    //    not the chunk's first node — the tail of its ancestor just below the first node / the element.
+    //    Only the host's font size and specified style matter to the model (and `loc` for kerning).
+    let first_sel = sel(doc, &pts[tp].chars[first_idx].loc);
+    let lchr_sel = sel(doc, &lchr.loc);
+    let (host_loc, host_utfs, host_tfs, host_sty): (CharLoc, f64, f64, Rc<Style>) =
+        if lchr_sel == first_sel {
+            (
+                CharLoc {
+                    node: lchr.loc.node,
+                    tail: lchr.loc.tail,
+                    idx: u32::MAX,
+                },
+                lchr.utfs,
+                lchr.tfs,
+                lchr.sty.clone(),
+            )
+        } else {
+            let el = pts[tp].el;
+            let mut cel = lchr_sel;
+            while let Some(p) = doc.parent(cel) {
+                if p == first_sel || p == el {
+                    break;
+                }
+                cel = p;
+            }
+            let parent = doc.parent(cel).unwrap_or(el);
+            let (u, t, s) = if parent == first_sel {
+                let f = &pts[tp].chars[first_idx];
+                (f.utfs, f.tfs, f.sty.clone())
+            } else {
+                let fs = composed_font_size(doc, el);
+                (fs.utfs, fs.tfs, doc.specified_style(el))
+            };
+            (
+                CharLoc {
+                    node: cel,
+                    tail: true,
+                    idx: u32::MAX,
+                },
+                u,
+                t,
+                s,
+            )
+        };
+
+    // 4. Remove the moved characters from their sources (P:3178–3205); a source may be the target element.
+    for b in &blocks {
+        let (sp, sid) = b.src;
+        if let Some((li, ci)) = pts[sp].find_chunk(sid) {
+            let ids = pts[sp].lines[li].chunks[ci].chars.clone();
+            remove_chars(&mut pts[sp], &ids);
+        }
+    }
+    let Some((tli, tci)) = pts[tp].find_chunk(tid) else {
+        return;
+    };
+
+    // 5. Append; restyle moved characters (P:3266–3293); fix dx of block-firsts and the anchor (P:3297–3303).
+    let pt = &mut pts[tp];
+    let scf = if host_utfs > 0.0 {
+        host_tfs / host_utfs
+    } else {
+        1.0
+    };
+    let mut sum_wd = 0.0;
+    let mut prev_lsp = lchr.lsp;
+    for (mut c, ut, t, wtype, first) in new_chars {
+        c.loc = host_loc;
+        let otype = c.sty.get("baseline-shift").map(str::to_string);
+        let ntype = match (otype.as_deref(), wtype) {
+            (Some("super"), WType::Normal) => WType::Super,
+            (Some("sub"), WType::Normal) => WType::Sub,
+            (_, w) => w,
+        };
+        let sizechanged = (c.tfs - host_tfs).abs() > 1e-4;
+        if !style_eq(&c.sty, &host_sty) || matches!(ntype, WType::Super | WType::Sub) || sizechanged
+        {
+            let mut s = (*c.sty).clone();
+            match ntype {
+                WType::Super | WType::Sub => {
+                    // Inkscape's native super/subscript convention (P:3277–3282)
+                    s.set(
+                        "baseline-shift",
+                        if ntype == WType::Super {
+                            "super"
+                        } else {
+                            "sub"
+                        },
+                    );
+                    s.set("font-size", "65%");
+                    c.bshft = if ntype == WType::Super { 0.4 } else { -0.2 } * host_utfs;
+                    c.utfs = 0.65 * host_utfs;
+                }
+                WType::Normal if sizechanged => {
+                    let pct = (c.tfs / host_tfs * 100.0).round();
+                    s.set("font-size", &format!("{}%", num::fmt(pct)));
+                    c.utfs = host_utfs * pct / 100.0;
+                }
+                WType::Normal => {
+                    s.set("font-size", "100%");
+                    c.utfs = host_utfs;
+                }
+            }
+            c.tfs = c.utfs * scf;
+            c.cwd = c.prop.charw * c.utfs;
+            c.caph = c.prop.caph * c.utfs;
+            c.spw = c.prop.spacew * c.utfs;
+            c.sty = Rc::new(s);
+        }
+        if first {
+            c.dx = -prev_lsp;
+        }
+        prev_lsp = c.lsp;
+        sum_wd += c.cwd + c.dx;
+        let idx = pt.chars.len();
+        pt.chars.push(c);
+        if !pt.parsed_ut.is_empty() {
+            pt.parsed_ut.push(ut);
+            pt.parsed_t.push(t);
+        }
+        pt.lines[tli].chunks[tci].chars.push(idx);
+    }
+    if anfr != 0.0 {
+        pt.lines[tli].chunks[tci].x += anfr * sum_wd;
+    }
+    reindex(pt);
 }
