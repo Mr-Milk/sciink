@@ -53,16 +53,30 @@ pub fn composed_width(doc: &Doc, n: NodeId, prop: &str) -> FontSize {
                 }
                 cel = doc.parent(c).filter(|&p| doc.is_element(p));
             }
+            let f = f * mul;
             let par = cel
                 .and_then(|c| doc.parent(c))
-                .filter(|&p| doc.is_element(p))
-                .unwrap_or_else(|| doc.svg());
-            let base = composed_width(doc, par, prop);
-            let f = f * mul;
-            return FontSize {
-                tfs: base.tfs * f,
-                scf: base.scf,
-                utfs: base.utfs * f,
+                .filter(|&p| doc.is_element(p));
+            return match par {
+                Some(p) => {
+                    let base = composed_width(doc, p, prop);
+                    FontSize {
+                        tfs: base.tfs * f,
+                        scf: base.scf,
+                        utfs: base.utfs * f,
+                    }
+                }
+                None => {
+                    // The relative value was set on the root (or above): resolve against the
+                    // initial value instead of recursing on the root forever.
+                    let utsz = ipx(dflt).unwrap_or_else(|| keyword_px(prop, dflt));
+                    let scf = scale_factor(doc.composed_transform(n));
+                    FontSize {
+                        tfs: utsz * f * scf,
+                        scf,
+                        utfs: utsz * f,
+                    }
+                }
             };
         }
     }

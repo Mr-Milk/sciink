@@ -123,3 +123,21 @@ fn letter_spacing_and_baseline_shift() {
     );
     assert_eq!(Anchor::End.css(), "end");
 }
+
+#[test]
+fn relative_size_on_the_root_resolves_against_the_initial_value_without_recursing() {
+    // 150% set on the root <svg>: nothing above it, so it is 150% of the 12px initial size.
+    let d = doc(&format!(
+        r#"<svg {NS} font-size="150%"><text id="r">x</text></svg>"#
+    ));
+    assert!((composed_font_size(&d, id(&d, "r")).utfs - 18.0).abs() < 1e-9);
+    assert!((composed_font_size(&d, d.svg()).utfs - 18.0).abs() < 1e-9);
+    // inline style on the root, queried on the root itself
+    let d2 = doc(&format!(r#"<svg {NS} style="font-size:50%"/>"#));
+    assert!((composed_font_size(&d2, d2.svg()).utfs - 6.0).abs() < 1e-9);
+    // stroke-width goes through the same path with its own initial value (1)
+    let d3 = doc(&format!(
+        r#"<svg {NS} style="stroke-width:200%"><path id="p"/></svg>"#
+    ));
+    assert!((composed_width(&d3, id(&d3, "p"), "stroke-width").utfs - 2.0).abs() < 1e-9);
+}
