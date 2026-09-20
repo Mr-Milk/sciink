@@ -25,68 +25,82 @@ fn keyword_px(prop: &str, v: &str) -> f64 {
 }
 
 /// Transformed size, composed scale factor and untransformed size of a length property.
+///
+/// Relative values (`%`, `em`) resolve against the nearest ancestor that set an absolute
+/// one, so the walk is iterative: collect one multiplier per relative level going up (the
+/// Global Constraint — a recursive version aborts the process on a deep document, and a
+/// Rust stack overflow is not catchable, unlike CPython's `RecursionError`), stop at the
+/// first absolute value or at the root's initial value, then fold.
 pub fn composed_width(doc: &Doc, n: NodeId, prop: &str) -> FontSize {
     let dflt = if prop == "font-size" {
         "medium"
     } else {
         default_value(prop).unwrap_or("0")
     };
-    let satt = doc.specified(n, prop).unwrap_or_else(|| dflt.to_string());
-    let satt = satt.trim().to_string();
-    let rel = satt
-        .strip_suffix('%')
-        .map(|s| (s, 0.01))
-        .or_else(|| satt.strip_suffix("em").map(|s| (s, 1.0)));
-    if let Some((num, mul)) = rel {
-        if let Ok(f) = num.trim().parse::<f64>() {
-            // find the element that set this exact string, then resolve against its parent
-            let mut cel = Some(n);
-            while let Some(c) = cel {
-                let own = doc
-                    .cascaded_style(c)
-                    .get(prop)
-                    .map(|v| v.trim() == satt)
-                    .unwrap_or(false)
-                    || doc.attr(c, prop).map(|v| v.trim() == satt).unwrap_or(false);
-                if own {
-                    break;
-                }
-                cel = doc.parent(c).filter(|&p| doc.is_element(p));
-            }
-            let f = f * mul;
-            let par = cel
-                .and_then(|c| doc.parent(c))
-                .filter(|&p| doc.is_element(p));
-            return match par {
-                Some(p) => {
-                    let base = composed_width(doc, p, prop);
-                    FontSize {
-                        tfs: base.tfs * f,
-                        scf: base.scf,
-                        utfs: base.utfs * f,
-                    }
-                }
-                None => {
-                    // The relative value was set on the root (or above): resolve against the
-                    // initial value instead of recursing on the root forever.
-                    let utsz = ipx(dflt).unwrap_or_else(|| keyword_px(prop, dflt));
-                    let scf = scale_factor(doc.composed_transform(n));
-                    FontSize {
-                        tfs: utsz * f * scf,
-                        scf,
-                        utfs: utsz * f,
-                    }
-                }
+    let mut factors: Vec<f64> = Vec::new();
+    let mut node = n;
+    let base = loop {
+        let satt = doc
+            .specified(node, prop)
+            .unwrap_or_else(|| dflt.to_string());
+        let satt = satt.trim().to_string();
+        let rel = satt
+            .strip_suffix('%')
+            .map(|s| (s, 0.01))
+            .or_else(|| satt.strip_suffix("em").map(|s| (s, 1.0)))
+            .and_then(|(num, mul)| num.trim().parse::<f64>().ok().map(|f| f * mul));
+        let Some(f) = rel else {
+            let utfs = ipx(&satt).unwrap_or_else(|| keyword_px(prop, &satt));
+            let scf = scale_factor(doc.composed_transform(node));
+            break FontSize {
+                tfs: utfs * scf,
+                scf,
+                utfs,
             };
+        };
+        // find the element that set this exact string, then resolve against its parent
+        let mut cel = Some(node);
+        while let Some(c) = cel {
+            let own = doc
+                .cascaded_style(c)
+                .get(prop)
+                .map(|v| v.trim() == satt)
+                .unwrap_or(false)
+                || doc.attr(c, prop).map(|v| v.trim() == satt).unwrap_or(false);
+            if own {
+                break;
+            }
+            cel = doc.parent(c).filter(|&p| doc.is_element(p));
         }
-    }
-    let utfs = ipx(&satt).unwrap_or_else(|| keyword_px(prop, &satt));
-    let scf = scale_factor(doc.composed_transform(n));
-    FontSize {
-        tfs: utfs * scf,
-        scf,
-        utfs,
-    }
+        // `cel` is `node` or an ancestor of it, so the next node is strictly shallower
+        // and the loop runs at most once per level of the document.
+        match cel
+            .and_then(|c| doc.parent(c))
+            .filter(|&p| doc.is_element(p))
+        {
+            Some(p) => {
+                factors.push(f);
+                node = p;
+            }
+            None => {
+                // The relative value was set on the root (or above): resolve against the
+                // initial value instead of walking off the top of the document.
+                let utsz = ipx(dflt).unwrap_or_else(|| keyword_px(prop, dflt));
+                let scf = scale_factor(doc.composed_transform(node));
+                break FontSize {
+                    tfs: utsz * f * scf,
+                    scf,
+                    utfs: utsz * f,
+                };
+            }
+        }
+    };
+    // innermost factor applied last, exactly as the recursion unwound
+    factors.iter().rev().fold(base, |acc, &f| FontSize {
+        tfs: acc.tfs * f,
+        scf: acc.scf,
+        utfs: acc.utfs * f,
+    })
 }
 
 pub fn composed_font_size(doc: &Doc, n: NodeId) -> FontSize {

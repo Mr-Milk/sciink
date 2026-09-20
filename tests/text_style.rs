@@ -155,3 +155,25 @@ fn baseline_shift_survives_a_singular_parent_transform() {
         "expected 4.0 (40% of 10px), got {bs}"
     );
 }
+
+#[test]
+fn deeply_nested_relative_sizes_do_not_overflow_the_stack() {
+    // Every level is relative, so the resolution has to climb 50 000 elements before it
+    // reaches an absolute value. A recursive walk aborts the process here (a Rust stack
+    // overflow is not a catchable panic, so `main`'s echo-the-original contract would be
+    // broken); the iterative one must return the root's 12px unchanged.
+    const DEPTH: usize = 50_000;
+    let mut s = String::with_capacity(DEPTH * 34 + 128);
+    s.push_str(&format!("<svg {NS}>"));
+    for _ in 0..DEPTH {
+        s.push_str(r#"<g style="font-size:100%">"#);
+    }
+    s.push_str(r#"<text id="deep">x</text>"#);
+    for _ in 0..DEPTH {
+        s.push_str("</g>");
+    }
+    s.push_str("</svg>");
+    let d = doc(&s);
+    let fs = composed_font_size(&d, id(&d, "deep"));
+    assert_eq!((fs.utfs, fs.scf, fs.tfs), (12.0, 1.0, 12.0));
+}
