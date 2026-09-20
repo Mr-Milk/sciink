@@ -2,6 +2,8 @@
 
 use std::rc::Rc;
 
+use kurbo::Point;
+
 use crate::dom::{Doc, NodeId};
 use crate::geom::{Affine, ipx};
 use crate::style::Style;
@@ -396,9 +398,17 @@ pub struct TChar {
 
 #[derive(Debug, Clone)]
 pub struct TChunk {
+    /// Stable within one `ParsedText`; survives `edit::reindex`, so merge plans can refer to a
+    /// chunk while other chunks are being removed. Look it up with `ParsedText::find_chunk`.
+    pub id: u32,
     pub x: f64,
     pub y: f64,
     pub chars: Vec<usize>,
+    /// Next/previous chunk on the same baseline within this element (stage 4, `edit::make_next_chain`).
+    pub next: Option<u32>,
+    pub prev: Option<u32>,
+    /// `prev`'s last char and this chunk's first char sit in the same style node (P:724–725).
+    pub prev_same_tspan: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -415,6 +425,15 @@ pub enum TextLengthAdj {
     Spacing(f64),
 }
 
+/// Where a `ParsedText` came from: an element that exists in the document (rewritten in place,
+/// id reused) or a piece split off another element by `edit::split_off` (a new element, inserted
+/// right after the element it came from, which is what `el` then names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Existing,
+    SplitFrom,
+}
+
 pub struct ParsedText {
     pub el: NodeId,
     pub transform: Affine,
@@ -426,6 +445,19 @@ pub struct ParsedText {
     pub text_length: Option<TextLengthAdj>,
     pub any_dx: bool,
     pub any_dy: bool,
+    pub origin: Origin,
+    /// Per-character corner points frozen by `layout::snapshot_parsed` (stage 3): `[BL, TL, TR, BR]`
+    /// in this element's frame and in root coordinates. Index-aligned with `chars`; `None` for
+    /// characters created after the snapshot (inserted spaces). Empty until the snapshot is taken.
+    pub parsed_ut: Vec<Option<[Point; 4]>>,
+    pub parsed_t: Vec<Option<[Point; 4]>>,
+    /// Extra transform the writer multiplies onto the element's own `transform` (stage 2).
+    pub transform_extra: Affine,
+    /// `text-anchor`/`text-align` to write on the `<text>` itself (stage 9, RK:175–178).
+    pub text_anchor_override: Option<Anchor>,
+    /// `textLength`/`lengthAdjust` were undone (stage 2) and must not be copied by the writer.
+    pub text_length_removed: bool,
+    pub next_chunk_id: u32,
 }
 
 fn is_flow(doc: &Doc, el: NodeId) -> bool {
@@ -469,6 +501,13 @@ impl ParsedText {
             text_length: None,
             any_dx: false,
             any_dy: false,
+            origin: Origin::Existing,
+            parsed_ut: Vec::new(),
+            parsed_t: Vec::new(),
+            transform_extra: Affine::IDENTITY,
+            text_anchor_override: None,
+            text_length_removed: false,
+            next_chunk_id: 0,
         };
         if flow {
             return Some(pt); // v1: flows are detected, never parsed (spec §A.2 "Flowed text v1")
@@ -564,10 +603,15 @@ impl ParsedText {
                 if opens {
                     px = xs.get(i.min(xs.len() - 1)).copied().flatten().unwrap_or(px);
                     py = ys.get(i.min(ys.len() - 1)).copied().flatten().unwrap_or(py);
+                    let id = pt.new_chunk_id();
                     ln.chunks.push(TChunk {
+                        id,
                         x: px,
                         y: py,
                         chars: vec![ci],
+                        next: None,
+                        prev: None,
+                        prev_same_tspan: false,
                     });
                 } else {
                     ln.chunks
@@ -593,6 +637,39 @@ impl ParsedText {
             return None;
         }
         pt.lines = lines;
+        // Lines that inherit a coordinate continue from the END of the previous line
+        // (P:2640–2653 for x — upstream's anchor form verbatim, spec risk 7; P:2661–2675 for y:
+        // the previous line's last chunk y). Chunks after the first in such a line carry the
+        // resolved coordinate forward when they had none of their own.
+        for li in 1..pt.lines.len() {
+            let (cx, cy) = (pt.lines[li].spec.continue_x, pt.lines[li].spec.continue_y);
+            if !(cx || cy) {
+                continue;
+            }
+            let pli = li - 1;
+            let pci = pt.lines[pli].chunks.len() - 1;
+            let prev_y = pt.lines[pli].chunks[pci].y;
+            let g = super::layout::chunk_geom(&pt, pli, pci);
+            let anfr = pt.lines[li].spec.anchor.anfr();
+            let old_x = pt.lines[li].chunks[0].x;
+            let old_y = pt.lines[li].chunks[0].y;
+            let new_x = (1.0 + anfr) * g.pts_ut[3].x - anfr * g.pts_ut[0].x;
+            let ln = &mut pt.lines[li];
+            for ch in ln.chunks.iter_mut() {
+                if cx && ch.x == old_x {
+                    ch.x = new_x;
+                }
+                if cy && ch.y == old_y {
+                    ch.y = prev_y;
+                }
+            }
+            if cx {
+                ln.spec.x = vec![Some(new_x)];
+            }
+            if cy {
+                ln.spec.y = vec![Some(prev_y)];
+            }
+        }
         pt.any_dx = pt.chars.iter().any(|c| c.dx.abs() > XY_TOL);
         pt.any_dy = pt.chars.iter().any(|c| c.dy.abs() > XY_TOL);
         let tlvl: Vec<&TLine> = pt
@@ -647,6 +724,38 @@ impl ParsedText {
 
     pub fn text(&self) -> String {
         self.chars.iter().map(|c| c.c).collect()
+    }
+}
+
+impl ParsedText {
+    pub fn new_chunk_id(&mut self) -> u32 {
+        let id = self.next_chunk_id;
+        self.next_chunk_id += 1;
+        id
+    }
+
+    /// `(line, chunk)` of the chunk with this id, or `None` when it has been merged away.
+    pub fn find_chunk(&self, id: u32) -> Option<(usize, usize)> {
+        self.lines
+            .iter()
+            .enumerate()
+            .find_map(|(li, l)| l.chunks.iter().position(|c| c.id == id).map(|ci| (li, ci)))
+    }
+
+    pub fn chunk_text(&self, li: usize, ci: usize) -> String {
+        self.lines[li].chunks[ci]
+            .chars
+            .iter()
+            .map(|&c| self.chars[c].c)
+            .collect()
+    }
+
+    pub fn line_text(&self, li: usize) -> String {
+        self.lines[li]
+            .chars
+            .iter()
+            .map(|&c| self.chars[c].c)
+            .collect()
     }
 }
 

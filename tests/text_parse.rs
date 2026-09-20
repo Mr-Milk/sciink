@@ -354,3 +354,79 @@ fn text_length_adjustments_and_flows() {
         "no text → no model"
     );
 }
+
+const DV: &str = "font-family:'DejaVu Sans'";
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
+}
+
+// Named `parsed_doc` (not `parsed`): this file already has a `parsed(svg: &str, el: &str) ->
+// (Doc, ParsedText, CharTable)` helper above; this one takes an existing `&mut Doc` and returns
+// just `(ParsedText, CharTable)`, so it needs a distinct name to coexist with it.
+fn parsed_doc(d: &mut Doc, el: &str) -> (ParsedText, CharTable) {
+    let mut w = Warnings::default();
+    let n = id(d, el);
+    let mut ct = CharTable::build(d, &[n], fonts(), &mut w);
+    let pt = ParsedText::parse(d, n, &mut ct, &mut w).expect("parsed");
+    (pt, ct)
+}
+
+#[test]
+fn continue_lines_start_where_the_previous_line_ends() {
+    // "cd" has y but no x: SVG/Inkscape continue it from the pen after "ab" (P:2640–2653).
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="5" y="20">ab<tspan id="s" y="40">cd</tspan></text></svg>"#
+    ));
+    let (pt, _) = parsed_doc(&mut d, "t");
+    assert_eq!(pt.lines.len(), 2);
+    assert!(pt.lines[1].spec.continue_x && !pt.lines[1].spec.continue_y);
+    let g0 = sciink::text::layout::chunk_geom(&pt, 0, 0);
+    let end = g0.pts_ut[3].x; // start anchor: (1+0)·right − 0·left
+    assert!(
+        close(pt.lines[1].chunks[0].x, end),
+        "{} vs {end}",
+        pt.lines[1].chunks[0].x
+    );
+    assert!(close(pt.lines[1].chunks[0].y, 40.0));
+    assert!(
+        end > 5.0 + pt.chars[0].cwd,
+        "the second line starts after 'ab'"
+    );
+
+    // continue_y: x given, y inherited = previous line's last chunk y
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="5" y="20">ab<tspan id="s" x="50">cd</tspan></text></svg>"#
+    ));
+    let (pt, _) = parsed_doc(&mut d, "t");
+    assert!(pt.lines[1].spec.continue_y && !pt.lines[1].spec.continue_x);
+    assert!(close(pt.lines[1].chunks[0].x, 50.0) && close(pt.lines[1].chunks[0].y, 20.0));
+
+    // middle anchor uses upstream's (1+anfr)·right − anfr·left form verbatim (spec risk 7)
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px;text-anchor:middle" x="5" y="20">ab<tspan id="s" y="40">cd</tspan></text></svg>"#
+    ));
+    let (pt, _) = parsed_doc(&mut d, "t");
+    let g0 = sciink::text::layout::chunk_geom(&pt, 0, 0);
+    let expect = 1.5 * g0.pts_ut[3].x - 0.5 * g0.pts_ut[0].x;
+    assert!(close(pt.lines[1].chunks[0].x, expect));
+}
+
+#[test]
+fn chunk_ids_are_unique_and_findable() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0 30" y="0">ab<tspan x="0" y="20">c</tspan></text></svg>"#
+    ));
+    let (mut pt, _) = parsed_doc(&mut d, "t");
+    let ids: Vec<u32> = pt.chunks().map(|(li, ci)| pt.chunk(li, ci).id).collect();
+    assert_eq!(ids, [0, 1, 2]);
+    assert_eq!(pt.find_chunk(1), Some((0, 1)));
+    assert_eq!(pt.find_chunk(2), Some((1, 0)));
+    assert_eq!(pt.find_chunk(7), None);
+    assert_eq!(pt.new_chunk_id(), 3);
+    assert_eq!(pt.chunk_text(0, 1), "b");
+    assert_eq!(pt.line_text(0), "ab");
+    assert_eq!(pt.origin, sciink::text::parse::Origin::Existing);
+    assert!(pt.parsed_ut.is_empty(), "no snapshot until snapshot_parsed");
+    assert!(sciink::geom::is_identity(pt.transform_extra));
+}
