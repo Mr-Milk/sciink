@@ -239,14 +239,13 @@ pub fn rechunk_absolute(pt: &mut ParsedText) {
     let mut new_lines: Vec<super::parse::TLine> = Vec::new();
     for li in 0..pt.lines.len() {
         let anfr = pt.lines[li].spec.anchor.anfr();
-        // (char, ax, ay, has_explicit_pos) in line order
-        let mut axay: Vec<(usize, Option<f64>, Option<f64>, bool)> = Vec::new();
+        // (char, ax, ay) in line order
+        let mut axay: Vec<(usize, Option<f64>, Option<f64>)> = Vec::new();
         for ci in 0..pt.lines[li].chunks.len() {
             let pts = super::layout::chunk_char_pts(pt, li, ci);
             let ch = pt.lines[li].chunks[ci].clone();
             for (j, &c) in ch.chars.iter().enumerate() {
                 let (dx, dy) = (pt.chars[c].dx, pt.chars[c].dy);
-                let has_explicit_pos = dx.abs() > XY_TOL || dy.abs() > XY_TOL;
                 // Deviation: the first character of a chunk gets the same anchor-weighted formula
                 // as a dx'd one. Upstream keeps `w.x` (P:1679), which mis-places a middle/end-
                 // anchored first segment until stage 11 corrects it; for a start anchor with
@@ -270,15 +269,14 @@ pub fn rechunk_absolute(pt: &mut ParsedText) {
                 } else {
                     None
                 };
-                axay.push((c, ax, ay, has_explicit_pos));
+                axay.push((c, ax, ay));
             }
         }
         let mut starts = vec![0usize];
         for i in 1..axay.len() {
-            let (_, px, py, _) = axay[i - 1];
-            let (_, x, y, has_explicit) = axay[i];
-            let coord_follows_none = (px.is_none() && x.is_some()) || (py.is_none() && y.is_some());
-            if has_explicit || coord_follows_none {
+            let (_, px, py) = axay[i - 1];
+            let (_, x, y) = axay[i];
+            if (px.is_none() && x.is_some()) || (py.is_none() && y.is_some()) {
                 starts.push(i);
             }
         }
@@ -308,7 +306,7 @@ pub fn rechunk_absolute(pt: &mut ParsedText) {
             };
             // NaN marks "not known yet": resolved below for continue lines, carried forward otherwise
             let (mut cx, mut cy) = (xv.unwrap_or(f64::NAN), yv.unwrap_or(f64::NAN));
-            for (i, (c, ax, ay, _)) in seg.iter().enumerate() {
+            for (i, (c, ax, ay)) in seg.iter().enumerate() {
                 if i == 0 || ax.is_some() || ay.is_some() {
                     if let Some(x) = ax {
                         cx = *x;

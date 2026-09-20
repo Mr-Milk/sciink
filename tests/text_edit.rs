@@ -258,10 +258,11 @@ use sciink::text::edit::{make_next_chain, rechunk_absolute, unique_reps};
 
 #[test]
 fn unique_reps_keeps_the_first_of_each_cluster() {
-    assert_eq!(
-        unique_reps(&[3.0, 1.0, 1.0005, 2.0, 3.0004], 0.001),
-        [1.0, 2.0, 3.0]
-    );
+    let r = unique_reps(&[3.0, 1.0, 1.0005, 2.0, 3.0004], 0.001);
+    assert_eq!(r.len(), 3, "{r:?}");
+    for (a, b) in r.iter().zip(&[1.0, 2.0, 3.0]) {
+        assert!(close(*a, *b), "{r:?}");
+    }
     assert!(unique_reps(&[], 0.1).is_empty());
 }
 
@@ -353,18 +354,32 @@ fn rechunk_absolute_turns_dx_into_new_lines_without_moving_glyphs() {
         0.5 * (g.left[0] + g.right[1])
     ));
 
-    // dy only → new line with continue_x resolved to the end of the previous line
+    // a dx'd character right after a positioned one opens a CHUNK on the same line (both have a
+    // coordinate, P:2704–2716); a coordinate after a character WITHOUT one opens a LINE
+    // (P:886–893) whose missing x continues from the end of the previous line's last chunk.
+    // Digits: no pair kerning, so the continued pen position is exact.
     let mut d = Doc::parse(
-        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0" dx="0 1" dy="0 0 4">abc</text></svg>"#).as_bytes(),
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0" dx="0 1" dy="0 0 4">123</text></svg>"#).as_bytes(),
     )
     .unwrap();
     let (mut pt, _) = parsed(&mut d, "t");
     let before = positions(&pt);
     rechunk_absolute(&mut pt);
     let texts: Vec<String> = (0..pt.lines.len()).map(|li| pt.line_text(li)).collect();
-    assert_eq!(texts, ["a", "b", "c"]);
-    assert!(pt.lines[2].spec.continue_x && !pt.lines[2].spec.continue_y);
-    assert!(close(pt.lines[2].chunks[0].y, 4.0));
+    assert_eq!(texts, ["12", "3"]);
+    assert_eq!(
+        pt.lines[0].chunks.len(),
+        2,
+        "'2' carried a dx: its own chunk, same line"
+    );
+    assert_eq!(pt.chunk_text(0, 1), "2");
+    assert!(pt.lines[1].spec.continue_x && !pt.lines[1].spec.continue_y);
+    assert!(close(pt.lines[1].chunks[0].y, 4.0));
+    let g2 = sciink::text::layout::chunk_geom(&pt, 0, 1);
+    assert!(
+        close(pt.lines[1].chunks[0].x, g2.pts_ut[3].x),
+        "'3' starts where '2' ends"
+    );
     let after = positions(&pt);
     for (b, a) in before.iter().zip(&after) {
         assert!(close(b.1, a.1) && close(b.2, a.2), "{b:?} vs {a:?}");
@@ -379,4 +394,57 @@ fn rechunk_absolute_turns_dx_into_new_lines_without_moving_glyphs() {
     rechunk_absolute(&mut pt);
     assert_eq!(pt.lines.len(), 1);
     assert!(close(pt.chars[1].dy, 4.0));
+}
+
+#[test]
+fn rechunk_absolute_keeps_adjacent_positioned_characters_on_one_line() {
+    // two consecutive dx'd characters: every character has a coordinate, so nothing opens a new
+    // line — three chunks on one line (upstream P:875–893 splits only after a None)
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0" dx="0 1 1">123</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    let before = positions(&pt);
+    rechunk_absolute(&mut pt);
+    assert_eq!(pt.lines.len(), 1);
+    assert_eq!(pt.lines[0].chunks.len(), 3);
+    assert!(pt.chars.iter().all(|c| c.dx == 0.0));
+    let after = positions(&pt);
+    for (b, a) in before.iter().zip(&after) {
+        assert!(close(b.1, a.1) && close(b.2, a.2), "{b:?} vs {a:?}");
+    }
+}
+
+#[test]
+fn rechunk_absolute_y_only_chunks_carry_x_and_continue_lines_read_the_last_chunk() {
+    // "1234": dy on '2' (+4) and '3' (−4), dx on '4'. '2' and '3' keep a coordinate (their y), so
+    // they open chunks on the first line whose x is carried forward from the chunk before
+    // (upstream `x[min(i, len(x)−1)]`, P:2710 — a quirk shared with parse time: such characters
+    // sit at the line's x, not at the pen); '4' opens a line whose missing y comes from the
+    // previous line's LAST chunk ('3', back on the baseline).
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="7" y="0" dx="0 0 0 1" dy="0 4 -4 0">1234</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    rechunk_absolute(&mut pt);
+    let texts: Vec<String> = (0..pt.lines.len()).map(|li| pt.line_text(li)).collect();
+    assert_eq!(texts, ["123", "4"]);
+    let l0 = &pt.lines[0];
+    assert_eq!(l0.chunks.len(), 3);
+    assert!(
+        close(l0.chunks[1].x, 7.0) && close(l0.chunks[1].y, 4.0),
+        "'2': own y, carried x"
+    );
+    assert!(
+        close(l0.chunks[2].x, 7.0) && close(l0.chunks[2].y, 0.0),
+        "'3': back on the baseline"
+    );
+    assert!(pt.lines[1].spec.continue_y && !pt.lines[1].spec.continue_x);
+    assert!(
+        close(pt.lines[1].chunks[0].y, 0.0),
+        "y from the previous line's LAST chunk"
+    );
+    assert!(pt.chars.iter().all(|c| c.dx == 0.0 && c.dy == 0.0));
 }
