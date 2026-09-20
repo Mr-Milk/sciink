@@ -348,21 +348,29 @@ fn hostile_arc_endpoints_degrade_to_a_line_quickly() {
     // Huge but finite coordinates on both endpoints: caught by first-stage check.
     let p = parse_d("M 1e300 0 A 1 1 0 0 1 -1e300 0").expect("parses");
     assert_eq!(p.path.elements().len(), 2);
-    // Large endpoints within individual per-axis limits: distance forces kurbo to
-    // scale radii. The second-stage guard catches if conversion exceeds LIMIT.
-    let p = parse_d("M 1e14 1e14 A 1 1 0 0 1 -1e14 -1e14").expect("parses");
-    // If this arc's converted radii exceed LIMIT, it's caught by the second-stage guard
-    // and becomes a line (2 elements). Otherwise, it's subdivided into cubics.
-    // This case exercises the `Some(arc) if arc.radii...` guard code path.
-    let elem_count = p.path.elements().len();
-    assert!(
-        elem_count == 2 || elem_count > 3,
-        "arc with large endpoints must either degrade to line (2) or subdivide (>3), got {}",
-        elem_count
+    // Both endpoints are inside the per-axis limit (9.99e14 < 1e15), so the first
+    // guard passes; the chord is ~2e15 long, so kurbo scales the radii to ~1.41e15,
+    // which the second guard (converted radii) must reject.
+    let p =
+        parse_d("M 999999999999999 999999999999999 A 5 5 0 0 1 -999999999999999 -999999999999999")
+            .expect("parses");
+    assert_eq!(
+        p.path.elements().len(),
+        2,
+        "converted-radii guard must degrade the arc to a line"
     );
     // Radii exceeding LIMIT: caught by first-stage check on radii magnitude.
     let p = parse_d("M 0 0 A 1e16 1e16 0 0 1 10 0").expect("parses");
     assert_eq!(p.path.elements().len(), 2);
+    // Non-finite coordinates cannot be written as literals (svgtypes rejects them),
+    // but a relative move can overflow the current point to +inf; the arc that
+    // follows must then degrade to a line: MoveTo + LineTo (the `l`) + LineTo (the arc).
+    let p = parse_d("M 1e308 0 l 1e308 0 A 5 5 0 0 1 10 0").expect("parses");
+    assert_eq!(
+        p.path.elements().len(),
+        3,
+        "non-finite current point must degrade the arc to a line"
+    );
     // Normal arc: still subdivides into cubics (no regression).
     let p = parse_d("M 0 0 A 5 5 0 0 1 10 0").expect("parses");
     assert!(
