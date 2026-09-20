@@ -3,6 +3,7 @@
 pub mod fonts;
 pub mod metrics;
 pub mod style;
+pub mod table;
 pub mod tree;
 pub mod whitespace;
 

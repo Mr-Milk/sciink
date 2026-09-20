@@ -2282,9 +2282,11 @@ const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
 
 #[test]
 fn char_table_collects_faces_preceders_and_warnings() {
+    let c1 = '\u{23A3}';
+    let c2 = '\u{10348}';
     let d = doc(&format!(r#"<svg {NS}>
       <text id="a" style="font-family:Roboto">AV a<tspan style="font-weight:bold">B</tspan></text>
-      <text id="b" style="font-family:Helvetica">x\u{23A3}\u{10348}</text></svg>"#));
+      <text id="b" style="font-family:Helvetica">x{c1}{c2}</text></svg>"#));
     let mut w = Warnings::default();
     let mut ct = CharTable::build(&d, &[id(&d, "a"), id(&d, "b")], fonts(), &mut w);
     assert_eq!(ct.spec_count(), 3, "Roboto/400, Roboto/700, Helvetica/400");
