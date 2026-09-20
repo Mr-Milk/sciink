@@ -410,6 +410,32 @@ fn continue_lines_start_where_the_previous_line_ends() {
     let g0 = sciink::text::layout::chunk_geom(&pt, 0, 0);
     let expect = 1.5 * g0.pts_ut[3].x - 0.5 * g0.pts_ut[0].x;
     assert!(close(pt.lines[1].chunks[0].x, expect));
+
+    // a multi-value list on the previous line must not leak chunk breaks into the continuing
+    // line: the continued x is ONE value, the end of the previous line's LAST chunk
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0 30" y="0">ab<tspan id="s" y="40">cd</tspan></text></svg>"#
+    ));
+    let (pt, _) = parsed_doc(&mut d, "t");
+    assert_eq!(pt.lines[0].chunks.len(), 2, "'a' at 0, 'b' at 30");
+    assert_eq!(
+        pt.lines[1].chunks.len(),
+        1,
+        "one chunk: the continued x is a single value"
+    );
+    assert_eq!(pt.line_text(1), "cd");
+    let gb = sciink::text::layout::chunk_geom(&pt, 0, 1);
+    assert!(
+        close(pt.lines[1].chunks[0].x, gb.pts_ut[3].x),
+        "starts where 'b' ends"
+    );
+    // same for y: the previous line's LAST chunk y
+    let mut d = doc(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0" y="0 5 9">abc<tspan id="s" x="50">de</tspan></text></svg>"#
+    ));
+    let (pt, _) = parsed_doc(&mut d, "t");
+    assert_eq!(pt.lines[1].chunks.len(), 1);
+    assert!(close(pt.lines[1].chunks[0].x, 50.0) && close(pt.lines[1].chunks[0].y, 9.0));
 }
 
 #[test]

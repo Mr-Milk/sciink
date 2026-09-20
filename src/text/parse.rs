@@ -292,7 +292,7 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
             if xv[0].is_none() {
                 match lines.last() {
                     Some(l) => {
-                        xv = l.x.clone();
+                        xv = vec![l.x[0]];
                         xsrc = tree.dds.iter().position(|&d| d == l.xsrc).unwrap_or(0);
                     }
                     None => {
@@ -305,7 +305,7 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
             if yv[0].is_none() {
                 match lines.last() {
                     Some(l) => {
-                        yv = l.y.clone();
+                        yv = vec![l.y[0]];
                         ysrc = tree.dds.iter().position(|&d| d == l.ysrc).unwrap_or(0);
                     }
                     None => {
@@ -651,15 +651,15 @@ impl ParsedText {
             let prev_y = pt.lines[pli].chunks[pci].y;
             let g = super::layout::chunk_geom(&pt, pli, pci);
             let anfr = pt.lines[li].spec.anchor.anfr();
-            let old_x = pt.lines[li].chunks[0].x;
-            let old_y = pt.lines[li].chunks[0].y;
             let new_x = (1.0 + anfr) * g.pts_ut[3].x - anfr * g.pts_ut[0].x;
             let ln = &mut pt.lines[li];
+            // Every chunk of a continuing line borrowed the coordinate (its LineSpec list is the
+            // single-entry placeholder `line_specs` leaves), so all of them take the resolved value.
             for ch in ln.chunks.iter_mut() {
-                if cx && ch.x == old_x {
+                if cx {
                     ch.x = new_x;
                 }
-                if cy && ch.y == old_y {
+                if cy {
                     ch.y = prev_y;
                 }
             }
