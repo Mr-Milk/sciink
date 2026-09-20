@@ -337,17 +337,33 @@ fn upstream_paths_survive_parse_format_parse() {
 #[test]
 fn hostile_arc_endpoints_degrade_to_a_line_quickly() {
     use sciink::geom::path::parse_d;
-    // Endpoint 1e60 away: kurbo would scale the 5-unit radii to ~5e59.
+    // Endpoint 1e60 away: caught by first-stage hostile check on endpoint coordinates.
     let p = parse_d("M 0 0 A 5 5 0 0 1 1e60 1").expect("parses");
-    assert!(
-        p.path.elements().len() <= 3,
-        "expected MoveTo+LineTo, got {} elements",
+    assert_eq!(
+        p.path.elements().len(),
+        2,
+        "expected MoveTo+LineTo only, got {} elements",
         p.path.elements().len()
     );
-    // Huge but finite coordinates on both endpoints.
+    // Huge but finite coordinates on both endpoints: caught by first-stage check.
     let p = parse_d("M 1e300 0 A 1 1 0 0 1 -1e300 0").expect("parses");
-    assert!(p.path.elements().len() <= 3);
-    // A sane arc still becomes cubics.
+    assert_eq!(p.path.elements().len(), 2);
+    // Large endpoints within individual per-axis limits: distance forces kurbo to
+    // scale radii. The second-stage guard catches if conversion exceeds LIMIT.
+    let p = parse_d("M 1e14 1e14 A 1 1 0 0 1 -1e14 -1e14").expect("parses");
+    // If this arc's converted radii exceed LIMIT, it's caught by the second-stage guard
+    // and becomes a line (2 elements). Otherwise, it's subdivided into cubics.
+    // This case exercises the `Some(arc) if arc.radii...` guard code path.
+    let elem_count = p.path.elements().len();
+    assert!(
+        elem_count == 2 || elem_count > 3,
+        "arc with large endpoints must either degrade to line (2) or subdivide (>3), got {}",
+        elem_count
+    );
+    // Radii exceeding LIMIT: caught by first-stage check on radii magnitude.
+    let p = parse_d("M 0 0 A 1e16 1e16 0 0 1 10 0").expect("parses");
+    assert_eq!(p.path.elements().len(), 2);
+    // Normal arc: still subdivides into cubics (no regression).
     let p = parse_d("M 0 0 A 5 5 0 0 1 10 0").expect("parses");
     assert!(
         p.path.elements().len() > 3,
