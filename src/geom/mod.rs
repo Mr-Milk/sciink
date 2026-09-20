@@ -158,3 +158,35 @@ pub fn uniquetol(xs: &[f64], tol: f64) -> usize {
     }
     count
 }
+
+use crate::dom::{Doc, NodeId};
+
+impl Doc {
+    /// The element's own `transform` attribute (identity when absent or invalid).
+    pub fn transform(&self, n: NodeId) -> Affine {
+        self.attr(n, "transform")
+            .and_then(parse_transform)
+            .unwrap_or(Affine::IDENTITY)
+    }
+
+    /// Product of every ancestor's transform below the root `<svg>` (outermost first)
+    /// and the element's own transform; the root's transform is excluded (inkex semantics).
+    pub fn composed_transform(&self, n: NodeId) -> Affine {
+        let svg = self.svg();
+        if n == svg {
+            return Affine::IDENTITY;
+        }
+        let mut chain: Vec<NodeId> = vec![n];
+        for a in self.ancestors(n) {
+            if a == svg || !self.is_element(a) {
+                break;
+            }
+            chain.push(a);
+        }
+        let mut t = Affine::IDENTITY;
+        for &node in chain.iter().rev() {
+            t *= self.transform(node);
+        }
+        t
+    }
+}

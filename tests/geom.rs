@@ -378,3 +378,30 @@ fn hostile_arc_endpoints_degrade_to_a_line_quickly() {
         "a normal arc must be subdivided into cubics"
     );
 }
+
+#[test]
+fn composed_transform_excludes_root_svg_and_composes_outer_first() {
+    use kurbo::{Affine, Point};
+    use sciink::dom::Doc;
+    let d = Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg" transform="scale(100)">
+  <g id="a" transform="translate(10,20)"><g id="b" transform="scale(2)"><path id="p" d="M0,0" transform="translate(1,1)"/></g></g>
+  <path id="q" d="M0,0"/></svg>"#).unwrap();
+    let p = d.by_id("p").unwrap();
+    let t = d.composed_transform(p);
+    // outer-first: translate(10,20) * scale(2) * translate(1,1) maps (0,0) -> (12, 22)
+    let got = t * Point::new(0.0, 0.0);
+    assert!(
+        (got.x - 12.0).abs() < 1e-9 && (got.y - 22.0).abs() < 1e-9,
+        "{got:?}"
+    );
+    assert_eq!(
+        d.composed_transform(d.by_id("q").unwrap()),
+        Affine::IDENTITY
+    );
+    assert_eq!(d.composed_transform(d.svg()), Affine::IDENTITY);
+    assert_eq!(
+        d.transform(d.by_id("a").unwrap()),
+        Affine::translate((10.0, 20.0))
+    );
+    assert_eq!(d.transform(d.by_id("q").unwrap()), Affine::IDENTITY);
+}
