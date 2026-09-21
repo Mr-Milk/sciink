@@ -7,6 +7,7 @@ pub mod dom;
 pub mod geom;
 pub mod log;
 pub mod num;
+pub mod ops;
 pub mod paths;
 pub mod style;
 pub mod text;

@@ -189,4 +189,34 @@ impl Doc {
         }
         t
     }
+
+    /// Writes `transform` (`translate`/`scale`/`matrix` form); an identity removes the attribute.
+    pub fn set_transform(&mut self, n: NodeId, t: Affine) {
+        match fmt_transform(t) {
+            Some(s) => self.set_attr(n, "transform", s),
+            None => {
+                self.remove_attr(n, "transform");
+            }
+        }
+    }
+
+    /// The root `viewBox` as a rectangle; without one, `[0, 0, width, height]` of the root
+    /// (`cache.py:1185–1192`); `None` when neither is usable.
+    pub fn viewbox(&self) -> Option<Rect> {
+        let svg = self.svg();
+        if let Some(vb) = self.attr(svg, "viewBox") {
+            let v: Vec<f64> = vb
+                .split(|c: char| c.is_whitespace() || c == ',')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.parse::<f64>().ok())
+                .collect::<Option<Vec<_>>>()?;
+            if v.len() == 4 && v[2] > 0.0 && v[3] > 0.0 {
+                return Some(Rect::new(v[0], v[1], v[0] + v[2], v[1] + v[3]));
+            }
+            return None;
+        }
+        let w = ipx(self.attr(svg, "width")?)?;
+        let h = ipx(self.attr(svg, "height")?)?;
+        (w > 0.0 && h > 0.0).then(|| Rect::new(0.0, 0.0, w, h))
+    }
 }

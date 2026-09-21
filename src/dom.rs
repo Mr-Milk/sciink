@@ -628,6 +628,20 @@ impl Doc {
         }
     }
 
+    /// Renames an element, keeping its namespace prefix (`svg:line` → `svg:path`). Style caches
+    /// are invalidated because tag selectors may now match differently.
+    pub fn set_tag(&mut self, n: NodeId, local: &str) {
+        let Kind::Element { name, .. } = &mut self.nodes[n as usize].kind else {
+            return;
+        };
+        *name = match name.rsplit_once(':') {
+            Some((prefix, _)) => format!("{prefix}:{local}"),
+            None => local.to_string(),
+        };
+        self.bump_style();
+        self.bump();
+    }
+
     /// `true` when the nearest `xml:space` on the element or an ancestor is `preserve`.
     pub fn xml_space_preserve(&self, n: NodeId) -> bool {
         std::iter::once(n)

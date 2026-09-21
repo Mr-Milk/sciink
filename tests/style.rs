@@ -329,3 +329,25 @@ fn upstream_fixture_styles_resolve() {
         Some("'DejaVu Sans'".to_string())
     );
 }
+
+#[test]
+fn sheet_value_reports_only_stylesheet_declarations() {
+    let d = doc(&format!(
+        "<svg {NS}><style>#r{{clip-path:url(#a)}} rect{{clip-path:url(#b);fill:red}}</style>\
+         <rect id=\"r\" clip-path=\"url(#c)\" style=\"clip-path:url(#d);fill:blue\"/><rect id=\"q\"/></svg>"
+    ));
+    let r = id(&d, "r");
+    // the id rule beats the tag rule; neither the attribute nor the inline style count
+    assert_eq!(d.sheet_value(r, "clip-path").as_deref(), Some("url(#a)"));
+    assert_eq!(d.sheet_value(r, "fill").as_deref(), Some("red"));
+    assert_eq!(d.sheet_value(r, "stroke"), None);
+    assert_eq!(
+        d.sheet_value(id(&d, "q"), "clip-path").as_deref(),
+        Some("url(#b)")
+    );
+    // later rules of equal weight win, `!important` beats everything
+    let d = doc(&format!(
+        "<svg {NS}><style>rect{{fill:red !important}} rect{{fill:green}} #r{{fill:blue}}</style><rect id=\"r\"/></svg>"
+    ));
+    assert_eq!(d.sheet_value(id(&d, "r"), "fill").as_deref(), Some("red"));
+}
