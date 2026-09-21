@@ -211,7 +211,9 @@ fn delete_up_removes_emptied_ancestors_below_the_root_and_records_ids() {
     delete_up(&mut d, &mut ctx, n_keep);
     assert_eq!(d.by_id("layer"), None);
     assert!(ctx.deleted.contains("layer") && ctx.deleted.contains("keep"));
-    assert_eq!(out(&d), format!(r#"<svg {NS}/>"#), "the root is never deleted");
+    // `Doc::write` keeps each element's parsed open/close form (lossless round-trip), so the
+    // emptied root is written `<svg …></svg>`, not `<svg …/>`
+    assert_eq!(out(&d), format!(r#"<svg {NS}></svg>"#), "the root is never deleted");
 }
 
 #[test]
@@ -304,7 +306,8 @@ Run: `cargo test --test dom --test style --test geom --test ops_cleanup 2>&1 | g
     /// source order)` wins; later declarations win ties.
     pub fn sheet_value(&self, n: NodeId, prop: &str) -> Option<String> {
         let sheet = self.stylesheet();
-        let mut best: Option<((bool, (u32, u32, u32), usize), String)> = None;
+        // (clippy `type_complexity`: alias the key like `DeclKey` above — `type SheetKey = (bool, (u32, u32, u32), usize);`)
+        let mut best: Option<(SheetKey, String)> = None;
         for rule in &sheet.rules {
             if !rule.selector.matches(self, n) {
                 continue;
