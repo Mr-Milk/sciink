@@ -1117,7 +1117,7 @@ fn line_and_image_boxes() {
 #[test]
 fn group_use_and_root_boxes() {
     let mut d = doc(&format!(
-        r#"<svg {NS}><defs><rect id="r" width="2" height="3" transform="scale(2)"/></defs><g id="g" transform="translate(100,0)"><rect id="a" width="2" height="2"/><rect id="b" width="1" height="1" transform="translate(5,5)"/><!-- comment --></g><use id="u" xlink:href="#r" x="1" y="1" transform="translate(10,0)"/><use id="dangling" xlink:href="#nope"/><g id="empty"/></svg>"#
+        r##"<svg {NS}><defs><rect id="r" width="2" height="3" transform="scale(2)"/></defs><g id="g" transform="translate(100,0)"><rect id="a" width="2" height="2"/><rect id="b" width="1" height="1" transform="translate(5,5)"/><!-- comment --></g><use id="u" xlink:href="#r" x="1" y="1" transform="translate(10,0)"/><use id="dangling" xlink:href="#nope"/><g id="empty"/></svg>"##
     ));
     let mut ctx = Ctx::new();
     let n_g = id(&d, "g");
@@ -1164,7 +1164,7 @@ fn clip_and_mask_clamp_the_box() {
 #[test]
 fn text_boxes_come_from_the_char_table() {
     let mut d = doc(&format!(
-        r#"<svg {NS}><g transform="translate(5,0)"><text id="t" style="font-family:'DejaVu Sans';font-size:10px" x="0" y="0">Hi</text><text id="tp" style="font-family:'DejaVu Sans';font-size:10px"><textPath xlink:href="#p">on a path</textPath></text><path id="p" d="M0 0 L100 0"/></g></svg>"#
+        r##"<svg {NS}><g transform="translate(5,0)"><text id="t" style="font-family:'DejaVu Sans';font-size:10px" x="0" y="0">Hi</text><text id="tp" style="font-family:'DejaVu Sans';font-size:10px"><textPath xlink:href="#p">on a path</textPath></text><path id="p" d="M0 0 L100 0"/></g></svg>"##
     ));
     let mut ctx = Ctx::new();
     let t = id(&d, "t");
@@ -1202,7 +1202,7 @@ fn bb2_reports_supported_rendered_elements_only() {
 #[test]
 fn is_rectangle_cases() {
     let d = doc(&format!(
-        r#"<svg {NS}><defs><clipPath id="rc"><rect width="1" height="1"/></clipPath><clipPath id="sc"><path d="M0 0 L1 0 L2 1 Z"/></clipPath><mask id="m"><rect width="1" height="1"/></mask><filter id="f"/><rect id="target" width="1" height="1"/></defs><path id="p1" d="M0 0 L10 0 L10 5 L0 5 Z"/><path id="p2" d="M0 0 h10 v5 h-10 z"/><path id="tri" d="M0 0 L10 0 L10 5 Z"/><path id="skew" d="M0 0 L10 0 L12 5 L2 5 Z"/><path id="seven" d="M0 0 L10 0 L10 5 L0 5 L0 0 L0 0 Z"/><path id="rot" d="M0 0 L10 0 L10 5 L0 5 Z" transform="rotate(45)"/><path id="scaled" d="M0 0 L10 0 L10 5 L0 5 Z" transform="scale(2,3)"/><path id="three" d="M0 0 L10 0 Z"/><rect id="r" width="2" height="1" transform="rotate(30)"/><rect id="rr" width="2" height="1" rx="0.2"/><line id="l" x2="1" y2="1"/><polyline id="pl" points="0,0 4,0 4,3 0,3 0,0"/><polygon id="pg" points="0,0 4,0 4,3 0,3"/><use id="u" xlink:href="#target"/><use id="ud" xlink:href="#nope"/><path id="masked" d="M0 0 L10 0 L10 5 L0 5 Z" mask="url(#m)"/><path id="filtered" d="M0 0 L10 0 L10 5 L0 5 Z" style="filter:url(#f)"/><path id="filtered_dangling" d="M0 0 L10 0 L10 5 L0 5 Z" style="filter:url(#nofilter)"/><path id="rectclip" d="M0 0 L10 0 L10 5 L0 5 Z" clip-path="url(#rc)"/><path id="skewclip" d="M0 0 L10 0 L10 5 L0 5 Z" clip-path="url(#sc)"/><path id="near" d="M0 0 L10 0 L10.005 5 L0 5 Z"/><path id="far" d="M0 0 L10 0 L10.02 5 L0 5 Z"/></svg>"#
+        r##"<svg {NS}><defs><clipPath id="rc"><rect width="1" height="1"/></clipPath><clipPath id="sc"><path d="M0 0 L1 0 L2 1 Z"/></clipPath><mask id="m"><rect width="1" height="1"/></mask><filter id="f"/><rect id="target" width="1" height="1"/></defs><path id="p1" d="M0 0 L10 0 L10 5 L0 5 Z"/><path id="p2" d="M0 0 h10 v5 h-10 z"/><path id="tri" d="M0 0 L10 0 L10 5 Z"/><path id="skew" d="M0 0 L10 0 L12 5 L2 5 Z"/><path id="seven" d="M0 0 L10 0 L10 5 L0 5 L0 0 L0 0 Z"/><path id="rot" d="M0 0 L10 0 L10 5 L0 5 Z" transform="rotate(45)"/><path id="scaled" d="M0 0 L10 0 L10 5 L0 5 Z" transform="scale(2,3)"/><path id="three" d="M0 0 L10 0 Z"/><rect id="r" width="2" height="1" transform="rotate(30)"/><rect id="rr" width="2" height="1" rx="0.2"/><line id="l" x2="1" y2="1"/><polyline id="pl" points="0,0 4,0 4,3 0,3 0,0"/><polygon id="pg" points="0,0 4,0 4,3 0,3"/><use id="u" xlink:href="#target"/><use id="ud" xlink:href="#nope"/><path id="masked" d="M0 0 L10 0 L10 5 L0 5 Z" mask="url(#m)"/><path id="filtered" d="M0 0 L10 0 L10 5 L0 5 Z" style="filter:url(#f)"/><path id="filtered_dangling" d="M0 0 L10 0 L10 5 L0 5 Z" style="filter:url(#nofilter)"/><path id="rectclip" d="M0 0 L10 0 L10 5 L0 5 Z" clip-path="url(#rc)"/><path id="skewclip" d="M0 0 L10 0 L10 5 L0 5 Z" clip-path="url(#sc)"/><path id="near" d="M0 0 L10 0 L10.005 5 L0 5 Z"/><path id="far" d="M0 0 L10 0 L10.02 5 L0 5 Z"/></svg>"##
     ));
     // upstream's test is "two distinct x's and two distinct y's among the end points": a right
     // triangle passes it (tri), a parallelogram does not (skew); polygons are not rect-like tags
@@ -1730,7 +1730,7 @@ fn merge_clipmask_counter_transforms_the_new_clip_and_nests_non_rectangles() {
 #[test]
 fn merge_clipmask_unlinks_clones_inside_clips_and_stops_at_max_nest() {
     let mut d = doc(&format!(
-        r#"<svg {NS}><defs><rect id="src" width="10" height="10"/><clipPath id="c"><use xlink:href="#src"/></clipPath><clipPath id="loop"><rect id="lr" width="1" height="1" clip-path="url(#loop)"/></clipPath></defs><rect id="r" width="1" height="1"/><rect id="cyc" width="3" height="3" clip-path="url(#loop)"/></svg>"#
+        r##"<svg {NS}><defs><rect id="src" width="10" height="10"/><clipPath id="c"><use xlink:href="#src"/></clipPath><clipPath id="loop"><rect id="lr" width="1" height="1" clip-path="url(#loop)"/></clipPath></defs><rect id="r" width="1" height="1"/><rect id="cyc" width="3" height="3" clip-path="url(#loop)"/></svg>"##
     ));
     let mut ctx = Ctx::new();
     let c = id(&d, "c");
@@ -1748,7 +1748,7 @@ fn merge_clipmask_unlinks_clones_inside_clips_and_stops_at_max_nest() {
 #[test]
 fn unlink_replaces_a_clone_with_a_composed_copy() {
     let mut d = doc(&format!(
-        r#"<svg {NS}><defs><g id="sym"><rect id="r" width="1" height="1" style="fill:red"/><use id="nested" xlink:href="#r" x="2"/></g><symbol id="s"><circle id="c" r="1"/></symbol><clipPath id="cp"><rect width="1" height="1"/></clipPath></defs><use id="u" xlink:href="#sym" x="3" y="4" transform="scale(2)" style="opacity:0.5" clip-path="url(#cp)"/><use id="dangling" xlink:href="#nope"/><use id="us" xlink:href="#s" transform="translate(1,1)"/></svg>"#
+        r##"<svg {NS}><defs><g id="sym"><rect id="r" width="1" height="1" style="fill:red"/><use id="nested" xlink:href="#r" x="2"/></g><symbol id="s"><circle id="c" r="1"/></symbol><clipPath id="cp"><rect width="1" height="1"/></clipPath></defs><use id="u" xlink:href="#sym" x="3" y="4" transform="scale(2)" style="opacity:0.5" clip-path="url(#cp)"/><use id="dangling" xlink:href="#nope"/><use id="us" xlink:href="#s" transform="translate(1,1)"/></svg>"##
     ));
     let mut ctx = Ctx::new();
     let u = id(&d, "u");
