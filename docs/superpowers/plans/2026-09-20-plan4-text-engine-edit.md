@@ -2370,7 +2370,7 @@ fn manual_kerning_retries_a_weirdly_kerned_space_against_the_previous_chunk() {
 //! Stage 12 — the only place the text pipeline writes the DOM (spec §A.0 decision 1). The writer
 //! itself lands in a later task; this file starts with the record the merge stages produce.
 
-use crate::dom::NodeId;
+use crate::dom::{Doc, NodeId};
 
 /// Elements whose `clip-path`s must be unioned onto `target` because their text was merged into it
 /// (RK:640–656). Executed by `apply_clip_unions` before the elements are rewritten.
@@ -2378,6 +2378,18 @@ use crate::dom::NodeId;
 pub struct ClipUnion {
     pub target: NodeId,
     pub others: Vec<NodeId>,
+}
+
+/// The element a `clip-path` (attribute, else style) points at; `None` for no or a dangling reference.
+/// Shared by `kerning::perform_merges` (which records unions only when a participant is clipped) and
+/// the Task 10 writer.
+pub fn clip_of(doc: &Doc, el: NodeId) -> Option<NodeId> {
+    let v = doc
+        .attr(el, "clip-path")
+        .map(str::to_string)
+        .or_else(|| doc.specified(el, "clip-path"))?;
+    let id = v.trim().strip_prefix("url(#")?.strip_suffix(')')?.trim();
+    doc.by_id(id)
 }
 ```
 
@@ -2396,7 +2408,7 @@ use super::edit::{ChunkRef, Incoming, WType, append_chunks, split_off};
 use super::layout::{chunk_mch, chunk_spw, get_ut_pts};
 use super::parse::ParsedText;
 use super::table::CharTable;
-use super::write::ClipUnion;
+use super::write::{ClipUnion, clip_of};
 
 pub const NUM_SPACES: f64 = 1.0;
 pub const XTOLEXT: f64 = 0.6;
@@ -2577,7 +2589,13 @@ pub fn perform_merges(
         append_chunks(doc, pts, ct, w, &incoming);
         let target = pts[w.0].el;
         let others: Vec<_> = mels.into_iter().filter(|&e| e != target).collect();
-        if !others.is_empty() {
+        // RK:640–656 runs after every cross-element merge, but when no participant carries a
+        // clip its only action — dropping the target's clip — is a no-op, so nothing is
+        // recorded. **Deviation:** a dangling `clip-path` reference on an otherwise unclipped
+        // set is left alone (upstream would clear the target's).
+        if !others.is_empty()
+            && std::iter::once(target).chain(others.iter().copied()).any(|e| clip_of(doc, e).is_some())
+        {
             clips.push(ClipUnion { target, others });
         }
     }
@@ -2926,7 +2944,7 @@ pub fn external_merges(
 
 (`Rect::union_pt` and `Rect::inflate` exist in kurbo 0.13; `intersects` is the strict centre-distance test from `geom`.) The pair loop is O(n²) over chunks with two cheap rejections first; spec §A.5 item 10 accepts that.
 
-- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 8 passed.
+- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 9 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3170,7 +3188,7 @@ pub fn split_lines(pts: &mut Vec<ParsedText>) {
 }
 ```
 
-- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 10 passed.
+- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 11 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3382,7 +3400,7 @@ pub fn fix_merge_positions(pts: &mut [ParsedText]) {
 }
 ```
 
-- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 13 passed.
+- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 14 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3929,8 +3947,9 @@ pub fn write_clean_text(
     Some(te)
 }
 
-/// The element a `clip-path` (attribute, else style) points at.
-fn clip_of(doc: &Doc, el: NodeId) -> Option<NodeId> {
+/// The element a `clip-path` (attribute, else style) points at; `None` for no or a dangling reference.
+/// Shared with `kerning::perform_merges` (Task 6/7 ruling) — stays `pub`.
+pub fn clip_of(doc: &Doc, el: NodeId) -> Option<NodeId> {
     let v = doc
         .attr(el, "clip-path")
         .map(str::to_string)
