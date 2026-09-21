@@ -4723,3 +4723,18 @@ Variable-font axes, flowed text parsing (`flowRoot`/`shape-inside` are still bbo
 ## Execution handoff
 
 Plan complete and saved to `docs/superpowers/plans/2026-09-20-plan4-text-engine-edit.md`. Execute with **subagent-driven development** (fresh implementer per task, task review, fix rounds with scoped re-review, one final whole-branch fix wave), on a branch `plan4-text-edit` off `main` (6dc6a8a), with the same process rules as Plan 3 (never weaken a test to make it pass; plan defects become controller rulings mirrored into this document).
+
+## Post-review fix wave (2026-09-21)
+
+The whole-branch review (opus, range `6dc6a8a..9a65b0d`) rated the branch "with fixes"; one fix wave landed as eight commits `0b6df2a..73bf6c3`, each verified by a scoped re-review:
+
+1. **C1** `<text>` with a `<textPath>` descendant is measured but never edited (spec §A.2 skip); it is not parsed at all, so `text_bbox`/`text-highlight` report nothing for it — a known limitation (Plan 5 bbox code must treat text-on-a-path as boxless); a warning `"<id>: text on a path is not edited"` is emitted.
+2. **I3** `remove_kerning` deduplicates `els` and skips an element nested inside another listed element (warning; its dead id is dropped from the result — the result lists live nodes); `write_clean_text` verifies the slot anchor is still attached and falls back to the nearest live ancestor (`Slot::LastIn`, `write::attached`) instead of reaching `Doc::insert_after`'s `expect`.
+3. **I4** a writer test pins nested split-off ordering (`source, split, split-of-split`).
+4. **I2 — Deviation:** emitted `font-size` and `letter-spacing` carry `px` (upstream writes unitless numbers, which browsers drop); spec §A.1 stage 12 amended.
+5. `shift_x` NaN guard; parity comments on `spec.style_node` and the `chars.contains(&last)` check.
+6. `append_chunks` reindexes each source once per call (2000-character chain 0.89 s → 0.18 s in a debug build, byte-identical output).
+7. The FIX-NOW test additions from the review's deferred-minor verdicts (161 → 170 tests), including the hoisted `with_vendored_fonts` helper and a `justification=1` appearance-invariance assertion.
+8. README (Text Fix edits the document and runs `remove_kerning` alone, without the Flattener's `setreplacement` pre-pass) and spec notes (stage-9 `dx[0]` shift; forward line iteration in the split-off deviation).
+
+Known, accepted residuals: the Text_tests content oracle reproduces 396/436 reference strings (threshold 0.85) — the residue is the sanctioned dx/x-overflow truncation (38 strings) and one missing font (2); `text-fix` is not idempotent on Inkscape-authored multi-line text (upstream-identical); `remove_position_overflows` redistribution is the next text-engine item.
