@@ -567,13 +567,26 @@ pub fn append_chunks(
         }
     };
 
-    // 4. Remove the moved characters from their sources (P:3178–3205); a source may be the target element.
+    // 4. Remove the moved characters from their sources (P:3178–3205); a source may be the target
+    //    element. Collected per source first: `remove_chars` reindexes (and clones every `TChar`
+    //    of) the whole model, so calling it once per block makes a long merge chain — every chunk
+    //    of one element merging into the first — quadratic in the chain length. Indices gathered
+    //    before any removal stay valid: nothing is removed from a source until all of its chunks
+    //    have been looked up, and `remove_chars` is a set operation (order-insensitive).
+    let mut by_src: Vec<(usize, Vec<usize>)> = Vec::new();
     for b in &blocks {
         let (sp, sid) = b.src;
-        if let Some((li, ci)) = pts[sp].find_chunk(sid) {
-            let ids = pts[sp].lines[li].chunks[ci].chars.clone();
-            remove_chars(&mut pts[sp], &ids);
+        let Some((li, ci)) = pts[sp].find_chunk(sid) else {
+            continue;
+        };
+        let ids = pts[sp].lines[li].chunks[ci].chars.clone();
+        match by_src.iter_mut().find(|(p, _)| *p == sp) {
+            Some((_, v)) => v.extend(ids),
+            None => by_src.push((sp, ids)),
         }
+    }
+    for (sp, ids) in &by_src {
+        remove_chars(&mut pts[*sp], ids);
     }
     let Some((tli, tci)) = pts[tp].find_chunk(tid) else {
         return;
