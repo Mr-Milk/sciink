@@ -2295,6 +2295,69 @@ fn manual_kerning_removal_records_clip_unions_only_across_elements() {
     assert_eq!(pts[0].text(), "ab");
     assert!(clips.is_empty());
 }
+
+// Controller ruling (Task 6 review, 2026-09-21): the two tests above do not discriminate the numeric
+// `dx = 0` branch (RK:341–342) nor exercise the weirdly-kerned-space retry (RK:352–360); these two do.
+#[test]
+fn manual_kerning_numeric_pairs_do_not_bridge_a_space_sized_gap() {
+    // numeric chunks use dx = 0 (RK:341-342): a full space-width gap must NOT bridge them, even
+    // though the identical gap between ordinary letters does (dx = spw, window up to 1.99*spw).
+    let spw = lefts(" a")[1];
+    let right1 = lefts("1 ")[1];
+    let (d, mut pts, mut ct) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {}" y="0">12</text></svg>"#,
+        right1 + 1.5 * spw
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 2);
+    let mut clips = Vec::new();
+    remove_manual_kerning(&d, &mut pts, &mut ct, &mut clips);
+    assert_eq!(
+        pts.len(),
+        2,
+        "a numeric pair across a space-sized gap must not merge"
+    );
+    assert_eq!(pts[0].text(), "1");
+    assert_eq!(pts[1].text(), "2");
+    assert_eq!(pts[1].origin, sciink::text::parse::Origin::SplitFrom);
+
+    // control: the same gap between ordinary letters does merge.
+    let right_a = lefts("a ")[1];
+    let (d, mut pts, mut ct) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {}" y="0">ab</text></svg>"#,
+        right_a + 1.5 * spw
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 2);
+    let mut clips = Vec::new();
+    remove_manual_kerning(&d, &mut pts, &mut ct, &mut clips);
+    assert_eq!(pts.len(), 1, "the same gap between letters must merge");
+    assert_eq!(pts[0].text().replace(' ', ""), "ab");
+}
+
+#[test]
+fn manual_kerning_retries_a_weirdly_kerned_space_against_the_previous_chunk() {
+    // a lone " " chunk whose primary check fails re-tests against its own predecessor (RK:349-355).
+    let spw = lefts(" a")[1];
+    let right_m = lefts("m ")[1];
+    let x1 = right_m - 1.4 * spw;
+    let x2 = right_m + spw;
+    let (d, mut pts, mut ct) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {x1} {x2}" y="0">m b</text></svg>"#
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 3);
+    let mut clips = Vec::new();
+    remove_manual_kerning(&d, &mut pts, &mut ct, &mut clips);
+    assert_eq!(
+        pts.len(),
+        1,
+        "the retry must let all three chunks merge into one element"
+    );
+    let text = pts[0].text();
+    assert_eq!(text.replace(' ', ""), "mb");
+    assert!(
+        text.contains(' '),
+        "merged text should retain a space: {text:?}"
+    );
+}
 ```
 
 - [ ] **Step 2: Run to verify failure** — `cargo test --test text_kerning 2>&1 | tail -5`: module `kerning`/`write` not found.
@@ -2585,7 +2648,7 @@ pub fn remove_manual_kerning(doc: &Doc, pts: &mut Vec<ParsedText>, ct: &mut Char
 
 Register both modules in `src/text/mod.rs`.
 
-- [ ] **Step 4: Run the tests, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 4 passed.
+- [ ] **Step 4: Run the tests, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 6 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -2863,7 +2926,7 @@ pub fn external_merges(
 
 (`Rect::union_pt` and `Rect::inflate` exist in kurbo 0.13; `intersects` is the strict centre-distance test from `geom`.) The pair loop is O(n²) over chunks with two cheap rejections first; spec §A.5 item 10 accepts that.
 
-- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 6 passed.
+- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 8 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3107,7 +3170,7 @@ pub fn split_lines(pts: &mut Vec<ParsedText>) {
 }
 ```
 
-- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 8 passed.
+- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 10 passed.
 
 - [ ] **Step 5: Commit**
 
@@ -3319,7 +3382,7 @@ pub fn fix_merge_positions(pts: &mut [ParsedText]) {
 }
 ```
 
-- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 11 passed.
+- [ ] **Step 4: Run, fmt, clippy, full suite** — `cargo test --test text_kerning 2>&1 | tail -15` → 13 passed.
 
 - [ ] **Step 5: Commit**
 
