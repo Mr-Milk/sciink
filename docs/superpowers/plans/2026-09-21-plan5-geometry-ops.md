@@ -259,6 +259,18 @@ fn gc_created_clips_removes_unreferenced_clips_and_chains() {
 }
 
 #[test]
+fn delete_up_never_touches_the_root() {
+    let mut d = doc(&format!(r#"<svg {NS}><rect id="r" clip-path="url(#r)"/></svg>"#));
+    let mut ctx = Ctx::new();
+    let root = d.svg();
+    delete_up(&mut d, &mut ctx, root);
+    assert!(ctx.deleted.is_empty(), "nothing is deleted, so nothing is recorded");
+    assert!(d.by_id("r").is_some());
+    ctx.finish(&mut d);
+    assert_eq!(d.attr(id(&d, "r"), "clip-path"), Some("url(#r)"), "finish() has nothing to strip");
+}
+
+#[test]
 fn ctx_finish_runs_both_sweeps() {
     let mut d = doc(&format!(
         r#"<svg {NS}><defs><clipPath id="c"><path d="M0 0h1v1z"/></clipPath></defs><g id="g"><path id="p" clip-path="url(#q)"/></g><rect id="q"/></svg>"#
@@ -486,8 +498,12 @@ pub fn url_id(v: &str) -> Option<&str> {
 }
 
 /// Deletes `n`, then every ancestor left without element or comment children (lxml's `len`
-/// counts both), stopping below the root `<svg>`. Every removed id lands in `ctx.deleted`.
+/// counts both), stopping below the root `<svg>`, which is never deleted — a call on the root is
+/// a no-op. Every removed id lands in `ctx.deleted`.
 pub fn delete_up(doc: &mut Doc, ctx: &mut Ctx, n: NodeId) {
+    if n == doc.svg() {
+        return; // the root is never deleted, and its ids never count as deleted
+    }
     let mut target = n;
     loop {
         let parent = doc.parent(target);
