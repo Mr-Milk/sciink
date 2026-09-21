@@ -2993,6 +2993,32 @@ use sciink::text::kerning::{split_distant_chunks, split_distant_intrachunk, spli
 #[test]
 fn distant_chunks_and_lines_become_their_own_elements() {
     let spw = lefts(" a")[1];
+    // a short x list positions only the first N characters; the rest continue naturally as part
+    // of the last positioned character's chunk — "a" | "b" | "cdef" on one line, three chunks.
+    let ra = lefts("a ")[1]; // right edge of 'a'
+    let rb = lefts("b ")[1]; // advance of 'b'
+
+    // sub-case 1 (one split): gap a→b is one space (no split); gap b→cdef is four (split), so the
+    // multi-character chunk "cdef" is what gets split off as a single element.
+    let x1 = ra + spw;
+    let x2 = x1 + rb + 4.0 * spw;
+    let xs = fmt_list(&[0.0, x1, x2]);
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="{xs}" y="0">abcdef</text></svg>"#
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 3);
+    let before = all_positions(&pts);
+    split_distant_chunks(&mut pts);
+    assert_eq!(pts.len(), 2);
+    assert_eq!(pts[0].text(), "ab");
+    assert_eq!(pts[1].text(), "cdef");
+    assert_eq!(pts[1].split_src, Some(0));
+    assert_same(&before, &all_positions(&pts), 1e-6);
+
+    // sub-case 2: every character has its own x, so 'e' and 'f' are separate chunks and each
+    // chunk-run of the split range becomes its own element (upstream P:1158–1200, chrs_to_textel);
+    // written in natural order — **Deviation:** upstream's addnext-on-source emits the runs of one
+    // range reversed ('f' before 'e').
     let ab = lefts("ab");
     let ab_r = lefts("ab ")[2];
     let x_cd = ab_r + spw;
@@ -3000,17 +3026,39 @@ fn distant_chunks_and_lines_become_their_own_elements() {
     let cd_r = x_cd + lefts("cd ")[2];
     let x_ef = cd_r + 4.0 * spw;
     let ef = lefts("ef");
-    // per-character x: a b (own glyph positions) | c d | e f — only chunk starts differ from the pen
-    let xs = vec![ab[0], ab[1], x_cd + cd[0], x_cd + cd[1], x_ef + ef[0], x_ef + ef[1]];
+    let xs = vec![
+        ab[0],
+        ab[1],
+        x_cd + cd[0],
+        x_cd + cd[1],
+        x_ef + ef[0],
+        x_ef + ef[1],
+    ];
     let (_d, mut pts, _) = arena(&format!(
         r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="{}" y="0">abcdef</text></svg>"#,
         fmt_list(&xs)
     ));
     let before = all_positions(&pts);
     split_distant_chunks(&mut pts);
-    assert_eq!(pts.len(), 2);
-    assert_eq!(pts[0].text(), "abcd");
-    assert_eq!(pts[1].text(), "ef");
+    assert_eq!(pts.len(), 3);
+    let texts: Vec<String> = pts.iter().map(|p| p.text()).collect();
+    assert_eq!(texts, ["abcd", "e", "f"]);
+    assert_same(&before, &all_positions(&pts), 1e-6);
+
+    // sub-case 3 (two ranges in one call pin natural order): both gaps now four spaces, so a, b
+    // and cdef each split off — texts must come out in natural (document) order, not reversed.
+    let x1 = ra + 4.0 * spw;
+    let x2 = x1 + rb + 4.0 * spw;
+    let xs = fmt_list(&[0.0, x1, x2]);
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="{xs}" y="0">abcdef</text></svg>"#
+    ));
+    let before = all_positions(&pts);
+    split_distant_chunks(&mut pts);
+    let texts: Vec<String> = pts.iter().map(|p| p.text()).collect();
+    assert_eq!(texts, ["a", "b", "cdef"]);
+    assert_eq!(pts[1].split_src, Some(0));
+    assert_eq!(pts[2].split_src, Some(0));
     assert_same(&before, &all_positions(&pts), 1e-6);
 
     // lines: every line after the first becomes an element (skipping multi-line Inkscape text)
@@ -3028,7 +3076,11 @@ fn distant_chunks_and_lines_become_their_own_elements() {
     ));
     assert!(pts[0].is_ml_inkscape);
     split_lines(&mut pts);
-    assert_eq!(pts.len(), 1, "Inkscape-generated multi-line text is left alone");
+    assert_eq!(
+        pts.len(),
+        1,
+        "Inkscape-generated multi-line text is left alone"
+    );
 }
 
 #[test]
