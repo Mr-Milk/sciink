@@ -1,6 +1,8 @@
 //! Text engine (spec docs/spec/01-text-engine.md): fonts → metrics → parse → layout.
 
+pub mod edit;
 pub mod fonts;
+pub mod kerning;
 pub mod layout;
 pub mod metrics;
 pub mod parse;
@@ -8,6 +10,7 @@ pub mod style;
 pub mod table;
 pub mod tree;
 pub mod whitespace;
+pub mod write;
 
 /// User-facing warnings collected while measuring/parsing (deduplicated).
 #[derive(Debug, Default)]

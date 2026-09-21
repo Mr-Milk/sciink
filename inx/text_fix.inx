@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Text Fix (sciink)</name>
+    <id>org.sciink.text-fix</id>
+    <param name="tool" type="string" gui-hidden="true">text-fix</param>
+    <param name="removemanualkerning" type="bool" gui-text="Remove manual kerning">true</param>
+    <param name="mergenearby" type="bool" gui-text="Merge nearby text">true</param>
+    <param name="mergesubsuper" type="bool" gui-text="Merge sub/superscripts">true</param>
+    <param name="splitdistant" type="bool" gui-text="Split distant text">true</param>
+    <param name="justification" type="optiongroup" appearance="combo" gui-text="Justification">
+        <option value="1">Center</option>
+        <option value="2">Left</option>
+        <option value="3">Right</option>
+        <option value="4">Unchanged</option>
+    </param>
+    <effect needs-live-preview="true">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific">
+                <submenu name="Debug"/>
+            </submenu>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>

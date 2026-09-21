@@ -20,6 +20,7 @@ pub enum ToolName {
     About,
     FontProbe,
     TextHighlight,
+    TextFix,
 }
 
 /// Arguments every tool accepts. Tools `#[command(flatten)]` this into their own struct.
@@ -106,4 +107,6 @@ Inkscape launches this binary through the .inx files in the same folder. For man
            [--<param>=<value>...] [--id=<object-id>...] [--output <file>] [input.svg]
 
 The modified SVG is written to stdout (or --output); messages go to stderr.
-Set SCIINK_LOG=<file> to append timing information.";
+Set SCIINK_LOG=<file> to append timing information.
+
+Debug tools (Scientific ▸ Debug): font-probe, text-highlight, text-fix.";

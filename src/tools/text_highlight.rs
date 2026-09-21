@@ -83,6 +83,14 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
             nflow += 1;
             continue;
         }
+        if pt.has_text_path {
+            // measured for the char table only; nothing to draw (spec §A.2 skip)
+            warn.push(format!(
+                "{}: text on a path is not measured",
+                doc.attr(el, "id").unwrap_or("<no id>")
+            ));
+            continue;
+        }
         // `Option<usize>` carries each rect's original `pt.chars` index for the two
         // per-char modes, so `data-family` stays attached to the right character even if
         // `char_rects` ever drops an entry (a NaN baseline) ahead of it in the list.

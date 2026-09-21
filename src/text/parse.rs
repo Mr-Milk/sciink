@@ -2,6 +2,8 @@
 
 use std::rc::Rc;
 
+use kurbo::Point;
+
 use crate::dom::{Doc, NodeId};
 use crate::geom::{Affine, ipx};
 use crate::style::Style;
@@ -290,7 +292,7 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
             if xv[0].is_none() {
                 match lines.last() {
                     Some(l) => {
-                        xv = l.x.clone();
+                        xv = vec![l.x[0]];
                         xsrc = tree.dds.iter().position(|&d| d == l.xsrc).unwrap_or(0);
                     }
                     None => {
@@ -303,7 +305,7 @@ pub fn line_specs(doc: &Doc, tree: &TextTree, runs: &[Run], pos: &Positions) -> 
             if yv[0].is_none() {
                 match lines.last() {
                     Some(l) => {
-                        yv = l.y.clone();
+                        yv = vec![l.y[0]];
                         ysrc = tree.dds.iter().position(|&d| d == l.ysrc).unwrap_or(0);
                     }
                     None => {
@@ -396,9 +398,17 @@ pub struct TChar {
 
 #[derive(Debug, Clone)]
 pub struct TChunk {
+    /// Stable within one `ParsedText`; survives `edit::reindex`, so merge plans can refer to a
+    /// chunk while other chunks are being removed. Look it up with `ParsedText::find_chunk`.
+    pub id: u32,
     pub x: f64,
     pub y: f64,
     pub chars: Vec<usize>,
+    /// Next/previous chunk on the same baseline within this element (stage 4, `edit::make_next_chain`).
+    pub next: Option<u32>,
+    pub prev: Option<u32>,
+    /// `prev`'s last char and this chunk's first char sit in the same style node (P:724–725).
+    pub prev_same_tspan: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -415,17 +425,43 @@ pub enum TextLengthAdj {
     Spacing(f64),
 }
 
+/// Where a `ParsedText` came from: an element that exists in the document (rewritten in place,
+/// id reused) or a piece split off another element by `edit::split_off` (a new element, inserted
+/// right after the element it came from, which is what `el` then names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Existing,
+    SplitFrom,
+}
+
 pub struct ParsedText {
     pub el: NodeId,
     pub transform: Affine,
     pub chars: Vec<TChar>,
     pub lines: Vec<TLine>,
     pub is_flow: bool,
+    /// The element has a `<textPath>` descendant: measured, never edited (spec §A.2 "Not handled").
+    pub has_text_path: bool,
     pub is_inkscape: bool,
     pub is_ml_inkscape: bool,
     pub text_length: Option<TextLengthAdj>,
     pub any_dx: bool,
     pub any_dy: bool,
+    pub origin: Origin,
+    /// Arena index of the model this one was split from (`Origin::SplitFrom`); `None` for a parsed element.
+    pub split_src: Option<usize>,
+    /// Per-character corner points frozen by `layout::snapshot_parsed` (stage 3): `[BL, TL, TR, BR]`
+    /// in this element's frame and in root coordinates. Index-aligned with `chars`; `None` for
+    /// characters created after the snapshot (inserted spaces). Empty until the snapshot is taken.
+    pub parsed_ut: Vec<Option<[Point; 4]>>,
+    pub parsed_t: Vec<Option<[Point; 4]>>,
+    /// Extra transform the writer multiplies onto the element's own `transform` (stage 2).
+    pub transform_extra: Affine,
+    /// `text-anchor`/`text-align` to write on the `<text>` itself (stage 9, RK:175–178).
+    pub text_anchor_override: Option<Anchor>,
+    /// `textLength`/`lengthAdjust` were undone (stage 2) and must not be copied by the writer.
+    pub text_length_removed: bool,
+    pub next_chunk_id: u32,
 }
 
 fn is_flow(doc: &Doc, el: NodeId) -> bool {
@@ -448,6 +484,15 @@ fn is_flow(doc: &Doc, el: NodeId) -> bool {
             .is_some_and(|v| v != 0.0)
 }
 
+/// Whether `el` carries a `<textPath>` descendant. Such an element is measured (it feeds the char
+/// table; `text_bbox` reports nothing for it) but never parsed or edited: its glyphs follow a path, which neither the
+/// model nor the writer represents, so regenerating it would drop the path and move every glyph
+/// to the baseline (spec §A.2 "Not handled … `<textPath>` (skip element)").
+fn has_text_path(doc: &Doc, el: NodeId) -> bool {
+    doc.descendants(el)
+        .any(|n| n != el && doc.is_element(n) && doc.tag(n) == "textPath")
+}
+
 impl ParsedText {
     pub fn parse(
         doc: &mut Doc,
@@ -456,7 +501,11 @@ impl ParsedText {
         warn: &mut Warnings,
     ) -> Option<ParsedText> {
         let flow = is_flow(doc, el);
-        depathologize(doc, el, flow, warn);
+        let on_path = has_text_path(doc, el);
+        if !on_path {
+            // an element on a path must come back byte-identical, and depathologize writes
+            depathologize(doc, el, flow, warn);
+        }
         let transform = doc.composed_transform(el);
         let mut pt = ParsedText {
             el,
@@ -464,14 +513,25 @@ impl ParsedText {
             chars: Vec::new(),
             lines: Vec::new(),
             is_flow: flow,
+            has_text_path: on_path,
             is_inkscape: false,
             is_ml_inkscape: false,
             text_length: None,
             any_dx: false,
             any_dy: false,
+            origin: Origin::Existing,
+            split_src: None,
+            parsed_ut: Vec::new(),
+            parsed_t: Vec::new(),
+            transform_extra: Affine::IDENTITY,
+            text_anchor_override: None,
+            text_length_removed: false,
+            next_chunk_id: 0,
         };
-        if flow {
-            return Some(pt); // v1: flows are detected, never parsed (spec §A.2 "Flowed text v1")
+        if flow || on_path {
+            // v1: flows and text on a path are detected, never parsed (spec §A.2 "Flowed text v1",
+            // "Not handled … `<textPath>` (skip element)")
+            return Some(pt);
         }
         let tree = TextTree::new(doc, el);
         let runs = tree.runs(doc);
@@ -564,10 +624,15 @@ impl ParsedText {
                 if opens {
                     px = xs.get(i.min(xs.len() - 1)).copied().flatten().unwrap_or(px);
                     py = ys.get(i.min(ys.len() - 1)).copied().flatten().unwrap_or(py);
+                    let id = pt.new_chunk_id();
                     ln.chunks.push(TChunk {
+                        id,
                         x: px,
                         y: py,
                         chars: vec![ci],
+                        next: None,
+                        prev: None,
+                        prev_same_tspan: false,
                     });
                 } else {
                     ln.chunks
@@ -593,6 +658,39 @@ impl ParsedText {
             return None;
         }
         pt.lines = lines;
+        // Lines that inherit a coordinate continue from the END of the previous line
+        // (P:2640–2653 for x — upstream's anchor form verbatim, spec risk 7; P:2661–2675 for y:
+        // the previous line's last chunk y). Chunks after the first in such a line carry the
+        // resolved coordinate forward when they had none of their own.
+        for li in 1..pt.lines.len() {
+            let (cx, cy) = (pt.lines[li].spec.continue_x, pt.lines[li].spec.continue_y);
+            if !(cx || cy) {
+                continue;
+            }
+            let pli = li - 1;
+            let pci = pt.lines[pli].chunks.len() - 1;
+            let prev_y = pt.lines[pli].chunks[pci].y;
+            let g = super::layout::chunk_geom(&pt, pli, pci);
+            let anfr = pt.lines[li].spec.anchor.anfr();
+            let new_x = (1.0 + anfr) * g.pts_ut[3].x - anfr * g.pts_ut[0].x;
+            let ln = &mut pt.lines[li];
+            // Every chunk of a continuing line borrowed the coordinate (its LineSpec list is the
+            // single-entry placeholder `line_specs` leaves), so all of them take the resolved value.
+            for ch in ln.chunks.iter_mut() {
+                if cx {
+                    ch.x = new_x;
+                }
+                if cy {
+                    ch.y = prev_y;
+                }
+            }
+            if cx {
+                ln.spec.x = vec![Some(new_x)];
+            }
+            if cy {
+                ln.spec.y = vec![Some(prev_y)];
+            }
+        }
         pt.any_dx = pt.chars.iter().any(|c| c.dx.abs() > XY_TOL);
         pt.any_dy = pt.chars.iter().any(|c| c.dy.abs() > XY_TOL);
         let tlvl: Vec<&TLine> = pt
@@ -647,6 +745,38 @@ impl ParsedText {
 
     pub fn text(&self) -> String {
         self.chars.iter().map(|c| c.c).collect()
+    }
+}
+
+impl ParsedText {
+    pub fn new_chunk_id(&mut self) -> u32 {
+        let id = self.next_chunk_id;
+        self.next_chunk_id += 1;
+        id
+    }
+
+    /// `(line, chunk)` of the chunk with this id, or `None` when it has been merged away.
+    pub fn find_chunk(&self, id: u32) -> Option<(usize, usize)> {
+        self.lines
+            .iter()
+            .enumerate()
+            .find_map(|(li, l)| l.chunks.iter().position(|c| c.id == id).map(|ci| (li, ci)))
+    }
+
+    pub fn chunk_text(&self, li: usize, ci: usize) -> String {
+        self.lines[li].chunks[ci]
+            .chars
+            .iter()
+            .map(|&c| self.chars[c].c)
+            .collect()
+    }
+
+    pub fn line_text(&self, li: usize) -> String {
+        self.lines[li]
+            .chars
+            .iter()
+            .map(|&c| self.chars[c].c)
+            .collect()
     }
 }
 

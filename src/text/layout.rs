@@ -26,7 +26,7 @@ pub fn unrendered_space(pt: &ParsedText, li: usize, ci: usize) -> bool {
         && matches!(pt.chars[last].c, ' ' | '\u{A0}')
 }
 
-fn dadv(prev: &TChar, cur: &TChar) -> f64 {
+pub(crate) fn dadv(prev: &TChar, cur: &TChar) -> f64 {
     if prev.loc.node == cur.loc.node && prev.loc.tail == cur.loc.tail {
         cur.prop.dadvs.get(&prev.c).copied().unwrap_or(0.0) * cur.utfs
     } else {
@@ -219,4 +219,138 @@ pub fn max_tfs(pt: &ParsedText) -> Option<f64> {
         .iter()
         .map(|c| c.tfs)
         .fold(None, |m, v| Some(m.map_or(v, |m: f64| m.max(v))))
+}
+
+/// Stage 3 (`precalcs`): freeze every character's current corners in the element frame and in
+/// root coordinates. Stages 6–7 compare these, not the live positions.
+pub fn snapshot_parsed(pt: &mut ParsedText) {
+    let n = pt.chars.len();
+    let mut ut = vec![None; n];
+    let mut t = vec![None; n];
+    each_char(pt, |c, g, wi| {
+        let p = char_pts_ut(pt, g, wi);
+        ut[c] = Some(p);
+        t[c] = Some(transform_pts(pt.transform, p));
+    });
+    pt.parsed_ut = ut;
+    pt.parsed_t = t;
+}
+
+/// Current corners `[BL, TL, TR, BR]` of every character of one chunk, index-aligned with `chunk.chars`.
+pub fn chunk_char_pts(pt: &ParsedText, li: usize, ci: usize) -> Vec<[Point; 4]> {
+    let g = chunk_geom(pt, li, ci);
+    (0..pt.lines[li].chunks[ci].chars.len())
+        .map(|wi| char_pts_ut(pt, &g, wi))
+        .collect()
+}
+
+/// Per-character corners, one slot per character of a chunk (`None` where unavailable).
+type Corners = Vec<Option<[Point; 4]>>;
+
+fn char_corners(pt: &ParsedText, (li, ci): (usize, usize), parsed: bool) -> (Corners, Corners) {
+    let ids = &pt.lines[li].chunks[ci].chars;
+    if parsed {
+        (
+            ids.iter()
+                .map(|&c| pt.parsed_ut.get(c).copied().flatten())
+                .collect(),
+            ids.iter()
+                .map(|&c| pt.parsed_t.get(c).copied().flatten())
+                .collect(),
+        )
+    } else {
+        let ut = chunk_char_pts(pt, li, ci);
+        let t = ut
+            .iter()
+            .map(|p| Some(transform_pts(pt.transform, *p)))
+            .collect();
+        (ut.into_iter().map(Some).collect(), t)
+    }
+}
+
+/// P:3421–3454. `[tr1, br1, tl2, bl2]`: the TR/BR corners of chunk `a`'s rightmost character (in
+/// `a`'s frame) and the TL/BL corners of chunk `b`'s leftmost character, taken in root coordinates
+/// and mapped back through the inverse of `a`'s transform. `parsed` selects the stage-3 snapshot
+/// (stages 6–7) or the live positions (stage 8). `None` when a chunk has no usable points or `a`'s
+/// transform is singular.
+pub fn get_ut_pts(
+    a: &ParsedText,
+    wa: (usize, usize),
+    b: &ParsedText,
+    wb: (usize, usize),
+    parsed: bool,
+) -> Option<[Point; 4]> {
+    let inv = crate::geom::inverse(a.transform)?;
+    let (a_ut, _) = char_corners(a, wa, parsed);
+    let (b_ut, b_t) = char_corners(b, wb, parsed);
+    let mut ai = None;
+    let mut maxv = f64::NEG_INFINITY;
+    for (i, p) in a_ut.iter().enumerate() {
+        if let Some(p) = p {
+            if p[3].x > maxv {
+                maxv = p[3].x;
+                ai = Some(i);
+            }
+        }
+    }
+    let mut bi = None;
+    let mut minv = f64::INFINITY;
+    for (i, p) in b_ut.iter().enumerate() {
+        if let Some(p) = p {
+            if p[0].x < minv {
+                minv = p[0].x;
+                bi = Some(i);
+            }
+        }
+    }
+    let ap = a_ut[ai?]?;
+    let bt = b_t[bi?]?;
+    Some([ap[2], ap[3], inv * bt[1], inv * bt[0]])
+}
+
+fn chunk_max(pt: &ParsedText, li: usize, ci: usize, f: impl Fn(&TChar) -> f64) -> f64 {
+    pt.lines[li].chunks[ci]
+        .chars
+        .iter()
+        .map(|&c| f(&pt.chars[c]))
+        .fold(f64::NEG_INFINITY, f64::max)
+}
+/// Chunk-level values upstream exposes as properties (P:3531–3553): all maxima over the chunk.
+pub fn chunk_spw(pt: &ParsedText, li: usize, ci: usize) -> f64 {
+    chunk_max(pt, li, ci, |c| c.spw)
+}
+pub fn chunk_mch(pt: &ParsedText, li: usize, ci: usize) -> f64 {
+    chunk_max(pt, li, ci, |c| c.caph)
+}
+pub fn chunk_utfs(pt: &ParsedText, li: usize, ci: usize) -> f64 {
+    chunk_max(pt, li, ci, |c| c.utfs)
+}
+pub fn chunk_tfs(pt: &ParsedText, li: usize, ci: usize) -> f64 {
+    chunk_max(pt, li, ci, |c| c.tfs)
+}
+/// Scale of the chunk's first character (P:3043–3046); falls back to √|det| for a zero font size.
+pub fn chunk_scf(pt: &ParsedText, li: usize, ci: usize) -> f64 {
+    let c = &pt.chars[pt.lines[li].chunks[ci].chars[0]];
+    if c.utfs > 0.0 {
+        c.tfs / c.utfs
+    } else {
+        crate::geom::scale_factor(pt.transform)
+    }
+}
+
+/// Rotation of a transform in degrees, upstream's `atan2(c, d)` (P:2635–2638).
+pub fn angle_deg(t: Affine) -> f64 {
+    let [_, _, c, d, _, _] = t.as_coeffs();
+    c.atan2(d).to_degrees()
+}
+
+/// Parse `el` and return its extent bbox in root coordinates (spec §A.4 `text_bbox(doc, el, …)`).
+pub fn element_bbox(
+    doc: &mut crate::dom::Doc,
+    el: crate::dom::NodeId,
+    ct: &mut crate::text::table::CharTable,
+    warn: &mut crate::text::Warnings,
+) -> Option<Rect> {
+    let pt = ParsedText::parse(doc, el, ct, warn)?;
+    text_bbox(&pt)
 }

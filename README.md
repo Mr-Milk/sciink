@@ -6,7 +6,7 @@ Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled bin
 works with Inkscape 1.2 and later.
 
 Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
-release ships three menu entries, all diagnostic:
+release ships four menu entries — the first three only report, the fourth edits the document:
 
 - **Extensions ▸ Scientific ▸ Diagnostics** — version, platform, the document's size and element counts,
   and how many font faces were found (and how long that took). Proves the installation works.
@@ -16,6 +16,13 @@ release ships three menu entries, all diagnostic:
 - **Extensions ▸ Scientific ▸ Debug ▸ Text Highlight** — draws the text engine's measurements as
   rectangles over the document: per character (advance box or ink box), per chunk, per line, or one box
   for the whole element. Use it to see exactly what the parser thinks your text is.
+- **Extensions ▸ Scientific ▸ Debug ▸ Text Fix** — **rewrites the selected text**: it runs the
+  Flattener's text pipeline — manual-kerning removal, merges, splits, justification — and replaces every
+  selected `<text>` element with a regenerated one. Preview of what the Flattener will do to text once it
+  ships; undo (Ctrl+Z) puts the document back. It runs that pipeline *alone*, without the Flattener's
+  `setreplacement` pre-pass (which strips `-inkscape-font-specification` first), so on Inkscape-authored
+  multi-line text the two can disagree: Text Fix leaves such text joined where the Flattener will split
+  it into lines.
 
 ## Install
 

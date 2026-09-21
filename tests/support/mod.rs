@@ -3,6 +3,33 @@
 
 use std::path::PathBuf;
 
+/// The vendored test fonts (`tests/fonts`), as a `SCIINK_FONT_DIRS` value.
+pub fn fontdir() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fonts")
+        .display()
+        .to_string()
+}
+
+// The library reads SCIINK_FONT_DIRS / SCIINK_NO_SYSTEM_FONTS through FontSystem::load();
+// set them once for the whole test binary (behind a `Once`) so every `set_var` completes
+// before any test thread reaches `FontSystem::load()`, then every test enters through this
+// function so the vendored fonts are visible everywhere they are needed.
+static INIT: std::sync::Once = std::sync::Once::new();
+
+/// Runs `f` with the vendored fonts as the only ones the library can see.
+pub fn with_vendored_fonts<T>(f: impl FnOnce() -> T) -> T {
+    INIT.call_once(|| {
+        // SAFETY: runs once, before any test in this binary reads the environment (every test
+        // enters through this function); the values never change afterwards.
+        unsafe {
+            std::env::set_var("SCIINK_NO_SYSTEM_FONTS", "1");
+            std::env::set_var("SCIINK_FONT_DIRS", fontdir());
+        }
+    });
+    f()
+}
+
 /// Directory holding upstream's `svg/` and `refs/` test data, if available.
 pub fn upstream_data_dir() -> Option<PathBuf> {
     let candidates = [
@@ -76,5 +103,64 @@ pub fn assert_same_tree(a: &str, b: &str, context: &str) {
         if x.is_text() || x.is_comment() {
             assert_eq!(x.text(), y.text(), "{context}: text differs");
         }
+    }
+}
+
+/// Transformed bottom-left corner of every non-space character of every `<text>` in `svg`, laid
+/// out with the vendored fonts and sorted — the appearance-invariance oracle for the text pipeline:
+/// a stage that only re-encodes text must leave this list unchanged.
+pub fn text_positions(svg: &str) -> Vec<(char, f64, f64)> {
+    use sciink::text::layout::{chunk_char_pts, transform_pts};
+    use sciink::text::parse::ParsedText;
+    use sciink::text::table::CharTable;
+    use sciink::text::{Warnings, fonts::FontSystem};
+    let mut d = sciink::dom::Doc::parse(svg.as_bytes()).unwrap();
+    let els: Vec<_> = d
+        .descendants(d.svg())
+        .filter(|&n| d.is_element(n) && d.tag(n) == "text")
+        .collect();
+    let mut w = Warnings::default();
+    let fonts =
+        FontSystem::from_dirs(&[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts")]);
+    let mut ct = CharTable::build(&d, &els, fonts, &mut w);
+    let mut out = Vec::new();
+    for el in els {
+        let Some(pt) = ParsedText::parse(&mut d, el, &mut ct, &mut w) else {
+            continue;
+        };
+        for (li, ln) in pt.lines.iter().enumerate() {
+            for ci in 0..ln.chunks.len() {
+                let ps = chunk_char_pts(&pt, li, ci);
+                for (wi, &c) in ln.chunks[ci].chars.iter().enumerate() {
+                    let ch = pt.chars[c].c;
+                    if ch == ' ' {
+                        continue;
+                    }
+                    let p = transform_pts(pt.transform, ps[wi])[0];
+                    out.push((ch, p.x, p.y));
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    out
+}
+
+pub fn assert_same_positions(
+    before: &[(char, f64, f64)],
+    after: &[(char, f64, f64)],
+    tol: f64,
+    context: &str,
+) {
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "{context}: character count changed\n{before:?}\n{after:?}"
+    );
+    for (b, a) in before.iter().zip(after) {
+        assert!(
+            b.0 == a.0 && (b.1 - a.1).abs() < tol && (b.2 - a.2).abs() < tol,
+            "{context}: {b:?} moved to {a:?}"
+        );
     }
 }

@@ -242,3 +242,102 @@ fn vendored_inkscape_document_parses_end_to_end() {
     let got = max_tfs(&pt).expect("max_tfs");
     assert!((got - expect).abs() < 1e-6, "{got} vs {expect}");
 }
+
+#[test]
+fn snapshot_and_get_ut_pts_follow_upstream_frames() {
+    use sciink::text::layout::{chunk_char_pts, get_ut_pts, snapshot_parsed, transform_pts};
+    // two chunks in one element, translated by (10, 20)
+    let (mut pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><g transform="translate(10,20)"><text id="t" style="{DV};font-size:10px" x="0 30" y="0">ab</text></g></svg>"#
+        ),
+        "t",
+    );
+    snapshot_parsed(&mut pt);
+    assert_eq!(pt.parsed_ut.len(), 2);
+    let cur = chunk_char_pts(&pt, 0, 0)[0];
+    assert_eq!(pt.parsed_ut[0], Some(cur));
+    assert_eq!(pt.parsed_t[0], Some(transform_pts(pt.transform, cur)));
+    assert!(close(pt.parsed_t[0].unwrap()[0].x, cur[0].x + 10.0));
+    // get_ut_pts: [tr1, br1, tl2, bl2] — a's rightmost TR/BR, b's leftmost TL/BL in a's frame
+    let [tr1, br1, tl2, bl2] = get_ut_pts(&pt, (0, 0), &pt, (0, 1), true).unwrap();
+    let pa = chunk_char_pts(&pt, 0, 0)[0];
+    let pb = chunk_char_pts(&pt, 0, 1)[0];
+    assert_eq!((tr1, br1), (pa[2], pa[3]));
+    assert!(close(tl2.x, pb[1].x) && close(tl2.y, pb[1].y));
+    assert!(close(bl2.x, 30.0) && close(bl2.y, 0.0));
+    // current positions agree with parsed ones before any edit
+    assert_eq!(
+        get_ut_pts(&pt, (0, 0), &pt, (0, 1), false).unwrap(),
+        [tr1, br1, tl2, bl2]
+    );
+}
+
+#[test]
+fn chunk_aggregates_and_angle() {
+    use sciink::text::layout::{angle_deg, chunk_mch, chunk_scf, chunk_spw, chunk_tfs, chunk_utfs};
+    let (pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" transform="matrix(0,1,-1,0,0,0) scale(2)" style="{DV};font-size:10px" x="0" y="0">a<tspan style="font-size:20px">b</tspan></text></svg>"#
+        ),
+        "t",
+    );
+    assert!(close(chunk_utfs(&pt, 0, 0), 20.0));
+    assert!(close(chunk_tfs(&pt, 0, 0), 40.0));
+    assert!(close(chunk_scf(&pt, 0, 0), 2.0), "first char's tfs/utfs");
+    assert!(close(chunk_spw(&pt, 0, 0), pt.chars[1].spw));
+    assert!(close(chunk_mch(&pt, 0, 0), pt.chars[1].caph));
+    // matrix(0,1,-1,0,…) rotates by 90°: atan2(c, d) = atan2(-2, 0) = -90°
+    assert!(close(angle_deg(pt.transform), -90.0));
+}
+
+#[test]
+fn element_bbox_wraps_parse_plus_text_bbox() {
+    use sciink::text::layout::element_bbox;
+    let svg = format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="5" y="20">ab</text></svg>"#
+    );
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let els = vec![id(&d, "t")];
+    let mut w = Warnings::default();
+    let mut ct = CharTable::build(&d, &els, fonts(), &mut w);
+    let bb = element_bbox(&mut d, els[0], &mut ct, &mut w).expect("bbox");
+    let (pt, _) = parsed(&svg, "t");
+    assert_eq!(Some(bb), text_bbox(&pt));
+    let mut d2 =
+        Doc::parse(format!(r#"<svg {NS}><text id="e" x="0" y="0"></text></svg>"#).as_bytes())
+            .unwrap();
+    let e = id(&d2, "e");
+    assert_eq!(element_bbox(&mut d2, e, &mut ct, &mut w), None);
+}
+
+#[test]
+fn get_ut_pts_gives_up_on_a_singular_transform_and_on_unsnapshotted_chunks() {
+    use sciink::text::layout::{get_ut_pts, snapshot_parsed};
+    // `matrix(1,2,2,4)` collapses the plane: the first chunk's frame cannot be inverted, so the
+    // comparison the merge stages would make is impossible and every caller must skip the pair.
+    let (mut pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" transform="matrix(1,2,2,4,0,0)" style="{DV};font-size:10px" x="0 30" y="0 0">ab</text></svg>"#
+        ),
+        "t",
+    );
+    snapshot_parsed(&mut pt);
+    assert_eq!(pt.lines[0].chunks.len(), 2);
+    assert_eq!(get_ut_pts(&pt, (0, 0), &pt, (0, 1), true), None);
+    assert_eq!(get_ut_pts(&pt, (0, 0), &pt, (0, 1), false), None);
+    // no usable corner: before the stage-3 snapshot every parsed point is missing, so the
+    // `parsed` request has nothing to pick a rightmost/leftmost character from
+    let (pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0 30" y="0 0">ab</text></svg>"#
+        ),
+        "t",
+    );
+    assert!(pt.parsed_ut.is_empty());
+    assert_eq!(get_ut_pts(&pt, (0, 0), &pt, (0, 1), true), None);
+    assert!(
+        get_ut_pts(&pt, (0, 0), &pt, (0, 1), false).is_some(),
+        "live positions are always available"
+    );
+}
