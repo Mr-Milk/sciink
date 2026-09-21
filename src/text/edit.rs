@@ -729,6 +729,7 @@ pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]
             chars: Vec::with_capacity(run.len()),
             lines: Vec::new(),
             is_flow: false,
+            has_text_path: false, // a split-off is regenerated from the model: never on a path
             is_inkscape: s.is_inkscape,
             is_ml_inkscape: s.is_ml_inkscape,
             text_length: None,

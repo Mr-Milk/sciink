@@ -603,3 +603,45 @@ fn fix_merge_positions_restores_the_parsed_anchor() {
     assert_same(&before, &all_positions(&pts), 1e-9);
     assert!(close(pts[0].lines[0].chunks[0].x, 50.0));
 }
+
+use sciink::text::kerning::{KerningOptions, remove_kerning};
+
+fn all_opts() -> KerningOptions {
+    KerningOptions::from_inx(true, true, true, true, 1)
+}
+fn serialize(d: &Doc) -> String {
+    let mut v = Vec::new();
+    d.write(&mut v);
+    String::from_utf8(v).unwrap()
+}
+/// `remove_kerning` over every `<text>` of `svg`, returning (serialized document, result, warnings).
+fn run_kerning(svg: &str, pick: &[&str]) -> (String, Vec<NodeId>, Vec<NodeId>, Vec<String>) {
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let els: Vec<NodeId> = pick.iter().map(|i| id(&d, i)).collect();
+    let mut w = Warnings::default();
+    let out = remove_kerning(&mut d, &els, &all_opts(), fonts(), &mut w);
+    let attached: Vec<NodeId> = out
+        .iter()
+        .copied()
+        .filter(|&n| n == d.root() || d.ancestors(n).any(|a| a == d.root()))
+        .collect();
+    (serialize(&d), out, attached, w.0)
+}
+
+#[test]
+fn text_on_a_path_is_measured_but_never_edited() {
+    let svg = format!(
+        r##"<svg {NS} xmlns:xlink="http://www.w3.org/1999/xlink"><defs><path id="p" d="M 0,50 H 200"/></defs><text id="t" style="{DV};font-size:10px"><textPath xlink:href="#p">Hello curve</textPath></text></svg>"##
+    );
+    let d = Doc::parse(svg.as_bytes()).unwrap();
+    let before = serialize(&d);
+    let (after, out, attached, warns) = run_kerning(&svg, &["t"]);
+    assert_eq!(after, before, "text on a path comes back byte-identical");
+    assert_eq!(out.len(), 1, "the element is still returned");
+    assert_eq!(attached, out, "and is still in the tree");
+    assert_eq!(out[0], id(&d, "t"));
+    assert!(
+        warns.iter().any(|w| w == "t: text on a path is not edited"),
+        "{warns:?}"
+    );
+}

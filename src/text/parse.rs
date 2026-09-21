@@ -440,6 +440,8 @@ pub struct ParsedText {
     pub chars: Vec<TChar>,
     pub lines: Vec<TLine>,
     pub is_flow: bool,
+    /// The element has a `<textPath>` descendant: measured, never edited (spec §A.2 "Not handled").
+    pub has_text_path: bool,
     pub is_inkscape: bool,
     pub is_ml_inkscape: bool,
     pub text_length: Option<TextLengthAdj>,
@@ -482,6 +484,15 @@ fn is_flow(doc: &Doc, el: NodeId) -> bool {
             .is_some_and(|v| v != 0.0)
 }
 
+/// Whether `el` carries a `<textPath>` descendant. Such an element is measured (it feeds the char
+/// table and `text_bbox`) but never parsed or edited: its glyphs follow a path, which neither the
+/// model nor the writer represents, so regenerating it would drop the path and move every glyph
+/// to the baseline (spec §A.2 "Not handled … `<textPath>` (skip element)").
+fn has_text_path(doc: &Doc, el: NodeId) -> bool {
+    doc.descendants(el)
+        .any(|n| n != el && doc.is_element(n) && doc.tag(n) == "textPath")
+}
+
 impl ParsedText {
     pub fn parse(
         doc: &mut Doc,
@@ -490,7 +501,11 @@ impl ParsedText {
         warn: &mut Warnings,
     ) -> Option<ParsedText> {
         let flow = is_flow(doc, el);
-        depathologize(doc, el, flow, warn);
+        let on_path = has_text_path(doc, el);
+        if !on_path {
+            // an element on a path must come back byte-identical, and depathologize writes
+            depathologize(doc, el, flow, warn);
+        }
         let transform = doc.composed_transform(el);
         let mut pt = ParsedText {
             el,
@@ -498,6 +513,7 @@ impl ParsedText {
             chars: Vec::new(),
             lines: Vec::new(),
             is_flow: flow,
+            has_text_path: on_path,
             is_inkscape: false,
             is_ml_inkscape: false,
             text_length: None,
@@ -512,8 +528,10 @@ impl ParsedText {
             text_length_removed: false,
             next_chunk_id: 0,
         };
-        if flow {
-            return Some(pt); // v1: flows are detected, never parsed (spec §A.2 "Flowed text v1")
+        if flow || on_path {
+            // v1: flows and text on a path are detected, never parsed (spec §A.2 "Flowed text v1",
+            // "Not handled … `<textPath>` (skip element)")
+            return Some(pt);
         }
         let tree = TextTree::new(doc, el);
         let runs = tree.runs(doc);

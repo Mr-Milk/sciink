@@ -701,6 +701,13 @@ impl KerningOptions {
     }
 }
 
+/// How a warning names an element: its `id` when it has one, else its tag.
+fn el_name(doc: &Doc, el: NodeId) -> String {
+    doc.attr(el, "id")
+        .unwrap_or_else(|| doc.tag(el))
+        .to_string()
+}
+
 /// RK:64–119 (`remove_kerning`): the whole pipeline over the `<text>` elements of `els`
 /// (`<flowRoot>`s only feed the char table). Stages 6–7 decide on parsed positions, 8–11 on
 /// current ones (RK:96–97); the DOM is written once at the end. Returns `els` with rewritten
@@ -727,6 +734,15 @@ pub fn remove_kerning(
             continue;
         }
         if let Some(pt) = ParsedText::parse(doc, el, &mut ct, warn) {
+            if pt.has_text_path {
+                // measured (it is in the char table), never edited: the model cannot express a
+                // path-following baseline, so regenerating it would drop the path (spec §A.2)
+                warn.push(format!(
+                    "{}: text on a path is not edited",
+                    el_name(doc, el)
+                ));
+                continue;
+            }
             if !pt.is_flow {
                 pts.push(pt);
             }
