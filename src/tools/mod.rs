@@ -3,4 +3,5 @@
 
 pub mod about;
 pub mod font_probe;
+pub mod text_fix;
 pub mod text_highlight;

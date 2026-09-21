@@ -19,6 +19,14 @@ use super::write::{ClipUnion, clip_of};
 use crate::geom::intersects;
 use kurbo::Rect;
 
+use super::Warnings;
+use super::edit::{make_next_chain, rechunk_absolute, remove_textlength};
+use super::fonts::FontSystem;
+use super::layout::snapshot_parsed;
+use super::parse::Origin;
+use super::write::{Slot, apply_clip_unions, write_clean_text};
+use crate::dom::NodeId;
+
 pub const NUM_SPACES: f64 = 1.0;
 pub const XTOLEXT: f64 = 0.6;
 pub const YTOLEXT: f64 = 0.1;
@@ -657,4 +665,131 @@ pub fn fix_merge_positions(pts: &mut [ParsedText]) {
             }
         }
     }
+}
+
+/// The Flattener's text options (F:178–184, gated by `fixtext` there; F:398 justification map).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KerningOptions {
+    pub remove_manual: bool,
+    pub merge_supersub: bool,
+    pub split_distant: bool,
+    pub merge_nearby: bool,
+    pub justification: Option<Anchor>,
+}
+
+impl KerningOptions {
+    /// `.inx` values: `justification` 1 = middle, 2 = start, 3 = end, 4 = unchanged.
+    pub fn from_inx(
+        removemanualkerning: bool,
+        mergesubsuper: bool,
+        splitdistant: bool,
+        mergenearby: bool,
+        justification: u8,
+    ) -> KerningOptions {
+        KerningOptions {
+            remove_manual: removemanualkerning,
+            merge_supersub: mergesubsuper,
+            split_distant: splitdistant,
+            merge_nearby: mergenearby,
+            justification: match justification {
+                1 => Some(Anchor::Middle),
+                2 => Some(Anchor::Start),
+                3 => Some(Anchor::End),
+                _ => None,
+            },
+        }
+    }
+}
+
+/// RK:64–119 (`remove_kerning`): the whole pipeline over the `<text>` elements of `els`
+/// (`<flowRoot>`s only feed the char table). Stages 6–7 decide on parsed positions, 8–11 on
+/// current ones (RK:96–97); the DOM is written once at the end. Returns `els` with rewritten
+/// elements replaced by their new nodes, removed ones dropped, split-offs appended.
+pub fn remove_kerning(
+    doc: &mut Doc,
+    els: &[NodeId],
+    o: &KerningOptions,
+    fonts: FontSystem,
+    warn: &mut Warnings,
+) -> Vec<NodeId> {
+    let tels: Vec<NodeId> = els
+        .iter()
+        .copied()
+        .filter(|&e| doc.is_element(e) && matches!(doc.tag(e), "text" | "flowRoot"))
+        .collect();
+    if tels.is_empty() {
+        return els.to_vec();
+    }
+    let mut ct = CharTable::build(doc, &tels, fonts, warn);
+    let mut pts: Vec<ParsedText> = Vec::new();
+    for &el in &tels {
+        if doc.tag(el) != "text" {
+            continue;
+        }
+        if let Some(pt) = ParsedText::parse(doc, el, &mut ct, warn) {
+            if !pt.is_flow {
+                pts.push(pt);
+            }
+        }
+    }
+    if o.remove_manual {
+        for pt in pts.iter_mut() {
+            remove_textlength(pt); // before the snapshot: it may change the transform (RK:84–86)
+        }
+    }
+    for pt in pts.iter_mut() {
+        snapshot_parsed(pt);
+        make_next_chain(doc, pt);
+    }
+    let mut clips: Vec<ClipUnion> = Vec::new();
+    if o.remove_manual {
+        for pt in pts.iter_mut() {
+            rechunk_absolute(pt);
+            make_next_chain(doc, pt);
+        }
+        remove_manual_kerning(doc, &mut pts, &mut ct, &mut clips);
+    }
+    if o.merge_nearby || o.merge_supersub {
+        external_merges(
+            doc,
+            &mut pts,
+            &mut ct,
+            o.merge_nearby,
+            o.merge_supersub,
+            &mut clips,
+        );
+    }
+    if o.split_distant {
+        split_distant_chunks(&mut pts);
+        split_distant_intrachunk(&mut pts);
+        split_lines(&mut pts);
+    }
+    change_justification(&mut pts, o.justification);
+    let removed = remove_trailing_leading_spaces(&mut pts);
+    if o.remove_manual || o.merge_nearby || o.merge_supersub || removed {
+        fix_merge_positions(&mut pts);
+    }
+    apply_clip_unions(doc, &clips);
+    let mut slots: HashMap<usize, Slot> = HashMap::new();
+    let mut new_of: HashMap<NodeId, Option<NodeId>> = HashMap::new();
+    let mut extra: Vec<NodeId> = Vec::new();
+    for i in 0..pts.len() {
+        let n = write_clean_text(doc, &pts, i, &ct, &mut slots);
+        match pts[i].origin {
+            Origin::Existing => {
+                new_of.insert(pts[i].el, n);
+            }
+            Origin::SplitFrom => extra.extend(n),
+        }
+    }
+    let mut out: Vec<NodeId> = Vec::new();
+    for &e in els {
+        match new_of.get(&e) {
+            Some(Some(n)) => out.push(*n),
+            Some(None) => {}
+            None => out.push(e),
+        }
+    }
+    out.extend(extra);
+    out
 }

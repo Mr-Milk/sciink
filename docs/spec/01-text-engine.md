@@ -173,8 +173,10 @@ next.first.loc.sel)`.
 Skip flows and elements with no nonzero dx. Per line: fuse positions onto the first char's element. For each
 char j: if `|dx|>XY_TOL`: `lc` = index of last char before the next char with nonzero dx (or last);
 `ax = left[j]·(1−anfr) + right[lc]·anfr`; dx=0. Else `ax = chunk.x` if j==0 else None. If `|dy|>XY_TOL`:
-`ay = base[j]`, dy=0; else `ay = chunk.y` if j==0 else None. Rebuild x/y lists, re-chunk (each dx'd char is
-now its own chunk, same representation as PDF-import x arrays). Recompute next chain.
+`ay = base[j]`, dy=0; else `ay = chunk.y` if j==0 else None. Rebuild x/y lists; a coordinate that follows a
+character without one opens a new **line** (P:886–893), any coordinate opens a new chunk (P:2704–2716); a
+new line without x continues from the end of the previous line, without y takes the previous line's last y.
+Recompute next chain.
 
 ### Stage 6 — `Remove_Manual_Kerning` (RK:318–376)
 For each chunk w with `w2 = w.nextw` (processed, and not `twospaces(w.txt,w2.txt)`):
@@ -335,7 +337,7 @@ upstream lets flows participate in merges). Do not port `parse_lines_flow` (P:18
 
 ### Deliberate defensive deviations from upstream
 
-The port is otherwise a faithful transcription, so record the three places where it is *deliberately* safer
+The port is otherwise a faithful transcription, so record the places where it is *deliberately* safer
 than the Python — a future parity reviewer must not "correct" them back:
 
 - `get_xy` on a whitespace-only attribute (`x=" "`) returns `[None]`; upstream returns `[]` and the next
@@ -344,6 +346,27 @@ than the Python — a future parity reviewer must not "correct" them back:
   `None` into the arithmetic.
 - `local_baseline` resolves a `%`/`super`/`sub` shift against the parent's **`utfs`**; upstream's `fs2/sf2`
   is `0/0 = NaN` under a singular (e.g. `scale(0)`) parent transform.
+- `continue_x`/`continue_y` and stage-5 continuation coordinates are resolved once when the model is built
+  (upstream recomputes them on every access).
+- `change_alignment` measures every chunk with the old anchor before moving any (upstream mutates the
+  anchor inside its per-chunk loop, P:2785–2787).
+- Merged sub/superscript characters get `bshft = ±0.4/−0.2·host utfs` and `utfs = 0.65·host utfs` in the
+  model at merge time (upstream leaves the model stale until Inkscape re-renders).
+- Inserted spaces carry no parsed points (upstream copies the neighbour's); `split_off` always shifts the
+  chunk anchor (upstream skips chunks without an own `x` entry).
+- Split-off elements are written in creation order directly after their own source (pre-order via
+  `ParsedText.split_src`; upstream `addnext`s every new element on the source, which emits the runs of one
+  range reversed and cannot place a split-off of a split-off after its own source); emptied elements are
+  removed; `remove_kerning` returns live node ids instead of upstream's stale handles.
+- Stage 5 positions the first character of every chunk with the anchor-weighted formula (upstream keeps
+  the old chunk `x`, displacing middle/end-anchored first segments until stage 11).
+- The regenerated `<text>` does not inherit the old element's `x`/`y`/`dx`/`dy`/`rotate` lists (upstream
+  copies every attribute; an ancestor list would re-apply to characters whose tspan list was trimmed);
+  `xmlns:sodipodi` is declared on the root when `sodipodi:role` is written.
+- `perform_merges` records a clip union only when at least one merged element carries a resolvable
+  `clip-path` (upstream RK:640–656 runs after every cross-element merge; for unclipped participants its
+  only action, clearing the target's absent clip, is a no-op); a dangling `clip-path` reference on an
+  otherwise unclipped set is left alone (upstream would clear the target's).
 
 ## A.3 Metrics layer
 
@@ -430,11 +453,18 @@ impl ParsedText {
 pub fn text_bbox(doc: &Doc, el: NodeId, ct: &CharTable, fs: &mut FontSystem, which: Which) -> Option<Rect>;
 // text/kerning.rs
 pub struct KerningOptions { pub remove_manual: bool, pub merge_supersub: bool, pub split_distant: bool,
-                            pub merge_nearby: bool, pub justification: Option<Anchor>, pub debug_highlights: bool }
-pub fn remove_kerning(doc: &mut Doc, els: &[NodeId], o: &KerningOptions, fs: &mut FontSystem) -> Vec<NodeId>;
+                            pub merge_nearby: bool, pub justification: Option<Anchor> }
+pub fn remove_kerning(doc: &mut Doc, els: &[NodeId], o: &KerningOptions, fonts: FontSystem,
+                       warn: &mut Warnings) -> Vec<NodeId>;
 // text/write.rs
-pub fn write_clean_text(doc: &mut Doc, pt: &ParsedText, fs: &FontSystem) -> Option<NodeId>;   // P:2385–2444
+pub fn write_clean_text(doc: &mut Doc, pts: &[ParsedText], idx: usize, ct: &CharTable,
+                         slots: &mut HashMap<usize, Slot>) -> Option<NodeId>;   // P:2385–2444
 ```
+`snapshot_parsed` and `get_ut_pts` live in `text::layout`; the editing primitives (`remove_textlength`,
+`make_next_chain`, `rechunk_absolute`, `split_off`, `change_alignment`, …) live in `text::edit`; the stage
+drivers (`remove_manual_kerning`, `external_merges`, `split_distant_chunks`, `change_justification`, …) live
+in `text::kerning`, which also assembles them into `remove_kerning`.
+
 Consumers: Flattener → `remove_kerning`; Homogenizer → `chars()` (`tfs`, `bshft`, `utfs`), `baseline_shift`,
 `composed_font_size`, `text_bbox` before/after restyle (`homogenizer.py:248–263`); Text Ghoster →
 `text_bbox` + max `composed_font_size` over descendants (`text_ghoster.py:70–99`); Scaler/bbox code →
