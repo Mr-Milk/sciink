@@ -1,7 +1,8 @@
 mod support;
 
+use support::with_vendored_fonts;
+
 use std::ffi::OsString;
-use std::path::PathBuf;
 
 fn args(v: &[&str]) -> Vec<OsString> {
     std::iter::once("sciink")
@@ -9,30 +10,7 @@ fn args(v: &[&str]) -> Vec<OsString> {
         .map(OsString::from)
         .collect()
 }
-fn fontdir() -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fonts")
-        .display()
-        .to_string()
-}
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
-
-// The library reads SCIINK_FONT_DIRS / SCIINK_NO_SYSTEM_FONTS through FontSystem::load();
-// set them once for the whole test binary (behind a `Once`) so every `set_var` completes
-// before any test thread reaches `FontSystem::load()`, then every test enters through this
-// function so the vendored fonts are visible everywhere they are needed.
-static INIT: std::sync::Once = std::sync::Once::new();
-fn with_vendored_fonts<T>(f: impl FnOnce() -> T) -> T {
-    INIT.call_once(|| {
-        // SAFETY: runs once, before any test in this binary reads the environment (every
-        // test enters through this function); the values never change afterwards.
-        unsafe {
-            std::env::set_var("SCIINK_NO_SYSTEM_FONTS", "1");
-            std::env::set_var("SCIINK_FONT_DIRS", fontdir());
-        }
-    });
-    f()
-}
 
 #[test]
 fn text_highlight_appends_one_rect_per_character() {

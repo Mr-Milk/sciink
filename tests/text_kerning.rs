@@ -405,6 +405,52 @@ fn external_merges_detect_superscripts_and_union_clips() {
 }
 
 #[test]
+fn external_merges_reject_a_double_space_and_a_blank_participant() {
+    let mut clips = Vec::new();
+    // blank: the second chunk is a single space. Same x as a visible "x", so only the
+    // `wstrip(...).is_empty()` gate (RK:412) can be what rejects it.
+    let (d, mut pts, mut ct) = pair("x", 1.0, 0.0, "", "");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(
+        pts[0].text(),
+        "Hello x",
+        "control: the geometry is in range"
+    );
+    let (d, mut pts, mut ct) = pair(" ", 1.0, 0.0, "", "");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(
+        pts[0].text(),
+        "Hello",
+        "a whitespace-only chunk never merges"
+    );
+
+    // double space: " world" and "  world" start at the same x, so the only difference is
+    // `twospaces` (RK:412) — one joins, the other does not
+    let placed = |t2: &str| {
+        let right = lefts("Hello ")[5];
+        let spw = lefts(" a")[1];
+        arena(&format!(
+            r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">Hello</text><text id="b" xml:space="preserve" style="{DV};font-size:10px" x="{}" y="0">{t2}</text></svg>"#,
+            right - 0.5 * spw
+        ))
+    };
+    let (d, mut pts, mut ct) = placed(" world");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(
+        pts[0].text(),
+        "Hello world",
+        "control: one leading space joins"
+    );
+    let (d, mut pts, mut ct) = placed("  world");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(
+        pts[0].text(),
+        "Hello",
+        "merging would put two spaces in a row"
+    );
+}
+
+#[test]
 fn clip_union_is_recorded_when_only_one_participant_is_clipped() {
     let (d, mut pts, mut ct) = pair("world", 1.0, 0.0, "", r#"clip-path="url(#c2)""#);
     let mut clips = Vec::new();
@@ -541,6 +587,45 @@ fn distant_characters_inside_a_chunk_split_including_tick_numbers() {
     ));
     split_distant_intrachunk(&mut pts);
     assert_eq!(pts.len(), 1);
+
+    // … and neither do two numbers whose separating space lives in ANOTHER XML node: the
+    // same-node clause (RK:288) is what stops "0.5" + a styled " 1.0" from being torn apart
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">0.5<tspan style="fill:red"> 1.0</tspan></text></svg>"#
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 1, "one chunk, two nodes");
+    split_distant_intrachunk(&mut pts);
+    assert_eq!(
+        pts.iter().map(|p| p.text()).collect::<Vec<_>>(),
+        ["0.5 1.0"]
+    );
+}
+
+#[test]
+fn split_distant_chunks_handles_several_lines_in_one_call() {
+    // Two lines, each "x" | 4-space hole | "yzw": the line loop splits line 0 and then line 1,
+    // and line indices only stay valid because no line is ever emptied by a split here.
+    let spw = lefts(" a")[1];
+    let x1 = lefts("a ")[1] + 4.0 * spw;
+    let x3 = lefts("e ")[1] + 4.0 * spw;
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {x1}" y="0">abcd<tspan x="0 {x3}" y="20">efgh</tspan></text></svg>"#
+    ));
+    assert_eq!(pts[0].lines.len(), 2);
+    assert_eq!(
+        (pts[0].lines[0].chunks.len(), pts[0].lines[1].chunks.len()),
+        (2, 2)
+    );
+    let before = all_positions(&pts);
+    split_distant_chunks(&mut pts);
+    assert_eq!(
+        pts.iter().map(|p| p.text()).collect::<Vec<_>>(),
+        ["ae", "bcd", "fgh"],
+        "both lines split, in line order"
+    );
+    assert_eq!(pts[0].lines.len(), 2, "the source keeps both lines");
+    assert_eq!((pts[1].split_src, pts[2].split_src), (Some(0), Some(0)));
+    assert_same(&before, &all_positions(&pts), 1e-6);
 }
 
 use sciink::text::kerning::{

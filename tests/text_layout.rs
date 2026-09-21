@@ -310,3 +310,34 @@ fn element_bbox_wraps_parse_plus_text_bbox() {
     let e = id(&d2, "e");
     assert_eq!(element_bbox(&mut d2, e, &mut ct, &mut w), None);
 }
+
+#[test]
+fn get_ut_pts_gives_up_on_a_singular_transform_and_on_unsnapshotted_chunks() {
+    use sciink::text::layout::{get_ut_pts, snapshot_parsed};
+    // `matrix(1,2,2,4)` collapses the plane: the first chunk's frame cannot be inverted, so the
+    // comparison the merge stages would make is impossible and every caller must skip the pair.
+    let (mut pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" transform="matrix(1,2,2,4,0,0)" style="{DV};font-size:10px" x="0 30" y="0 0">ab</text></svg>"#
+        ),
+        "t",
+    );
+    snapshot_parsed(&mut pt);
+    assert_eq!(pt.lines[0].chunks.len(), 2);
+    assert_eq!(get_ut_pts(&pt, (0, 0), &pt, (0, 1), true), None);
+    assert_eq!(get_ut_pts(&pt, (0, 0), &pt, (0, 1), false), None);
+    // no usable corner: before the stage-3 snapshot every parsed point is missing, so the
+    // `parsed` request has nothing to pick a rightmost/leftmost character from
+    let (pt, _) = parsed(
+        &format!(
+            r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0 30" y="0 0">ab</text></svg>"#
+        ),
+        "t",
+    );
+    assert!(pt.parsed_ut.is_empty());
+    assert_eq!(get_ut_pts(&pt, (0, 0), &pt, (0, 1), true), None);
+    assert!(
+        get_ut_pts(&pt, (0, 0), &pt, (0, 1), false).is_some(),
+        "live positions are always available"
+    );
+}

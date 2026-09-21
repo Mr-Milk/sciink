@@ -172,6 +172,31 @@ fn delete_char_shifts_the_chunk_by_the_anchor_rule() {
     assert!(close(pt.lines[0].chunks[0].x, 10.0));
     assert_pos(&positions(&pt), &before[..2]);
 
+    // two consecutive trailing spaces: the "unrendered trailing space is free" shortcut needs the
+    // character before it NOT to be a space (P:4047-4051), so the first deletion costs the full
+    // advance and only the second one is free
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:end" x="10" y="0">12  </text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (mut pt, _) = parsed(&mut d, "t");
+    let g = sciink::text::layout::chunk_geom(&pt, 0, 0);
+    let cwo = g.right[3] - g.right[2]; // advance of the last space, kerning included
+    assert!(cwo > 0.0);
+    delete_char(&mut pt, 3);
+    assert!(
+        close(pt.lines[0].chunks[0].x, 10.0 - cwo),
+        "{} vs {}",
+        pt.lines[0].chunks[0].x,
+        10.0 - cwo
+    );
+    let g = sciink::text::layout::chunk_geom(&pt, 0, 0);
+    let tdk = g.left[2] - g.right[1]; // now the previous character is '2': only kerning counts
+    assert!(cwo > tdk + 1e-6, "the two branches really differ");
+    delete_char(&mut pt, 2);
+    assert!(close(pt.lines[0].chunks[0].x, 10.0 - cwo - tdk));
+    assert_eq!(pt.text(), "12");
+
     // deleting the only char of a line removes the line
     let mut d = Doc::parse(
         format!(r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0" y="0">a<tspan x="0" y="20">b</tspan></text></svg>"#).as_bytes(),
@@ -423,9 +448,10 @@ fn rechunk_absolute_y_only_chunks_carry_x_and_continue_lines_read_the_last_chunk
     // they open chunks on the first line whose x is carried forward from the chunk before
     // (upstream `x[min(i, len(x)−1)]`, P:2710 — a quirk shared with parse time: such characters
     // sit at the line's x, not at the pen); '4' opens a line whose missing y comes from the
-    // previous line's LAST chunk ('3', back on the baseline).
+    // previous line's LAST chunk ('3' at y=2, which is neither the baseline nor '2''s y — so the
+    // fixture tells "last chunk" apart from "first chunk" and from "line y").
     let mut d = Doc::parse(
-        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="7" y="0" dx="0 0 0 1" dy="0 4 -4 0">1234</text></svg>"#).as_bytes(),
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="7" y="0" dx="0 0 0 1" dy="0 4 -2 0">1234</text></svg>"#).as_bytes(),
     )
     .unwrap();
     let (mut pt, _) = parsed(&mut d, "t");
@@ -439,13 +465,13 @@ fn rechunk_absolute_y_only_chunks_carry_x_and_continue_lines_read_the_last_chunk
         "'2': own y, carried x"
     );
     assert!(
-        close(l0.chunks[2].x, 7.0) && close(l0.chunks[2].y, 0.0),
-        "'3': back on the baseline"
+        close(l0.chunks[2].x, 7.0) && close(l0.chunks[2].y, 2.0),
+        "'3': dy is cumulative (4 - 2), NOT back on the baseline"
     );
     assert!(pt.lines[1].spec.continue_y && !pt.lines[1].spec.continue_x);
     assert!(
-        close(pt.lines[1].chunks[0].y, 0.0),
-        "y from the previous line's LAST chunk"
+        close(pt.lines[1].chunks[0].y, 2.0),
+        "y from the previous line's LAST chunk (2), not its first (0)"
     );
     assert!(pt.chars.iter().all(|c| c.dx == 0.0 && c.dy == 0.0));
 }
@@ -603,6 +629,22 @@ fn append_chunks_nativizes_superscripts_and_percent_sizes() {
     append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
     let w = pts[0].chars.iter().find(|c| c.c == 'w').unwrap();
     assert!(sciink::text::edit::style_eq(&w.sty, &sty_before));
+
+    // a differently STYLED merge at the same size still gets an explicit "100%" (upstream sets
+    // font-size on every restyled character, P:3266-3293) and keeps the rest of its own style
+    let (d, mut pts, mut ct) = two_texts(1.0, "fill:red");
+    let target = (0usize, pts[0].chunk(0, 0).id);
+    let host_utfs = pts[0].chars[0].utfs;
+    let inc = Incoming {
+        chunk: (1, pts[1].chunk(0, 0).id),
+        wtype: WType::Normal,
+        max_spaces: None,
+    };
+    append_chunks(&d, &mut pts, &mut ct, target, &[inc]);
+    let w = pts[0].chars.iter().find(|c| c.c == 'w').unwrap();
+    assert_eq!(w.sty.get("font-size"), Some("100%"));
+    assert_eq!(w.sty.get("fill"), Some("red"), "its own style survives");
+    assert!(close(w.utfs, host_utfs) && close(w.bshft, 0.0));
 
     // a merge that no longer exists (chunk id gone) is skipped silently
     let (d, mut pts, mut ct) = two_texts(1.0, "");
@@ -833,4 +875,49 @@ fn split_off_makes_positioned_elements_and_leaves_no_glyph_behind() {
         pts[1].lines[0].chunks[0].x,
         0.5 * (g.left[0] + g.right[1])
     ));
+}
+
+#[test]
+fn split_off_of_everything_empties_the_source_and_of_nothing_changes_nothing() {
+    let svg = format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="40" y="7">abc</text></svg>"#
+    );
+    // the whole element leaves: the source keeps no character, chunk or line — this is the
+    // precondition for the writer's `Slot::FirstIn`/"emptied element removed" path
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let (pt, _) = parsed(&mut d, "t");
+    let mut pts = vec![pt];
+    snapshot_parsed(&mut pts[0]);
+    let before = all_positions(&pts);
+    let all: Vec<usize> = (0..pts[0].chars.len()).collect();
+    assert_eq!(split_off(&mut pts, 0, &[all]), [1]);
+    assert!(pts[0].chars.is_empty() && pts[0].lines.is_empty());
+    assert_eq!(pts[0].text(), "");
+    assert_eq!(pts[1].text(), "abc");
+    assert_eq!(pts[1].origin, Origin::SplitFrom);
+    assert_eq!(pts[1].split_src, Some(0));
+    let after = all_positions(&pts);
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        assert!(
+            b.0 == a.0 && (b.1 - a.1).abs() < 1e-6 && (b.2 - a.2).abs() < 1e-6,
+            "{b:?} vs {a:?}"
+        );
+    }
+
+    // nothing leaves: no new model, and the source is untouched (`fix_positions` must not move
+    // the anchor of a model whose characters never went anywhere)
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let (pt, _) = parsed(&mut d, "t");
+    let mut pts = vec![pt];
+    snapshot_parsed(&mut pts[0]);
+    let before = all_positions(&pts);
+    let x = pts[0].lines[0].chunks[0].x;
+    assert_eq!(split_off(&mut pts, 0, &[]), []);
+    assert_eq!(split_off(&mut pts, 0, &[vec![]]), []);
+    assert_eq!(pts.len(), 1);
+    assert_eq!(pts[0].text(), "abc");
+    assert!(close(pts[0].lines[0].chunks[0].x, x));
+    assert!(pts[0].chars.iter().all(|c| c.dx == 0.0 && c.dy == 0.0));
+    assert_eq!(before, all_positions(&pts));
 }

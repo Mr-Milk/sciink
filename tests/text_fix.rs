@@ -1,5 +1,7 @@
 mod support;
 
+use support::with_vendored_fonts;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -9,27 +11,9 @@ fn args(v: &[&str]) -> Vec<OsString> {
         .map(OsString::from)
         .collect()
 }
-fn fontdir() -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fonts")
-        .display()
-        .to_string()
-}
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:sodipodi=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\"";
 const DV: &str = "font-family:'DejaVu Sans'";
 
-static INIT: std::sync::Once = std::sync::Once::new();
-fn with_vendored_fonts<T>(f: impl FnOnce() -> T) -> T {
-    INIT.call_once(|| {
-        // SAFETY: runs once, before any test in this binary reads the environment (every test
-        // enters through this function); the values never change afterwards.
-        unsafe {
-            std::env::set_var("SCIINK_NO_SYSTEM_FONTS", "1");
-            std::env::set_var("SCIINK_FONT_DIRS", fontdir());
-        }
-    });
-    f()
-}
 fn run_fix(svg: &str, extra: &[&str]) -> (String, Vec<String>) {
     let mut a = vec!["--tool=text-fix"];
     a.extend(extra);
@@ -155,6 +139,25 @@ fn text_fix_on_a_real_inkscape_document_is_appearance_invariant() {
         &support::text_positions(&out),
         1e-3,
         "no-merge run",
+    );
+    // re-anchoring every line (justification=1 → middle) is appearance-preserving too, as long
+    // as no chunk carries a leading dx — stage 5 guarantees that, and this document has none.
+    let (out, _) = run_fix(
+        &svg,
+        &[
+            "--mergenearby=false",
+            "--mergesubsuper=false",
+            "--removemanualkerning=false",
+            "--justification=1",
+            &format!("--id={root_id}"),
+        ],
+    );
+    assert!(out.contains("text-anchor:middle"), "the anchor did change");
+    support::assert_same_positions(
+        &before,
+        &support::text_positions(&out),
+        1e-3,
+        "justification=1 run",
     );
     // with merges glyphs may snap to whole spaces, but none may appear or vanish
     let (out, _) = run_fix(&svg, &[&format!("--id={root_id}")]);

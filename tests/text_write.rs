@@ -22,7 +22,9 @@ use std::collections::HashMap;
 use sciink::style::Style;
 use sciink::text::edit::{remove_chars, split_off};
 use sciink::text::layout::{chunk_char_pts, snapshot_parsed, transform_pts};
-use sciink::text::write::{ClipUnion, apply_clip_unions, specified_diff, write_clean_text};
+use sciink::text::write::{
+    ClipUnion, apply_clip_unions, clip_of, specified_diff, write_clean_text,
+};
 
 fn all_texts(d: &mut Doc) -> Vec<NodeId> {
     d.descendants(d.svg())
@@ -333,4 +335,71 @@ fn writer_places_a_split_off_of_a_split_off_after_its_own_source() {
         ["rect", "ab", "cf", "d", "e", "rect"],
         "source, split, split-of-split"
     );
+}
+
+#[test]
+fn clip_of_reads_the_style_and_gives_up_on_a_dangling_reference() {
+    // `clip-path` is deliberately NOT a cascaded presentation attribute (src/style.rs), so the
+    // attribute and the style are two independent sources and both have to be read.
+    let svg = format!(
+        r##"<svg {NS}><defs><clipPath id="c1"><rect width="5" height="5"/></clipPath></defs><text id="a" style="{DV};clip-path:url(#c1)" x="0" y="0">a</text><text id="b" clip-path="url(#gone)" x="0" y="0">b</text><text id="c" style="{DV};clip-path:url(#gone)" x="0" y="0">c</text><text id="d" x="0" y="0">d</text></svg>"##
+    );
+    let d = Doc::parse(svg.as_bytes()).unwrap();
+    assert_eq!(
+        clip_of(&d, id(&d, "a")),
+        Some(id(&d, "c1")),
+        "resolved through the inline style"
+    );
+    assert_eq!(clip_of(&d, id(&d, "b")), None, "dangling attribute");
+    assert_eq!(clip_of(&d, id(&d, "c")), None, "dangling style value");
+    assert_eq!(clip_of(&d, id(&d, "d")), None, "no clip at all");
+    // a dangling reference must not make the union clear an existing clip of another element
+    apply_clip_unions(
+        &mut Doc::parse(svg.as_bytes()).unwrap(),
+        &[ClipUnion {
+            target: id(&d, "a"),
+            others: vec![id(&d, "b")],
+        }],
+    );
+}
+
+#[test]
+fn writer_composes_transform_extra_and_drops_a_removed_textlength() {
+    use sciink::geom::{affine_eq, is_identity};
+    use sciink::text::edit::remove_textlength;
+    let svg = format!(
+        r#"<svg {NS}><g transform="scale(2)"><text id="t" transform="translate(10,3)" style="{DV};font-size:10px" x="0" y="0" textLength="100" lengthAdjust="spacingAndGlyphs">abcd</text></g></svg>"#
+    );
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let (mut pts, ct) = arena(&mut d);
+    remove_textlength(&mut pts[0]);
+    assert!(pts[0].text_length_removed);
+    let extra = pts[0].transform_extra;
+    assert!(!is_identity(extra), "the stretch became a transform");
+    let before = positions(&pts);
+    let te = write_all(&mut d, &pts, &ct)[0].expect("rewritten");
+    assert_eq!(d.attr(te, "textLength"), None, "undone, so not copied");
+    assert_eq!(d.attr(te, "lengthAdjust"), None);
+    assert!(
+        affine_eq(
+            d.transform(te),
+            kurbo::Affine::translate((10.0, 3.0)) * extra
+        ),
+        "own transform · transform_extra, not either alone: {:?}",
+        d.attr(te, "transform")
+    );
+    // and the glyphs are still stretched across the same 100 units after a round trip
+    let s = out(&d);
+    let mut d2 = Doc::parse(s.as_bytes()).unwrap();
+    let (pts2, _) = arena(&mut d2);
+    let after = positions(&pts2);
+    assert_eq!(before.len(), after.len());
+    for (b, a) in before.iter().zip(&after) {
+        // 1e-4, not 1e-6: the emitted matrix rounds the 4.11× stretch to 7 decimals, which is
+        // worth ~1e-6 at x≈168. A mis-composed transform would be off by whole units.
+        assert!(
+            b.0 == a.0 && (b.1 - a.1).abs() < 1e-4 && (b.2 - a.2).abs() < 1e-4,
+            "{b:?} vs {a:?}\n{s}"
+        );
+    }
 }

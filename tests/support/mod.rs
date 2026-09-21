@@ -3,6 +3,33 @@
 
 use std::path::PathBuf;
 
+/// The vendored test fonts (`tests/fonts`), as a `SCIINK_FONT_DIRS` value.
+pub fn fontdir() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fonts")
+        .display()
+        .to_string()
+}
+
+// The library reads SCIINK_FONT_DIRS / SCIINK_NO_SYSTEM_FONTS through FontSystem::load();
+// set them once for the whole test binary (behind a `Once`) so every `set_var` completes
+// before any test thread reaches `FontSystem::load()`, then every test enters through this
+// function so the vendored fonts are visible everywhere they are needed.
+static INIT: std::sync::Once = std::sync::Once::new();
+
+/// Runs `f` with the vendored fonts as the only ones the library can see.
+pub fn with_vendored_fonts<T>(f: impl FnOnce() -> T) -> T {
+    INIT.call_once(|| {
+        // SAFETY: runs once, before any test in this binary reads the environment (every test
+        // enters through this function); the values never change afterwards.
+        unsafe {
+            std::env::set_var("SCIINK_NO_SYSTEM_FONTS", "1");
+            std::env::set_var("SCIINK_FONT_DIRS", fontdir());
+        }
+    });
+    f()
+}
+
 /// Directory holding upstream's `svg/` and `refs/` test data, if available.
 pub fn upstream_data_dir() -> Option<PathBuf> {
     let candidates = [
