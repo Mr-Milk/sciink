@@ -217,3 +217,64 @@ fn manual_kerning_removal_records_clip_unions_only_across_elements() {
     assert_eq!(pts[0].text(), "ab");
     assert!(clips.is_empty());
 }
+
+#[test]
+fn manual_kerning_numeric_pairs_do_not_bridge_a_space_sized_gap() {
+    // numeric chunks use dx = 0 (RK:341-342): a full space-width gap must NOT bridge them, even
+    // though the identical gap between ordinary letters does (dx = spw, window up to 1.99*spw).
+    let spw = lefts(" a")[1];
+    let right1 = lefts("1 ")[1];
+    let (d, mut pts, mut ct) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {}" y="0">12</text></svg>"#,
+        right1 + 1.5 * spw
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 2);
+    let mut clips = Vec::new();
+    remove_manual_kerning(&d, &mut pts, &mut ct, &mut clips);
+    assert_eq!(
+        pts.len(),
+        2,
+        "a numeric pair across a space-sized gap must not merge"
+    );
+    assert_eq!(pts[0].text(), "1");
+    assert_eq!(pts[1].text(), "2");
+    assert_eq!(pts[1].origin, sciink::text::parse::Origin::SplitFrom);
+
+    // control: the same gap between ordinary letters does merge.
+    let right_a = lefts("a ")[1];
+    let (d, mut pts, mut ct) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {}" y="0">ab</text></svg>"#,
+        right_a + 1.5 * spw
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 2);
+    let mut clips = Vec::new();
+    remove_manual_kerning(&d, &mut pts, &mut ct, &mut clips);
+    assert_eq!(pts.len(), 1, "the same gap between letters must merge");
+    assert_eq!(pts[0].text().replace(' ', ""), "ab");
+}
+
+#[test]
+fn manual_kerning_retries_a_weirdly_kerned_space_against_the_previous_chunk() {
+    // a lone " " chunk whose primary check fails re-tests against its own predecessor (RK:349-355).
+    let spw = lefts(" a")[1];
+    let right_m = lefts("m ")[1];
+    let x1 = right_m - 1.4 * spw;
+    let x2 = right_m + spw;
+    let (d, mut pts, mut ct) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 {x1} {x2}" y="0">m b</text></svg>"#
+    ));
+    assert_eq!(pts[0].lines[0].chunks.len(), 3);
+    let mut clips = Vec::new();
+    remove_manual_kerning(&d, &mut pts, &mut ct, &mut clips);
+    assert_eq!(
+        pts.len(),
+        1,
+        "the retry must let all three chunks merge into one element"
+    );
+    let text = pts[0].text();
+    assert_eq!(text.replace(' ', ""), "mb");
+    assert!(
+        text.contains(' '),
+        "merged text should retain a space: {text:?}"
+    );
+}
