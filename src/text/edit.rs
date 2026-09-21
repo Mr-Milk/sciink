@@ -722,6 +722,9 @@ pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]
         spec.sprl = false;
         spec.continue_x = false;
         spec.continue_y = false;
+        // NOT tail-resolved (no `sel`: `split_off` has no `doc`), so this may name a text node's
+        // own element rather than the parent whose style the character carries. Nothing reads it
+        // after parse time — do not start (call `sel(doc, &f.loc)` instead if you ever need it).
         spec.style_node = f.loc.node;
         spec.first_run = 0;
         let snap = !s.parsed_ut.is_empty();
@@ -828,7 +831,13 @@ fn fix_positions(pt: &mut ParsedText, old: impl Fn(usize) -> Option<(f64, f64, f
                 }
             }
             let fc_dx = -anfr * dxs[1..].iter().sum::<f64>();
-            let shift_x = ((needed.0 - fc_dx) / XY_TOL).round() * XY_TOL;
+            // both guards: NaN compares unequal to 0.0, so an unguarded NaN would be written
+            // straight into the chunk anchor and poison every later comparison
+            let shift_x = if (needed.0 - fc_dx).is_nan() {
+                0.0
+            } else {
+                ((needed.0 - fc_dx) / XY_TOL).round() * XY_TOL
+            };
             let shift_y = if needed.1.is_nan() {
                 0.0
             } else {
@@ -865,6 +874,8 @@ pub fn change_alignment(pt: &mut ParsedText, li: usize, newanch: Anchor) {
             .iter()
             .map(|p| p.x)
             .fold(f64::NEG_INFINITY, f64::max);
+        // the `contains` is literal P:2769 parity and logically implied by `unrendered_space`
+        // (only the line's last chunk can hold its last character); kept, not simplified
         if unrendered_space(pt, li, ci) && pt.lines[li].chunks[ci].chars.contains(&last) {
             maxx -= pt.chars[last].cwd;
         }
