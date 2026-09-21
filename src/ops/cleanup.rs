@@ -17,8 +17,12 @@ pub fn url_id(v: &str) -> Option<&str> {
 }
 
 /// Deletes `n`, then every ancestor left without element or comment children (lxml's `len`
-/// counts both), stopping below the root `<svg>`. Every removed id lands in `ctx.deleted`.
+/// counts both), stopping below the root `<svg>`, which is never deleted — a call on the root
+/// is a no-op. Every removed id lands in `ctx.deleted`.
 pub fn delete_up(doc: &mut Doc, ctx: &mut Ctx, n: NodeId) {
+    if n == doc.svg() {
+        return; // the root is never deleted, and its ids never count as deleted
+    }
     let mut target = n;
     loop {
         let parent = doc.parent(target);

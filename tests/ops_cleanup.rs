@@ -141,3 +141,24 @@ fn ctx_finish_runs_both_sweeps() {
     assert_eq!(d.by_id("c"), None);
     assert_eq!(d.attr(id(&d, "p"), "clip-path"), None);
 }
+
+#[test]
+fn delete_up_never_touches_the_root() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><rect id="r" clip-path="url(#r)"/></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let root = d.svg();
+    delete_up(&mut d, &mut ctx, root);
+    assert!(
+        ctx.deleted.is_empty(),
+        "nothing is deleted, so nothing is recorded"
+    );
+    assert!(d.by_id("r").is_some());
+    ctx.finish(&mut d);
+    assert_eq!(
+        d.attr(id(&d, "r"), "clip-path"),
+        Some("url(#r)"),
+        "finish() has nothing to strip"
+    );
+}
