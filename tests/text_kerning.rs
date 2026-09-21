@@ -278,3 +278,139 @@ fn manual_kerning_retries_a_weirdly_kerned_space_against_the_previous_chunk() {
         "merged text should retain a space: {text:?}"
     );
 }
+
+use sciink::text::kerning::external_merges;
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() < 1e-9
+}
+
+/// "Hello" at (0,0) and a second element `text2` whose left edge is `gap` space-widths after it,
+/// with `dy` baseline offset and extra style/attributes.
+fn pair(
+    text2: &str,
+    gap: f64,
+    dy: f64,
+    style2: &str,
+    attrs2: &str,
+) -> (Doc, Vec<ParsedText>, CharTable) {
+    let right = lefts("Hello ")[5];
+    let spw = lefts(" a")[1];
+    let x2 = right + gap * spw;
+    arena(&format!(
+        r#"<svg {NS}><defs><clipPath id="c1"><rect width="50" height="50"/></clipPath><clipPath id="c2"><rect x="10" width="50" height="50"/></clipPath></defs><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">Hello</text><text id="b" xml:space="preserve" style="{DV};font-size:10px;{style2}" x="{x2}" y="{dy}" {attrs2}>{text2}</text></svg>"#
+    ))
+}
+
+#[test]
+fn external_merges_join_adjacent_elements_with_a_space() {
+    let (d, mut pts, mut ct) = pair("world", 1.0, 0.0, "", "");
+    let before = all_positions(&pts);
+    let mut clips = Vec::new();
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello world");
+    assert!(pts[1].chars.is_empty());
+    assert_same(&before, &all_positions(&pts), 1e-6);
+    assert!(clips.is_empty(), "neither element is clipped");
+
+    // too far (3 spaces > 1 + 0.6): untouched
+    let (d, mut pts, mut ct) = pair("world", 3.0, 0.0, "", "");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(
+        (pts[0].text().as_str(), pts[1].text().as_str()),
+        ("Hello", "world")
+    );
+
+    // mergenearby off: same-line merges are disabled (sub/super still allowed)
+    let (d, mut pts, mut ct) = pair("world", 1.0, 0.0, "", "");
+    external_merges(&d, &mut pts, &mut ct, false, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello");
+
+    // different rotation: never merged
+    let (d, mut pts, mut ct) = pair("world", 1.0, 0.0, "", r#"transform="rotate(1)""#);
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello");
+
+    // two numbers one space apart stay apart (tick labels, RK:458–462) …
+    let (d, mut pts, mut ct) = {
+        let right = lefts("0.5 ")[3];
+        let spw = lefts(" a")[1];
+        arena(&format!(
+            r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">0.5</text><text id="b" xml:space="preserve" style="{DV};font-size:10px" x="{}" y="0">1.0</text></svg>"#,
+            right + spw
+        ))
+    };
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "0.5");
+    // … but a minus sign touching a number joins it
+    let (d, mut pts, mut ct) = {
+        let right = lefts("−0")[1];
+        arena(&format!(
+            r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">−</text><text id="b" xml:space="preserve" style="{DV};font-size:10px" x="{right}" y="0">0.5</text></svg>"#
+        ))
+    };
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "−0.5");
+}
+
+#[test]
+fn external_merges_detect_superscripts_and_union_clips() {
+    // "2" at 6px, raised by 4 (= 40 % of 10px), touching the end of "Hello": a superscript
+    let (d, mut pts, mut ct) = pair("2", 0.0, -4.0, "font-size:6px", r#"clip-path="url(#c2)""#);
+    let mut clips = Vec::new();
+    // give the first element a clip too, so the union is recorded
+    let a = id(&d, "a");
+    let mut d = d;
+    d.set_attr(a, "clip-path", "url(#c1)");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello2");
+    let two = pts[0].chars.iter().find(|c| c.c == '2').unwrap();
+    assert!(close(two.utfs, 6.5) && close(two.bshft, 4.0));
+    assert_eq!(two.sty.get("baseline-shift"), Some("super"));
+    assert_eq!(
+        clips,
+        vec![ClipUnion {
+            target: id(&d, "a"),
+            others: vec![id(&d, "b")]
+        }]
+    );
+
+    // mergesupersub off: no superscript merge
+    let (d, mut pts, mut ct) = pair("2", 0.0, -4.0, "font-size:6px", "");
+    external_merges(&d, &mut pts, &mut ct, true, false, &mut clips);
+    assert_eq!(pts[0].text(), "Hello");
+
+    // a bold superscript candidate does not merge (weight mismatch, RK:446)
+    let (d, mut pts, mut ct) = pair("2", 0.0, -4.0, "font-size:6px;font-weight:bold", "");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello");
+
+    // subscript: "2" lowered so its cap top sits below 1/3 of the line
+    let (d, mut pts, mut ct) = pair("2", 0.0, 2.0, "font-size:6px", "");
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello2");
+    let two = pts[0].chars.iter().find(|c| c.c == '2').unwrap();
+    assert!(close(two.bshft, -2.0));
+    assert_eq!(two.sty.get("baseline-shift"), Some("sub"));
+
+    // "(a)" never takes a sub/superscript (subfigure labels, RK:449)
+    let (d, mut pts, mut ct) = {
+        arena(&format!(
+            r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">(a)</text><text id="b" xml:space="preserve" style="{DV};font-size:6px" x="{}" y="-4">2</text></svg>"#,
+            lefts("(a) ")[3]
+        ))
+    };
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "(a)");
+}
+
+#[test]
+fn clip_union_is_recorded_when_only_one_participant_is_clipped() {
+    let (d, mut pts, mut ct) = pair("world", 1.0, 0.0, "", r#"clip-path="url(#c2)""#);
+    let mut clips = Vec::new();
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello world");
+    assert_eq!(clips.len(), 1);
+    assert_eq!(clips[0].target, id(&d, "a"));
+    assert_eq!(clips[0].others, vec![id(&d, "b")]);
+}

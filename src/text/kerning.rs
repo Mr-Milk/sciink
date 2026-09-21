@@ -7,10 +7,14 @@ use std::collections::{HashMap, HashSet};
 use crate::dom::Doc;
 
 use super::edit::{ChunkRef, Incoming, WType, append_chunks, split_off};
+use super::layout::{angle_deg, chunk_scf, chunk_tfs, chunk_utfs};
 use super::layout::{chunk_mch, chunk_spw, get_ut_pts};
 use super::parse::ParsedText;
+use super::parse::TChar;
 use super::table::CharTable;
-use super::write::ClipUnion;
+use super::write::{ClipUnion, clip_of};
+use crate::geom::intersects;
+use kurbo::Rect;
 
 pub const NUM_SPACES: f64 = 1.0;
 pub const XTOLEXT: f64 = 0.6;
@@ -197,7 +201,15 @@ pub fn perform_merges(
         append_chunks(doc, pts, ct, w, &incoming);
         let target = pts[w.0].el;
         let others: Vec<_> = mels.into_iter().filter(|&e| e != target).collect();
-        if !others.is_empty() {
+        // RK:640–656 runs after every cross-element merge, but when no participant carries a
+        // clip its only action — dropping the target's clip — is a no-op, so nothing is
+        // recorded. **Deviation:** a dangling `clip-path` reference on an otherwise unclipped
+        // set is left alone (upstream would clear the target's).
+        if !others.is_empty()
+            && std::iter::once(target)
+                .chain(others.iter().copied())
+                .any(|e| clip_of(doc, e).is_some())
+        {
             clips.push(ClipUnion { target, others });
         }
     }
@@ -275,4 +287,161 @@ pub fn remove_manual_kerning(
             split_off(pts, pi, &lists);
         }
     }
+}
+
+/// The weight of the face that actually renders `c` (upstream `tsty['font-weight']`).
+fn char_weight(ct: &CharTable, c: &TChar) -> u16 {
+    c.face
+        .map(|f| ct.fonts.face_info(f).weight)
+        .unwrap_or(c.spec.weight)
+}
+
+/// Stage 7 (RK:382–532): every pair of chunks (any elements) with the same rotation whose
+/// bounding boxes come within `spw·scf·1.6` of each other is tested in the first chunk's frame:
+/// the second chunk's start pen must lie within `[br1 − 0.6·spw, br1 + dx + 0.6·spw]`, neither
+/// text may be blank and merging may not create a double space. Then: same baseline (±0.1·mch)
+/// and same transformed size (±1 %) → `Same` (numbers only when the gap is < 0.25 spaces);
+/// otherwise a smaller chunk starting above 1/3 of the cap height → `Super`, a bigger one →
+/// `SubReturn`; a smaller chunk whose cap top sits below 1/3 → `Sub`, a bigger one →
+/// `SuperReturn`. Sub/superscripts need equal font weights and never attach to a "(a)" label.
+pub fn external_merges(
+    doc: &Doc,
+    pts: &mut [ParsedText],
+    ct: &mut CharTable,
+    merge_nearby: bool,
+    merge_supersub: bool,
+    clips: &mut Vec<ClipUnion>,
+) {
+    struct Info {
+        r: ChunkRef,
+        li: usize,
+        ci: usize,
+        bb: Rect,
+        bb_big: Rect,
+        angle: f64,
+    }
+    let mut chks: Vec<Info> = Vec::new();
+    for (pi, pt) in pts.iter().enumerate() {
+        for (li, ci) in pt.chunks() {
+            let corners: Vec<kurbo::Point> = pt.lines[li].chunks[ci]
+                .chars
+                .iter()
+                .filter_map(|&c| pt.parsed_t.get(c).copied().flatten())
+                .flatten()
+                .collect();
+            let Some(first) = corners.first() else {
+                continue;
+            };
+            let bb = corners
+                .iter()
+                .fold(Rect::from_points(*first, *first), |r, p| r.union_pt(*p));
+            let dx = chunk_spw(pt, li, ci) * chunk_scf(pt, li, ci) * (NUM_SPACES + XTOLEXT);
+            chks.push(Info {
+                r: (pi, pt.lines[li].chunks[ci].id),
+                li,
+                ci,
+                bb,
+                bb_big: bb.inflate(dx, dx),
+                angle: angle_deg(pt.transform),
+            });
+        }
+    }
+    let mut cands: Vec<(ChunkRef, Vec<Cand>)> = Vec::with_capacity(chks.len());
+    for (i, w) in chks.iter().enumerate() {
+        let pw = &pts[w.r.0];
+        let wtxt = pw.chunk_text(w.li, w.ci);
+        let spw = chunk_spw(pw, w.li, w.ci);
+        let mch = chunk_mch(pw, w.li, w.ci);
+        let size = |p: &ParsedText, li: usize, ci: usize| -> (f64, f64) {
+            let [a, b, c, d, _, _] = p.transform.as_coeffs();
+            let u = chunk_utfs(p, li, ci);
+            (u * (a * a + b * b).sqrt(), u * (c * c + d * d).sqrt())
+        };
+        let w1fs = size(pw, w.li, w.ci);
+        let wtfs = chunk_tfs(pw, w.li, w.ci);
+        let w_last = &pw.chars[*pw.lines[w.li].chunks[w.ci].chars.last().expect("non-empty")];
+        let letterinpar = {
+            let cs: Vec<char> = wtxt.chars().collect();
+            cs.len() == 3 && cs[0] == '(' && cs[2] == ')' && cs[1].is_ascii_alphabetic()
+        };
+        let mut mw = Vec::new();
+        for (j, w2) in chks.iter().enumerate() {
+            if i == j || (w.angle - w2.angle).abs() >= 0.001 || !intersects(w.bb_big, w2.bb) {
+                continue;
+            }
+            let p2 = &pts[w2.r.0];
+            let w2txt = p2.chunk_text(w2.li, w2.ci);
+            let (trl, ldg) = trailing_leading(&wtxt, &w2txt);
+            let dx = spw * (NUM_SPACES - trl as f64 - ldg as f64);
+            let xtol = XTOLEXT * spw;
+            let ytol = YTOLEXT * mch;
+            let Some([tr1, br1, tl2, bl2]) = get_ut_pts(pw, (w.li, w.ci), p2, (w2.li, w2.ci), true)
+            else {
+                continue;
+            };
+            let xpen = br1.x - xtol <= bl2.x && bl2.x <= br1.x + dx + xtol;
+            let neither_empty = !wstrip(&wtxt).is_empty() && !wstrip(&w2txt).is_empty();
+            if !(xpen && neither_empty && !twospaces(&wtxt, &w2txt)) {
+                continue;
+            }
+            let w2_first = &p2.chars[p2.lines[w2.li].chunks[w2.ci].chars[0]];
+            let weight_match = char_weight(ct, w_last) == char_weight(ct, w2_first);
+            let w2fs = size(p2, w2.li, w2.ci);
+            let w2tfs = chunk_tfs(p2, w2.li, w2.ci);
+            let mut mtype = None;
+            if (bl2.y - br1.y).abs() < ytol
+                && (w1fs.0 - w2fs.0).abs() < FONTSIZE_THR * w1fs.0
+                && (w1fs.1 - w2fs.1).abs() < FONTSIZE_THR * w1fs.1
+                && merge_nearby
+            {
+                if isnumeric(&pw.line_text(w.li), false) && isnumeric(&p2.line_text(w2.li), true) {
+                    if ((bl2.x - br1.x) / spw).abs() < 0.25 {
+                        mtype = Some(MergeType::Same);
+                    }
+                } else {
+                    mtype = Some(MergeType::Same);
+                }
+            } else if br1.y + ytol >= bl2.y
+                && bl2.y >= tr1.y - ytol
+                && merge_supersub
+                && weight_match
+                && !letterinpar
+            {
+                let aboveline =
+                    br1.y * (1.0 - SUBSUPER_YTHR) + tr1.y * SUBSUPER_YTHR + ytol >= bl2.y;
+                if w2tfs < wtfs * SUBSUPER_THR {
+                    if aboveline {
+                        mtype = Some(MergeType::Super);
+                    }
+                } else if wtfs < w2tfs * SUBSUPER_THR {
+                    mtype = Some(MergeType::SubReturn);
+                }
+            } else if br1.y + ytol >= tl2.y
+                && tl2.y >= tr1.y - ytol
+                && merge_supersub
+                && weight_match
+                && !letterinpar
+            {
+                let belowline =
+                    tl2.y >= br1.y * SUBSUPER_YTHR + tr1.y * (1.0 - SUBSUPER_YTHR) - ytol;
+                if w2tfs < wtfs * SUBSUPER_THR {
+                    if belowline {
+                        mtype = Some(MergeType::Sub);
+                    }
+                } else if wtfs < w2tfs * SUBSUPER_THR {
+                    mtype = Some(MergeType::SuperReturn);
+                }
+            }
+            if let Some(m) = mtype {
+                mw.push(Cand {
+                    to: w2.r,
+                    mtype: m,
+                    br1x: br1.x,
+                    bl2x: bl2.x,
+                });
+            }
+        }
+        cands.push((w.r, mw));
+    }
+    perform_merges(doc, pts, ct, &cands, false, clips);
 }
