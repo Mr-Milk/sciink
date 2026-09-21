@@ -305,6 +305,10 @@ pub fn write_clean_text(
             // pre-order: every ancestor whose subtree ended exactly where this element went now
             // ends here (an emptied split-off recorded nothing — keep climbing past it)
             let mut a = pt.split_src;
+            // Invariant: `slot` is the live slot `live_slot` returned. Ancestor slots are compared
+            // against it, so if the fallback ever fired the climb would stop advancing them —
+            // acceptable because the fallback is unreachable from `remove_kerning` (sources are
+            // written before their split-offs).
             while let Some(s) = a {
                 match slots.get(&s) {
                     Some(sl) if *sl == slot => {

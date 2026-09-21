@@ -353,14 +353,26 @@ fn clip_of_reads_the_style_and_gives_up_on_a_dangling_reference() {
     assert_eq!(clip_of(&d, id(&d, "b")), None, "dangling attribute");
     assert_eq!(clip_of(&d, id(&d, "c")), None, "dangling style value");
     assert_eq!(clip_of(&d, id(&d, "d")), None, "no clip at all");
-    // a dangling reference must not make the union clear an existing clip of another element
+    // Executing a union whose other participant holds only a dangling reference follows
+    // RK:640–656: an unresolvable clip counts as "no clip", so the target's own clip is cleared.
+    // (The gate in `perform_merges` only stops such a union from being RECORDED when nobody is
+    // clipped; here the target is.)
+    let mut d2 = Doc::parse(svg.as_bytes()).unwrap();
+    let (a2, b2) = (id(&d2, "a"), id(&d2, "b"));
     apply_clip_unions(
-        &mut Doc::parse(svg.as_bytes()).unwrap(),
+        &mut d2,
         &[ClipUnion {
-            target: id(&d, "a"),
-            others: vec![id(&d, "b")],
+            target: a2,
+            others: vec![b2],
         }],
     );
+    assert_eq!(
+        clip_of(&d2, a2),
+        None,
+        "the target's clip is cleared, as upstream does"
+    );
+    assert!(d2.attr(a2, "clip-path").is_none());
+    assert!(d2.specified_style(a2).get("clip-path").is_none());
 }
 
 #[test]

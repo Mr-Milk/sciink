@@ -485,7 +485,7 @@ fn is_flow(doc: &Doc, el: NodeId) -> bool {
 }
 
 /// Whether `el` carries a `<textPath>` descendant. Such an element is measured (it feeds the char
-/// table and `text_bbox`) but never parsed or edited: its glyphs follow a path, which neither the
+/// table; `text_bbox` reports nothing for it) but never parsed or edited: its glyphs follow a path, which neither the
 /// model nor the writer represents, so regenerating it would drop the path and move every glyph
 /// to the baseline (spec §A.2 "Not handled … `<textPath>` (skip element)").
 fn has_text_path(doc: &Doc, el: NodeId) -> bool {
