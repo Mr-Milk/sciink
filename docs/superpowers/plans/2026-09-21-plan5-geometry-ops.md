@@ -813,7 +813,6 @@ use crate::style::Style;
 use crate::text::style::composed_width;
 
 use super::ClipKind;
-use super::cleanup::url_id;
 
 /// Pushes a group's own declarations under a child's (DH:359–366): the child's inline style
 /// becomes `group_style` overridden by `cascaded(child)`, and opacities multiply.
