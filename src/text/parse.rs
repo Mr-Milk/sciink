@@ -446,6 +446,8 @@ pub struct ParsedText {
     pub any_dx: bool,
     pub any_dy: bool,
     pub origin: Origin,
+    /// Arena index of the model this one was split from (`Origin::SplitFrom`); `None` for a parsed element.
+    pub split_src: Option<usize>,
     /// Per-character corner points frozen by `layout::snapshot_parsed` (stage 3): `[BL, TL, TR, BR]`
     /// in this element's frame and in root coordinates. Index-aligned with `chars`; `None` for
     /// characters created after the snapshot (inserted spaces). Empty until the snapshot is taken.
@@ -502,6 +504,7 @@ impl ParsedText {
             any_dx: false,
             any_dy: false,
             origin: Origin::Existing,
+            split_src: None,
             parsed_ut: Vec::new(),
             parsed_t: Vec::new(),
             transform_extra: Affine::IDENTITY,

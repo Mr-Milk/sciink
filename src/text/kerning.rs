@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use crate::dom::Doc;
 
 use super::edit::{ChunkRef, Incoming, WType, append_chunks, split_off};
+use super::layout::chunk_char_pts;
 use super::layout::{angle_deg, chunk_scf, chunk_tfs, chunk_utfs};
 use super::layout::{chunk_mch, chunk_spw, get_ut_pts};
 use super::parse::ParsedText;
@@ -281,7 +282,7 @@ pub fn remove_manual_kerning(
         let lists: Vec<Vec<usize>> = pts[pi]
             .lines
             .iter()
-            .flat_map(|ln| ln.chunks.iter().skip(1).rev().map(|ch| ch.chars.clone()))
+            .flat_map(|ln| ln.chunks.iter().skip(1).map(|ch| ch.chars.clone()))
             .collect();
         if !lists.is_empty() {
             split_off(pts, pi, &lists);
@@ -444,4 +445,153 @@ pub fn external_merges(
         cands.push((w.r, mw));
     }
     perform_merges(doc, pts, ct, &cands, false, clips);
+}
+
+/// RK:205–253: within each line, sort the chunks by x and split before a chunk whose start pen is
+/// more than one space (+0.5 tolerance, minus existing spaces) past the previous chunk's end pen,
+/// judged on CURRENT positions. Each split range becomes its own element.
+pub fn split_distant_chunks(pts: &mut Vec<ParsedText>) {
+    let n0 = pts.len();
+    for pi in 0..n0 {
+        for li in 0..pts[pi].lines.len() {
+            let n = pts[pi].lines[li].chunks.len();
+            if n < 2 {
+                continue;
+            }
+            let mut sws: Vec<usize> = (0..n).collect();
+            sws.sort_by(|&a, &b| {
+                let (xa, xb) = (pts[pi].lines[li].chunks[a].x, pts[pi].lines[li].chunks[b].x);
+                xa.partial_cmp(&xb).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let mut splits: Vec<usize> = Vec::new();
+            for ii in 1..n {
+                let (a, b) = (sws[ii - 1], sws[ii]);
+                let pt = &pts[pi];
+                let (wtxt, w2txt) = (pt.chunk_text(li, a), pt.chunk_text(li, b));
+                let (trl, ldg) = trailing_leading(&wtxt, &w2txt);
+                let spw = chunk_spw(pt, li, a);
+                let dx = spw * (NUM_SPACES - trl as f64 - ldg as f64);
+                let xtol = XTOLSPLIT * spw;
+                if let Some([_, br1, _, bl2]) = get_ut_pts(pt, (li, a), pt, (li, b), false) {
+                    if bl2.x > br1.x + dx + xtol {
+                        splits.push(ii);
+                    }
+                }
+            }
+            if splits.is_empty() {
+                continue;
+            }
+            let mut lists: Vec<Vec<usize>> = Vec::new();
+            for k in 0..splits.len() {
+                let (sstart, sstop) = (splits[k], splits.get(k + 1).copied().unwrap_or(n));
+                lists.push(
+                    sws[sstart..sstop]
+                        .iter()
+                        .flat_map(|&ci| pts[pi].lines[li].chunks[ci].chars.clone())
+                        .collect(),
+                );
+            }
+            split_off(pts, pi, &lists);
+        }
+    }
+}
+
+/// RK:257–315 (skipped for multi-line Inkscape text and flows): within each chunk, characters in
+/// x order; compare each to the last non-space one and split when the gap exceeds one space
+/// (+0.5), or when a space/hyphen separates two numbers in the same text node (tick labels).
+/// Upstream slices the chunk text by the SORTED index — kept as is.
+pub fn split_distant_intrachunk(pts: &mut Vec<ParsedText>) {
+    let n0 = pts.len();
+    for pi in 0..n0 {
+        if pts[pi].is_ml_inkscape || pts[pi].is_flow {
+            continue;
+        }
+        let ids: Vec<u32> = pts[pi]
+            .chunks()
+            .map(|(l, c)| pts[pi].chunk(l, c).id)
+            .collect();
+        for cid in ids {
+            let Some((li, ci)) = pts[pi].find_chunk(cid) else {
+                continue;
+            };
+            let lists = {
+                let pt = &pts[pi];
+                let ch = &pt.lines[li].chunks[ci];
+                let now = chunk_char_pts(pt, li, ci);
+                let mut order: Vec<usize> = (0..ch.chars.len()).collect();
+                order.sort_by(|&a, &b| {
+                    now[a][0]
+                        .x
+                        .partial_cmp(&now[b][0].x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let txt: Vec<char> = ch.chars.iter().map(|&c| pt.chars[c].c).collect();
+                let spw = chunk_spw(pt, li, ci);
+                let (dx, xtol) = (spw * NUM_SPACES, XTOLSPLIT * spw);
+                let is_space = |c: char| matches!(c, ' ' | '\u{a0}');
+                let mut lastnspc: Option<usize> = (!is_space(txt[order[0]])).then_some(order[0]);
+                let mut splitiis: Vec<usize> = Vec::new();
+                let mut prevsplit = 0usize;
+                for ii in 1..order.len() {
+                    if let Some(cw) = lastnspc {
+                        let c2w = order[ii];
+                        let rest: String = txt[ii..].iter().collect();
+                        let remaining_numeric = rest
+                            .split([' ', '-', '−'])
+                            .find(|s| !s.is_empty())
+                            .is_some_and(|s| isnumeric(s, false));
+                        let seg: String = txt[prevsplit..ii].iter().collect();
+                        let (c, c2) = (&pt.chars[ch.chars[cw]], &pt.chars[ch.chars[c2w]]);
+                        let numbersplit = isnumeric(&seg, false)
+                            && matches!(c2.c, ' ' | '-' | '−')
+                            && remaining_numeric
+                            && c.loc.node == c2.loc.node;
+                        if now[c2w][0].x > now[cw][3].x + dx + xtol || numbersplit {
+                            splitiis.push(ii);
+                            prevsplit = ii;
+                        }
+                    }
+                    if !is_space(txt[order[ii]]) {
+                        lastnspc = Some(order[ii]);
+                    }
+                }
+                let mut lists: Vec<Vec<usize>> = Vec::new();
+                for k in 0..splitiis.len() {
+                    let (sstart, sstop) = (
+                        splitiis[k],
+                        splitiis.get(k + 1).copied().unwrap_or(order.len()),
+                    );
+                    let sel: HashSet<usize> = order[sstart..sstop].iter().copied().collect();
+                    lists.push(
+                        ch.chars
+                            .iter()
+                            .enumerate()
+                            .filter(|(w, _)| sel.contains(w))
+                            .map(|(_, &c)| c)
+                            .collect(),
+                    );
+                }
+                lists
+            };
+            if !lists.is_empty() {
+                split_off(pts, pi, &lists);
+            }
+        }
+    }
+}
+
+/// RK:183–201: every line after the first becomes its own element (not for multi-line Inkscape
+/// text or flows).
+pub fn split_lines(pts: &mut Vec<ParsedText>) {
+    let n0 = pts.len();
+    for pi in 0..n0 {
+        let pt = &pts[pi];
+        if pt.lines.len() < 2 || pt.is_ml_inkscape || pt.is_flow {
+            continue;
+        }
+        let lists: Vec<Vec<usize>> = (1..pt.lines.len())
+            .map(|li| pt.lines[li].chars.clone())
+            .collect();
+        split_off(pts, pi, &lists);
+    }
 }

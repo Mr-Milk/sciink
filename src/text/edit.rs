@@ -653,8 +653,9 @@ pub fn append_chunks(
 /// maximal run of characters that were contiguous within one chunk. Each new element sits at
 /// `x = anfr·max_right + (1−anfr)·min_left` of its run and `y` = its first character's baseline,
 /// copies the source line's anchor/direction/transform, and both the remaining and the new chunks
-/// get `dx`/`dy`/anchor corrections so every glyph stays exactly where it was (P:1404–1431).
-/// Returns the arena indices of the new `ParsedText`s, in creation order.
+/// get `dx`/`dy`/anchor corrections so every glyph stays exactly where it was (P:1404–1431). Each
+/// new model records `split_src = Some(src)`. Returns the arena indices of the new `ParsedText`s,
+/// in creation order.
 pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]) -> Vec<usize> {
     // current (left, right, base) of every character, by index (P:1267)
     let mut before: HashMap<usize, (f64, f64, f64)> = HashMap::new();
@@ -733,6 +734,7 @@ pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]
             any_dx: false,
             any_dy: false,
             origin: Origin::SplitFrom,
+            split_src: Some(src),
             parsed_ut: Vec::new(),
             parsed_t: Vec::new(),
             transform_extra: s.transform_extra,
