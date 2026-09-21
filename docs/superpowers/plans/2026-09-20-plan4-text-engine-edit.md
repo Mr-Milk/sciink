@@ -297,6 +297,10 @@ Add to `ParsedText` (after `any_dy`):
 
 ```rust
     pub origin: Origin,
+    /// Arena index of the model this one was split from (`Origin::SplitFrom`); `None` for a parsed
+    /// element. The writer places split-offs directly after their own source (pre-order), so arena
+    /// order is document order.
+    pub split_src: Option<usize>,
     /// Per-character corner points frozen by `layout::snapshot_parsed` (stage 3): `[BL, TL, TR, BR]`
     /// in this element's frame and in root coordinates. Index-aligned with `chars`; `None` for
     /// characters created after the snapshot (inserted spaces). Empty until the snapshot is taken.
@@ -311,7 +315,7 @@ Add to `ParsedText` (after `any_dy`):
     pub next_chunk_id: u32,
 ```
 
-Add `use kurbo::Point;` (kurbo is a dependency; `crate::geom::Affine` stays). In `ParsedText::parse`, extend the struct literal with `origin: Origin::Existing, parsed_ut: Vec::new(), parsed_t: Vec::new(), transform_extra: Affine::IDENTITY, text_anchor_override: None, text_length_removed: false, next_chunk_id: 0`. In the chunk loop replace the two `TChunk { x: px, y: py, chars: vec![ci] }` constructions with
+Add `use kurbo::Point;` (kurbo is a dependency; `crate::geom::Affine` stays). In `ParsedText::parse`, extend the struct literal with `origin: Origin::Existing, split_src: None, parsed_ut: Vec::new(), parsed_t: Vec::new(), transform_extra: Affine::IDENTITY, text_anchor_override: None, text_length_removed: false, next_chunk_id: 0`. In the chunk loop replace the two `TChunk { x: px, y: py, chars: vec![ci] }` constructions with
 
 ```rust
                     let id = pt.new_chunk_id();
@@ -1832,7 +1836,7 @@ git commit -m "feat(text): append_chunks — merge chunks into a target with spa
 
 **Interfaces:**
 - Consumes: Tasks 1–4 (`Origin::SplitFrom`, `remove_chars` → `new → old` map, `chunk_char_pts`).
-- Produces: `pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]) -> Vec<usize>` — returns the arena indices of the new `ParsedText`s in creation order. Callers pass `chr_lists` in **reverse document order** (as upstream does, RK:197–199, 244–250, 306–312, 371–372); the writer inserts each new element right after its source's replacement, so the final document order is natural.
+- Produces: `pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]) -> Vec<usize>` — returns the arena indices of the new `ParsedText`s in creation order; every new model records `split_src = Some(src)`. Callers pass `chr_lists` in **natural document order**: the writer inserts each split-off directly after its own source's most recently written descendant (pre-order), so arena order is document order. **Deviation** (ruled 2026-09-21): upstream passes reversed lists and `addnext`s every new element on the source (RK:197–199, 244–250, 306–312, 371–372), which emits the runs of one range reversed and cannot place a split-off of a split-off after its own source.
 
 Background: upstream writes the new `<text>` immediately (`chrs_to_textel`, P:1189–1256) and fixes positions on both the remaining and the new chunks (P:1404–1431). Here the new element is only a model (`Origin::SplitFrom`, `el` = the source element whose attributes it will copy); the geometry fix is the same: for each chunk, `err[i] = old_left[i] − new_left[i]`, `Δ[i] = err[i] − err[i−1]` goes into `dx[i]` (i > 0), and the chunk anchor moves by `round((err[0] − (−anfr·ΣΔ[1:]))/XY_TOL)·XY_TOL`; same for `y` with baselines. **Deviation:** upstream skips the anchor shift for a chunk that has no `x` entry of its own in the line list (P:1427); here every chunk owns an `x`, so the shift is always applied (Plan 3 already carries coordinates forward per chunk).
 
@@ -2005,6 +2009,7 @@ pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]
             any_dx: false,
             any_dy: false,
             origin: Origin::SplitFrom,
+            split_src: Some(src),
             parsed_ut: Vec::new(),
             parsed_t: Vec::new(),
             transform_extra: s.transform_extra,
@@ -2655,7 +2660,7 @@ pub fn remove_manual_kerning(doc: &Doc, pts: &mut Vec<ParsedText>, ct: &mut Char
         let lists: Vec<Vec<usize>> = pts[pi]
             .lines
             .iter()
-            .flat_map(|ln| ln.chunks.iter().skip(1).rev().map(|ch| ch.chars.clone()))
+            .flat_map(|ln| ln.chunks.iter().skip(1).map(|ch| ch.chars.clone()))
             .collect();
         if !lists.is_empty() {
             split_off(pts, pi, &lists);
@@ -3070,7 +3075,7 @@ Append to `src/text/kerning.rs` (add `use super::layout::chunk_char_pts;`):
 pub fn split_distant_chunks(pts: &mut Vec<ParsedText>) {
     let n0 = pts.len();
     for pi in 0..n0 {
-        for li in (0..pts[pi].lines.len()).rev() {
+        for li in 0..pts[pi].lines.len() {
             let n = pts[pi].lines[li].chunks.len();
             if n < 2 {
                 continue;
@@ -3099,7 +3104,7 @@ pub fn split_distant_chunks(pts: &mut Vec<ParsedText>) {
                 continue;
             }
             let mut lists: Vec<Vec<usize>> = Vec::new();
-            for k in (0..splits.len()).rev() {
+            for k in 0..splits.len() {
                 let (sstart, sstop) = (splits[k], splits.get(k + 1).copied().unwrap_or(n));
                 lists.push(
                     sws[sstart..sstop]
@@ -3165,7 +3170,7 @@ pub fn split_distant_intrachunk(pts: &mut Vec<ParsedText>) {
                     }
                 }
                 let mut lists: Vec<Vec<usize>> = Vec::new();
-                for k in (0..splitiis.len()).rev() {
+                for k in 0..splitiis.len() {
                     let (sstart, sstop) = (splitiis[k], splitiis.get(k + 1).copied().unwrap_or(order.len()));
                     let sel: HashSet<usize> = order[sstart..sstop].iter().copied().collect();
                     lists.push(
@@ -3195,7 +3200,7 @@ pub fn split_lines(pts: &mut Vec<ParsedText>) {
         if pt.lines.len() < 2 || pt.is_ml_inkscape || pt.is_flow {
             continue;
         }
-        let lists: Vec<Vec<usize>> = (1..pt.lines.len()).rev().map(|li| pt.lines[li].chars.clone()).collect();
+        let lists: Vec<Vec<usize>> = (1..pt.lines.len()).map(|li| pt.lines[li].chars.clone()).collect();
         split_off(pts, pi, &lists);
     }
 }
@@ -3434,11 +3439,11 @@ git commit -m "feat(text): stages 9–11 — justification without motion, stray
 - Consumes: Tasks 1–9; `Doc::{new_element, new_text, insert_after, prepend_child, append_child, detach, attrs, attr, set_attr, remove_attr, set_style_map, set_style, remove_style, specified_style, transform, composed_transform, deep_clone, ensure_id, by_id, children, prev_sibling, parent}`; `style::{Style, default_value}`; `geom::{fmt_transform, inverse, is_identity}`; `layout::chunk_utfs`; `edit::style_eq`.
 - Produces (`text::write`):
   - `pub fn specified_diff(desired: &Style, inherited: &Style) -> Style` (C:206–221)
-  - `#[derive(Debug, Clone, Copy)] pub enum Slot { After(NodeId), FirstIn(NodeId) }` — where a split-off element is inserted once its source has been rewritten or removed.
-  - `pub fn write_clean_text(doc: &mut Doc, pt: &ParsedText, ct: &CharTable, replaced: &mut HashMap<NodeId, Slot>) -> Option<NodeId>` — regenerates one element; `replaced` maps a source element to its replacement's slot and must be shared across one pipeline run (sources are written before their split-offs because `split_off` appends to the arena).
+  - `#[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum Slot { After(NodeId), FirstIn(NodeId) }` — the position after a model's most recently written element or descendant (for an emptied source: after the node that preceded it, or first in its parent).
+  - `pub fn write_clean_text(doc: &mut Doc, pts: &[ParsedText], idx: usize, ct: &CharTable, slots: &mut HashMap<usize, Slot>) -> Option<NodeId>` — regenerates `pts[idx]`; `slots` maps an arena index to the slot after that model's subtree and must be shared across one pipeline run. Models are written in arena order (sources precede their split-offs because `split_off` appends); a split-off is inserted at its nearest recorded ancestor's slot, after which every ancestor slot that pointed there advances — pre-order, so arena order is document order.
   - `pub fn apply_clip_unions(doc: &mut Doc, unions: &[ClipUnion])` (RK:640–656).
 
-Element shape (P:2385–2444): a new `<text xml:space="preserve">` right after the old one (old deleted, **id reused**; a split-off gets a fresh `sciink-N` id and is inserted after its source's replacement); attributes copied except `baseline-shift, shape-inside, direction, style, font-family` (and `textLength`/`lengthAdjust` when stage 2 removed them) — **Deviation:** the per-character lists `x, y, dx, dy, rotate` are not copied either (upstream copies them; SVG applies an ancestor's list to every character its own tspan list does not cover, so a stale `dx` on the `<text>` would shift characters whose tspan `dx` list was trimmed — the `sodipodi:role` branch below writes `x`/`y` explicitly when they are meaningful); style = old local `style` minus `{baseline-shift, shape-inside, direction}` plus `font-family:'<true family of the first character>'` (single-quoted, as upstream's `tsty` is) plus the stage-9 `text-anchor`/`text-align`; `transform` = own transform · `transform_extra` when the latter is not identity. One `<tspan>` per chunk (`make_tspan`, P:3456–3503; chunks with a NaN `y` skipped): `x`, `y`, `dx`/`dy` lists (trailing zeros trimmed, omitted when all zero), style = `specified_diff(first char's sty, tspan's inherited specified style)` + `font-size:<chunk max utfs>` + `text-align` + `text-anchor` − `{line-height, direction, baseline-shift, shape-inside}`; when style, `utfs` or `bshft` changes along the chunk or the first character has `|bshft| > XY_TOL`, one nested `<tspan>` per run with `font-size: round3(utfs/chunk_utfs·100)%` (omitted within 0.001) and `baseline-shift` `super` (bs/utfs ≈ 0.4), `sub` (≈ −0.2) or `round3(bs/utfs·100)%` (omitted when |bs| ≤ 0.001), minus declarations equal to the parent tspan's specified style and minus `{text-align, text-anchor, direction, shape-inside}`. Finally `sodipodi:role="line"` on every tspan plus `font-size:<min utfs>`, `line-height:<step>` (1.25 for one chunk) and `x`/`y` on the `<text>` when all chunk x agree (±0.001) and every y step divided by `max(fsz[i+1], min fsz)` equals the first (±0.001).
+Element shape (P:2385–2444): a new `<text xml:space="preserve">` right after the old one (old deleted, **id reused**; a split-off gets a fresh `sciink-N` id and is inserted directly after its own source's subtree (pre-order)); attributes copied except `baseline-shift, shape-inside, direction, style, font-family` (and `textLength`/`lengthAdjust` when stage 2 removed them) — **Deviation:** the per-character lists `x, y, dx, dy, rotate` are not copied either (upstream copies them; SVG applies an ancestor's list to every character its own tspan list does not cover, so a stale `dx` on the `<text>` would shift characters whose tspan `dx` list was trimmed — the `sodipodi:role` branch below writes `x`/`y` explicitly when they are meaningful); style = old local `style` minus `{baseline-shift, shape-inside, direction}` plus `font-family:'<true family of the first character>'` (single-quoted, as upstream's `tsty` is) plus the stage-9 `text-anchor`/`text-align`; `transform` = own transform · `transform_extra` when the latter is not identity. One `<tspan>` per chunk (`make_tspan`, P:3456–3503; chunks with a NaN `y` skipped): `x`, `y`, `dx`/`dy` lists (trailing zeros trimmed, omitted when all zero), style = `specified_diff(first char's sty, tspan's inherited specified style)` + `font-size:<chunk max utfs>` + `text-align` + `text-anchor` − `{line-height, direction, baseline-shift, shape-inside}`; when style, `utfs` or `bshft` changes along the chunk or the first character has `|bshft| > XY_TOL`, one nested `<tspan>` per run with `font-size: round3(utfs/chunk_utfs·100)%` (omitted within 0.001) and `baseline-shift` `super` (bs/utfs ≈ 0.4), `sub` (≈ −0.2) or `round3(bs/utfs·100)%` (omitted when |bs| ≤ 0.001), minus declarations equal to the parent tspan's specified style and minus `{text-align, text-anchor, direction, shape-inside}`. Finally `sodipodi:role="line"` on every tspan plus `font-size:<min utfs>`, `line-height:<step>` (1.25 for one chunk) and `x`/`y` on the `<text>` when all chunk x agree (±0.001) and every y step divided by `max(fsz[i+1], min fsz)` equals the first (±0.001).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3485,7 +3490,7 @@ fn positions(pts: &[ParsedText]) -> Vec<(char, f64, f64)> {
 }
 fn write_all(d: &mut Doc, pts: &[ParsedText], ct: &CharTable) -> Vec<Option<NodeId>> {
     let mut rep = HashMap::new();
-    pts.iter().map(|pt| write_clean_text(d, pt, ct, &mut rep)).collect()
+    (0..pts.len()).map(|i| write_clean_text(d, pts, i, ct, &mut rep)).collect()
 }
 fn out(d: &Doc) -> String {
     let mut v = Vec::new();
@@ -3694,9 +3699,9 @@ pub struct ClipUnion {
     pub others: Vec<NodeId>,
 }
 
-/// Where a split-off element goes once its source has been rewritten (after the replacement) or
-/// removed (after the node that preceded it, or first in its parent).
-#[derive(Debug, Clone, Copy)]
+/// The position after a model's most recently written element or descendant: where its next
+/// split-off goes. An emptied source records the node that preceded it, or first-in-parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     After(NodeId),
     FirstIn(NodeId),
@@ -3836,10 +3841,12 @@ fn make_tspan(doc: &mut Doc, pt: &ParsedText, li: usize, ci: usize, te: NodeId) 
 /// or `None` when the model has no characters (an existing element is then removed).
 pub fn write_clean_text(
     doc: &mut Doc,
-    pt: &ParsedText,
+    pts: &[ParsedText],
+    idx: usize,
     ct: &CharTable,
-    replaced: &mut HashMap<NodeId, Slot>,
+    slots: &mut HashMap<usize, Slot>,
 ) -> Option<NodeId> {
+    let pt = &pts[idx];
     let old = pt.el;
     if pt.chars.is_empty() {
         if pt.origin == Origin::Existing {
@@ -3848,7 +3855,7 @@ pub fn write_clean_text(
                     Some(p) => Slot::After(p),
                     None => Slot::FirstIn(parent),
                 };
-                replaced.insert(old, slot);
+                slots.insert(idx, slot);
                 doc.detach(old);
             }
         }
@@ -3856,7 +3863,19 @@ pub fn write_clean_text(
     }
     let slot = match pt.origin {
         Origin::Existing => Slot::After(old),
-        Origin::SplitFrom => replaced.get(&old).copied().unwrap_or(Slot::After(old)),
+        Origin::SplitFrom => {
+            // the nearest ancestor that recorded a slot (an emptied split-off records none)
+            let mut a = pt.split_src;
+            let mut found = None;
+            while let Some(s) = a {
+                if let Some(&sl) = slots.get(&s) {
+                    found = Some(sl);
+                    break;
+                }
+                a = pts[s].split_src;
+            }
+            found.unwrap_or(Slot::After(old))
+        }
     };
     let te = doc.new_element("text");
     // upstream's five exclusions plus the per-character lists (see the task description)
@@ -3919,10 +3938,24 @@ pub fn write_clean_text(
                     doc.ensure_id(te);
                 }
             }
-            replaced.insert(old, Slot::After(te));
+            slots.insert(idx, Slot::After(te));
         }
         Origin::SplitFrom => {
             doc.ensure_id(te);
+            slots.insert(idx, Slot::After(te));
+            // pre-order: every ancestor whose subtree ended exactly where this element went now
+            // ends here (an emptied split-off recorded nothing — keep climbing past it)
+            let mut a = pt.split_src;
+            while let Some(s) = a {
+                match slots.get(&s) {
+                    Some(sl) if *sl == slot => {
+                        slots.insert(s, Slot::After(te));
+                    }
+                    Some(_) => break,
+                    None => {}
+                }
+                a = pts[s].split_src;
+            }
         }
     }
     doc.set_style_map(te, &style);
@@ -4412,14 +4445,14 @@ pub fn remove_kerning(
         fix_merge_positions(&mut pts);
     }
     apply_clip_unions(doc, &clips);
-    let mut replaced: HashMap<NodeId, Slot> = HashMap::new();
+    let mut slots: HashMap<usize, Slot> = HashMap::new();
     let mut new_of: HashMap<NodeId, Option<NodeId>> = HashMap::new();
     let mut extra: Vec<NodeId> = Vec::new();
-    for pt in &pts {
-        let n = write_clean_text(doc, pt, &ct, &mut replaced);
-        match pt.origin {
+    for i in 0..pts.len() {
+        let n = write_clean_text(doc, &pts, i, &ct, &mut slots);
+        match pts[i].origin {
             Origin::Existing => {
-                new_of.insert(pt.el, n);
+                new_of.insert(pts[i].el, n);
             }
             Origin::SplitFrom => extra.extend(n),
         }
@@ -4568,11 +4601,11 @@ cargo build --release && dist/dev-install.sh && /Applications/Inkscape.app/Conte
   - `change_alignment` measures every chunk with the old anchor before moving any (upstream mutates the anchor inside its per-chunk loop, P:2785–2787).
   - Merged sub/superscript characters get `bshft = ±0.4/−0.2·host utfs` and `utfs = 0.65·host utfs` in the model at merge time (upstream leaves the model stale until Inkscape re-renders).
   - Inserted spaces carry no parsed points (upstream copies the neighbour's); `split_off` always shifts the chunk anchor (upstream skips chunks without an own `x` entry).
-  - Split-off elements are written in natural document order after their source; emptied elements are removed; `remove_kerning` returns live node ids instead of upstream's stale handles.
+  - Split-off elements are written in creation order directly after their own source (pre-order via `ParsedText.split_src`; upstream `addnext`s every new element on the source, which emits the runs of one range reversed and cannot place a split-off of a split-off after its own source); emptied elements are removed; `remove_kerning` returns live node ids instead of upstream's stale handles.
   - Stage 5 positions the first character of every chunk with the anchor-weighted formula (upstream keeps the old chunk `x`, displacing middle/end-anchored first segments until stage 11).
   - The regenerated `<text>` does not inherit the old element's `x`/`y`/`dx`/`dy`/`rotate` lists (upstream copies every attribute; an ancestor list would re-apply to characters whose tspan list was trimmed); `xmlns:sodipodi` is declared on the root when `sodipodi:role` is written.
   - `perform_merges` records a clip union only when at least one merged element carries a resolvable `clip-path` (upstream RK:640–656 runs after every cross-element merge; for unclipped participants its only action, clearing the target's absent clip, is a no-op); a dangling `clip-path` reference on an otherwise unclipped set is left alone (upstream would clear the target's).
-- §A.4: update the signatures to `remove_kerning(doc: &mut Doc, els: &[NodeId], o: &KerningOptions, fonts: FontSystem, warn: &mut Warnings) -> Vec<NodeId>` and `write_clean_text(doc: &mut Doc, pt: &ParsedText, ct: &CharTable, replaced: &mut HashMap<NodeId, Slot>) -> Option<NodeId>`; note `snapshot_parsed` and `get_ut_pts` live in `text::layout`, the editing primitives in `text::edit`, the stage drivers in `text::kerning`; drop `debug_highlights` from `KerningOptions` (the `text-highlight` tool covers it).
+- §A.4: update the signatures to `remove_kerning(doc: &mut Doc, els: &[NodeId], o: &KerningOptions, fonts: FontSystem, warn: &mut Warnings) -> Vec<NodeId>` and `write_clean_text(doc: &mut Doc, pts: &[ParsedText], idx: usize, ct: &CharTable, slots: &mut HashMap<usize, Slot>) -> Option<NodeId>`; note `snapshot_parsed` and `get_ut_pts` live in `text::layout`, the editing primitives in `text::edit`, the stage drivers in `text::kerning`; drop `debug_highlights` from `KerningOptions` (the `text-highlight` tool covers it).
 
 - [ ] **Step 7: Commit**
 
