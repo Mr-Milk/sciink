@@ -25,10 +25,37 @@ pub struct ClipUnion {
 
 /// The position after a model's most recently written element or descendant: where its next
 /// split-off goes. An emptied source records the node that preceded it, or first-in-parent.
+/// `LastIn` is only produced by `live_slot`'s fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     After(NodeId),
     FirstIn(NodeId),
+    LastIn(NodeId),
+}
+
+/// Whether `n` is still in the document: a node inside a subtree the writer detached has a
+/// parent, so `doc.parent(n).is_some()` is not enough — the chain has to reach the root.
+pub fn attached(doc: &Doc, n: NodeId) -> bool {
+    n == doc.root() || doc.ancestors(n).any(|a| a == doc.root())
+}
+
+/// A slot whose anchor another write has since detached cannot be used: `Doc::insert_after`
+/// panics on it (`expect("anchor must be attached")`) and `prepend_child` would attach the new
+/// element into the detached subtree, where it is silently lost. Fall back to appending into the
+/// nearest ancestor that is still in the document, else the root `<svg>`. `remove_kerning` no
+/// longer feeds the writer a model whose anchor can die (duplicate and nested selections are
+/// dropped before parsing), so this is a guard, not a code path with a behaviour of its own.
+fn live_slot(doc: &Doc, slot: Slot) -> Slot {
+    let anchor = match slot {
+        Slot::After(a) | Slot::FirstIn(a) | Slot::LastIn(a) => a,
+    };
+    if attached(doc, anchor) {
+        return slot;
+    }
+    match doc.ancestors(anchor).find(|&a| attached(doc, a)) {
+        Some(a) => Slot::LastIn(a),
+        None => Slot::LastIn(doc.svg()),
+    }
 }
 
 fn align_of(a: Anchor) -> &'static str {
@@ -204,6 +231,7 @@ pub fn write_clean_text(
             found.unwrap_or(Slot::After(old))
         }
     };
+    let slot = live_slot(doc, slot);
     let te = doc.new_element("text");
     // upstream's five exclusions plus the per-character lists (see the task description)
     const SKIP: [&str; 10] = [
@@ -254,6 +282,7 @@ pub fn write_clean_text(
     match slot {
         Slot::After(a) => doc.insert_after(te, a),
         Slot::FirstIn(p) => doc.prepend_child(p, te),
+        Slot::LastIn(p) => doc.append_child(p, te),
     }
     match pt.origin {
         Origin::Existing => {

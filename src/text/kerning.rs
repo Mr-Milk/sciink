@@ -24,7 +24,7 @@ use super::edit::{make_next_chain, rechunk_absolute, remove_textlength};
 use super::fonts::FontSystem;
 use super::layout::snapshot_parsed;
 use super::parse::Origin;
-use super::write::{Slot, apply_clip_unions, write_clean_text};
+use super::write::{Slot, apply_clip_unions, attached, write_clean_text};
 use crate::dom::NodeId;
 
 pub const NUM_SPACES: f64 = 1.0;
@@ -719,13 +719,34 @@ pub fn remove_kerning(
     fonts: FontSystem,
     warn: &mut Warnings,
 ) -> Vec<NodeId> {
-    let tels: Vec<NodeId> = els
+    // `els` comes from a caller (Plan 6's Flattener calls this directly): it may repeat an
+    // element, and it may hold a `<text>` nested in another `<text>`. Both make two models share
+    // one element, and the second write would then insert after an anchor the first already
+    // detached — silently into the detached subtree, or a panic in `Doc::insert_after`.
+    let mut seen: HashSet<NodeId> = HashSet::new();
+    let uniq: Vec<NodeId> = els.iter().copied().filter(|&e| seen.insert(e)).collect();
+    let cands: Vec<NodeId> = uniq
         .iter()
         .copied()
         .filter(|&e| doc.is_element(e) && matches!(doc.tag(e), "text" | "flowRoot"))
         .collect();
+    let mut tels: Vec<NodeId> = Vec::with_capacity(cands.len());
+    for &e in &cands {
+        if cands
+            .iter()
+            .any(|&o| o != e && doc.ancestors(e).any(|a| a == o))
+        {
+            // the ancestor's parse already absorbed this element's characters
+            warn.push(format!(
+                "{}: nested in another selected text element; not edited",
+                el_name(doc, e)
+            ));
+            continue;
+        }
+        tels.push(e);
+    }
     if tels.is_empty() {
-        return els.to_vec();
+        return uniq;
     }
     let mut ct = CharTable::build(doc, &tels, fonts, warn);
     let mut pts: Vec<ParsedText> = Vec::new();
@@ -799,11 +820,14 @@ pub fn remove_kerning(
         }
     }
     let mut out: Vec<NodeId> = Vec::new();
-    for &e in els {
+    for &e in &uniq {
         match new_of.get(&e) {
             Some(Some(n)) => out.push(*n),
             Some(None) => {}
-            None => out.push(e),
+            // never edited (not a `<text>`, a flow, on a path, or nested in another selection):
+            // returned as it was, unless rewriting an ancestor took it out of the document
+            None if attached(doc, e) => out.push(e),
+            None => {}
         }
     }
     out.extend(extra);

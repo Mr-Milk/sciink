@@ -645,3 +645,56 @@ fn text_on_a_path_is_measured_but_never_edited() {
         "{warns:?}"
     );
 }
+
+/// Every character of every `<text>` in the document, sorted — nothing may be lost.
+fn all_glyphs(svg: &str) -> Vec<char> {
+    let d = roxmltree::Document::parse(svg).unwrap();
+    let mut v: Vec<char> = d
+        .descendants()
+        .filter(|n| n.is_text() && n.ancestors().any(|a| a.has_tag_name("text")))
+        .filter_map(|n| n.text())
+        .flat_map(|t| t.chars().collect::<Vec<_>>())
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+#[test]
+fn duplicate_and_nested_selections_neither_panic_nor_leave_orphans() {
+    // (a) the same element twice: `remove_kerning` is a public API (Plan 6's Flattener calls it
+    //     directly), and two models sharing one `el` made the second write insert after an
+    //     anchor the first had already detached — `Doc::insert_after`'s `expect` fires.
+    let svg = format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">ab</text></svg>"#
+    );
+    let (after, out, attached, _) = run_kerning(&svg, &["t", "t"]);
+    assert_eq!(out.len(), 1, "one element out, not two: {out:?}");
+    assert_eq!(attached, out, "every returned id is still in the tree");
+    assert_eq!(after.matches("<text").count(), 1, "{after}");
+    assert_eq!(all_glyphs(&after), ['a', 'b']);
+
+    // (b) nested <text>: the outer's parse already absorbs the inner's characters, so writing
+    //     both put the new inner element inside the detached old outer subtree — it vanished
+    //     from the document while its id stayed in the result.
+    let svg = format!(
+        r#"<svg {NS}><text id="a" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">outer<text id="b" x="0" y="20">inner</text></text></svg>"#
+    );
+    let (after, out, attached, warns) = run_kerning(&svg, &["a", "b"]);
+    assert_eq!(
+        attached, out,
+        "every returned id is still in the tree:\n{after}"
+    );
+    assert!(!out.is_empty(), "the outer element survives");
+    assert!(
+        warns
+            .iter()
+            .any(|w| w == "b: nested in another selected text element; not edited"),
+        "{warns:?}"
+    );
+    assert_eq!(
+        all_glyphs(&after),
+        all_glyphs(&svg),
+        "no glyph lost:\n{after}"
+    );
+}
