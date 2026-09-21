@@ -4644,10 +4644,10 @@ cargo build --release && dist/dev-install.sh && /Applications/Inkscape.app/Conte
 
 - [ ] **Step 6: Documentation**
 
-`README.md`: add `Text Fix` to the Scientific ▸ Debug list ("runs the Flattener's text pipeline — manual-kerning removal, merges, splits, justification — on the selection; what the Flattener will do to text once it ships").
+`README.md`: add `Text Fix` to the Scientific ▸ Debug list (the existing bullets `Debug ▸ Font Probe` / `Debug ▸ Text Highlight`; the intro sentence "release ships three menu entries, all diagnostic" becomes four) ("runs the Flattener's text pipeline — manual-kerning removal, merges, splits, justification — on the selection; what the Flattener will do to text once it ships").
 
 `docs/spec/01-text-engine.md`:
-- Stage 5 paragraph: replace "Rebuild x/y lists, re-chunk (each dx'd char is now its own chunk, same representation as PDF-import x arrays)" with "Rebuild x/y lists; a coordinate that follows a character without one opens a new **line** (P:886–893), any coordinate opens a new chunk (P:2704–2716); a new line without x continues from the end of the previous line, without y takes the previous line's last y".
+- Stage 5 paragraph (the sentence is hard-wrapped across two lines of the spec, around lines 176–177 — replace the whole sentence, re-wrapping to the file's ~100-column width): replace "Rebuild x/y lists, re-chunk (each dx'd char is now its own chunk, same representation as PDF-import x arrays)" with "Rebuild x/y lists; a coordinate that follows a character without one opens a new **line** (P:886–893), any coordinate opens a new chunk (P:2704–2716); a new line without x continues from the end of the previous line, without y takes the previous line's last y".
 - "Deliberate defensive deviations" — append these bullets:
   - `continue_x`/`continue_y` and stage-5 continuation coordinates are resolved once when the model is built (upstream recomputes them on every access).
   - `change_alignment` measures every chunk with the old anchor before moving any (upstream mutates the anchor inside its per-chunk loop, P:2785–2787).
