@@ -2797,6 +2797,19 @@ fn external_merges_detect_superscripts_and_union_clips() {
     external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
     assert_eq!(pts[0].text(), "(a)");
 }
+
+// Controller ruling (Task 6/7 conflict, 2026-09-21): `perform_merges` records a clip union only when a
+// participant is clipped (RK:640–656 is a no-op for unclipped sets); this pins the gate.
+#[test]
+fn clip_union_is_recorded_when_only_one_participant_is_clipped() {
+    let (d, mut pts, mut ct) = pair("world", 1.0, 0.0, "", r#"clip-path="url(#c2)""#);
+    let mut clips = Vec::new();
+    external_merges(&d, &mut pts, &mut ct, true, true, &mut clips);
+    assert_eq!(pts[0].text(), "Hello world");
+    assert_eq!(clips.len(), 1);
+    assert_eq!(clips[0].target, id(&d, "a"));
+    assert_eq!(clips[0].others, vec![id(&d, "b")]);
+}
 ```
 
 - [ ] **Step 2: Run to verify failure** — `cargo test --test text_kerning external 2>&1 | tail -5`: `external_merges` not found.
