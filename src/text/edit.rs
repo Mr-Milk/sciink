@@ -16,6 +16,7 @@ use super::layout::{
     chunk_char_pts, chunk_geom, dadv, full_extent, transform_pts, unrendered_space,
 };
 use super::parse::{CharLoc, Origin, ParsedText, TChar, TChunk, TLine, TextLengthAdj, XY_TOL};
+use super::style::Anchor;
 use super::style::composed_font_size;
 use super::table::CharTable;
 
@@ -841,4 +842,67 @@ fn fix_positions(pt: &mut ParsedText, old: impl Fn(usize) -> Option<(f64, f64, f
     }
     pt.any_dx = pt.chars.iter().any(|c| c.dx.abs() > XY_TOL);
     pt.any_dy = pt.chars.iter().any(|c| c.dy.abs() > XY_TOL);
+}
+
+/// P:2751–2787 minus the DOM writes: give a line a new anchor while every glyph stays put — each
+/// chunk's new `x` is `(1−anfr)·minx + anfr·maxx` of its current box (an unrendered trailing space
+/// of the line's last chunk does not count). All boxes are measured with the OLD anchor first.
+pub fn change_alignment(pt: &mut ParsedText, li: usize, newanch: Anchor) {
+    if pt.lines[li].spec.anchor == newanch {
+        return;
+    }
+    let anfr = newanch.anfr();
+    let last = *pt.lines[li].chars.last().expect("non-empty line");
+    let mut newx = Vec::with_capacity(pt.lines[li].chunks.len());
+    for ci in 0..pt.lines[li].chunks.len() {
+        let g = chunk_geom(pt, li, ci);
+        let minx = g.pts_ut.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+        let mut maxx = g
+            .pts_ut
+            .iter()
+            .map(|p| p.x)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if unrendered_space(pt, li, ci) && pt.lines[li].chunks[ci].chars.contains(&last) {
+            maxx -= pt.chars[last].cwd;
+        }
+        newx.push((1.0 - anfr) * minx + anfr * maxx);
+    }
+    let ln = &mut pt.lines[li];
+    for (ci, x) in newx.into_iter().enumerate() {
+        ln.chunks[ci].x = x;
+    }
+    ln.spec.anchor = newanch;
+    ln.spec.continue_x = false;
+    ln.spec.sprl = false;
+    ln.spec.x = ln.chunks.iter().map(|c| Some(c.x)).collect();
+}
+
+/// P:3505–3529: after merges (and with the final anchor set), move the chunk so the anchor of its
+/// non-space characters is back where the parsed positions had it.
+pub fn fix_merged_position(pt: &mut ParsedText, li: usize, ci: usize) {
+    let now = chunk_char_pts(pt, li, ci);
+    let anfr = pt.lines[li].spec.anchor.anfr();
+    let (mut omin, mut omax) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut nmin, mut nmax) = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut any = false;
+    for (wi, &c) in pt.lines[li].chunks[ci].chars.iter().enumerate() {
+        if pt.chars[c].c == ' ' {
+            continue;
+        }
+        let Some(p) = pt.parsed_ut.get(c).copied().flatten() else {
+            continue;
+        };
+        any = true;
+        omin = omin.min(p[0].x);
+        omax = omax.max(p[3].x);
+        nmin = nmin.min(now[wi][0].x);
+        nmax = nmax.max(now[wi][3].x);
+    }
+    if !any {
+        return;
+    }
+    let delta = (nmin * (1.0 - anfr) + nmax * anfr) - (omin * (1.0 - anfr) + omax * anfr);
+    if delta.abs() > XY_TOL {
+        pt.lines[li].chunks[ci].x -= delta;
+    }
 }

@@ -7,11 +7,13 @@ use std::collections::{HashMap, HashSet};
 use crate::dom::Doc;
 
 use super::edit::{ChunkRef, Incoming, WType, append_chunks, split_off};
+use super::edit::{change_alignment, delete_char, fix_merged_position};
 use super::layout::chunk_char_pts;
 use super::layout::{angle_deg, chunk_scf, chunk_tfs, chunk_utfs};
 use super::layout::{chunk_mch, chunk_spw, get_ut_pts};
 use super::parse::ParsedText;
 use super::parse::TChar;
+use super::style::Anchor;
 use super::table::CharTable;
 use super::write::{ClipUnion, clip_of};
 use crate::geom::intersects;
@@ -593,5 +595,66 @@ pub fn split_lines(pts: &mut Vec<ParsedText>) {
             .map(|li| pt.lines[li].chars.clone())
             .collect();
         split_off(pts, pi, &lists);
+    }
+}
+
+/// Stage 9 (RK:167–179): re-anchor every line of every element (not multi-line Inkscape text or
+/// flows) and remember to write `text-anchor`/`text-align` on the `<text>` itself.
+pub fn change_justification(pts: &mut [ParsedText], j: Option<Anchor>) {
+    let Some(a) = j else {
+        return;
+    };
+    for pt in pts.iter_mut() {
+        if pt.is_ml_inkscape || pt.is_flow {
+            continue;
+        }
+        for li in 0..pt.lines.len() {
+            change_alignment(pt, li, a);
+        }
+        pt.text_anchor_override = Some(a);
+    }
+}
+
+/// Stage 10 (RK:139–159): delete trailing, then leading `' '` characters of every line (not
+/// multi-line Inkscape text or flows). Returns whether anything was removed.
+pub fn remove_trailing_leading_spaces(pts: &mut [ParsedText]) -> bool {
+    let mut removed = false;
+    for pt in pts.iter_mut() {
+        if pt.is_ml_inkscape || pt.is_flow {
+            continue;
+        }
+        let mut li = 0;
+        while li < pt.lines.len() {
+            let n_before = pt.lines.len();
+            while let Some(&last) = pt.lines.get(li).and_then(|l| l.chars.last()) {
+                if pt.chars[last].c != ' ' || pt.lines.len() < n_before {
+                    break;
+                }
+                delete_char(pt, last);
+                removed = true;
+            }
+            while let Some(&first) = pt.lines.get(li).and_then(|l| l.chars.first()) {
+                if pt.chars[first].c != ' ' || pt.lines.len() < n_before {
+                    break;
+                }
+                delete_char(pt, first);
+                removed = true;
+            }
+            if pt.lines.len() == n_before {
+                li += 1; // otherwise the line vanished and `li` already names the next one
+            }
+        }
+    }
+    removed
+}
+
+/// Stage 11 (RK:132–136).
+pub fn fix_merge_positions(pts: &mut [ParsedText]) {
+    for pt in pts.iter_mut() {
+        for li in 0..pt.lines.len() {
+            for ci in 0..pt.lines[li].chunks.len() {
+                fix_merged_position(pt, li, ci);
+            }
+        }
     }
 }

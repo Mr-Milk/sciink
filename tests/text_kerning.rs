@@ -542,3 +542,64 @@ fn distant_characters_inside_a_chunk_split_including_tick_numbers() {
     split_distant_intrachunk(&mut pts);
     assert_eq!(pts.len(), 1);
 }
+
+use sciink::text::kerning::{
+    change_justification, fix_merge_positions, remove_trailing_leading_spaces,
+};
+use sciink::text::style::Anchor;
+
+#[test]
+fn justification_changes_anchor_without_moving_glyphs() {
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0 40" y="0">ab cd </text></svg>"#
+    ));
+    let before = all_positions(&pts);
+    change_justification(&mut pts, Some(Anchor::Middle));
+    assert_eq!(pts[0].lines[0].spec.anchor, Anchor::Middle);
+    assert_eq!(pts[0].text_anchor_override, Some(Anchor::Middle));
+    assert_same(&before, &all_positions(&pts), 1e-6);
+    // x="0 40" positions the 1st and 2nd characters, so the chunks are "a" and "b cd ": the second
+    // chunk's new anchor is the centre of "b cd" — its trailing unrendered space does not count
+    let g = chunk_geom(&pts[0], 0, 1);
+    assert_eq!(pts[0].chunk_text(0, 1), "b cd ");
+    assert!(
+        close(pts[0].lines[0].chunks[1].x, 0.5 * (g.left[0] + g.right[3])),
+        "{}",
+        pts[0].lines[0].chunks[1].x
+    );
+    // None → untouched
+    let (_d, mut pts2, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" style="{DV};font-size:10px" x="0" y="0">ab</text></svg>"#
+    ));
+    change_justification(&mut pts2, None);
+    assert_eq!(pts2[0].text_anchor_override, None);
+    assert_eq!(pts2[0].lines[0].spec.anchor, Anchor::Start);
+}
+
+#[test]
+fn stray_spaces_go_and_positions_stay() {
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:end" x="80" y="0">  ab  <tspan x="0" y="20">   </tspan></text></svg>"#
+    ));
+    let before = all_positions(&pts);
+    assert!(remove_trailing_leading_spaces(&mut pts));
+    assert_eq!(pts[0].text(), "ab");
+    assert_eq!(pts[0].lines.len(), 1, "an all-space line disappears");
+    assert_same(&before, &all_positions(&pts), 1e-6);
+    assert!(
+        !remove_trailing_leading_spaces(&mut pts),
+        "nothing left to remove"
+    );
+}
+
+#[test]
+fn fix_merge_positions_restores_the_parsed_anchor() {
+    let (_d, mut pts, _) = arena(&format!(
+        r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="50" y="0">abc</text></svg>"#
+    ));
+    let before = all_positions(&pts);
+    pts[0].lines[0].chunks[0].x += 3.0; // simulate drift left behind by a merge
+    fix_merge_positions(&mut pts);
+    assert_same(&before, &all_positions(&pts), 1e-9);
+    assert!(close(pts[0].lines[0].chunks[0].x, 50.0));
+}
