@@ -263,6 +263,12 @@ Skip ismlinkscape/flow/None. Per line with `newanch ≠ anchor`: per chunk `minx
 anfr_new·maxx`; set chunk x, anchor, `text-anchor`/`text-align` (`middle`→`center`) on the chunk's first-char
 element and on `<text>` (RK:175–178).
 
+Appearance-preserving only while `dx[0] == 0`: the box it re-anchors on is `chunk_geom`'s, whose
+`lx2 = min(left) − dx[0] − dxlsp[0]` (P:3640), so a chunk with a nonzero leading `dx` moves by
+`−anfr·dx[0]`. Upstream does exactly the same. Stage 5 leaves no `dx` behind, so this only shows when
+justification runs without it (`removemanual=false`) — measured: `--justification=4`→`=1` alone moves 58
+glyphs on `Text_tests.svg`, each by a constant per-chunk offset.
+
 ### Stage 10 — `Remove_Trailing_Leading_Spaces` (RK:139–159), skip ismlinkscape/flow
 Delete trailing then leading `' '` chars of each line. Deleting a char (P:4029–4118) shifts the chunk anchor
 so the rest stays: `cwo = cwd + (dko1 + dko2 − dkn) + dx + (windex≠0 ? lsp : 0)`; `cwo = tdk` if it was the
@@ -359,7 +365,10 @@ than the Python — a future parity reviewer must not "correct" them back:
   chunk anchor (upstream skips chunks without an own `x` entry).
 - Split-off elements are written in creation order directly after their own source (pre-order via
   `ParsedText.split_src`; upstream `addnext`s every new element on the source, which emits the runs of one
-  range reversed and cannot place a split-off of a split-off after its own source); emptied elements are
+  range reversed and cannot place a split-off of a split-off after its own source); for the same reason
+  `split_distant_chunks` iterates its lines forward where upstream uses `reversed(range(len(lns)))`
+  (RK:208) and `split_lines` builds its lists forward where upstream reverses (RK:197) — harmless because
+  neither stage ever prunes a line, so line indices stay valid across the splits; emptied elements are
   removed; `remove_kerning` returns live node ids instead of upstream's stale handles.
 - Stage 5 positions the first character of every chunk with the anchor-weighted formula (upstream keeps
   the old chunk `x`, displacing middle/end-anchored first segments until stage 11).
