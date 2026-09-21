@@ -298,3 +298,39 @@ fn clip_unions_duplicate_and_transform_or_drop() {
     );
     assert_eq!(d.attr(b, "clip-path"), None);
 }
+
+#[test]
+fn writer_places_a_split_off_of_a_split_off_after_its_own_source() {
+    // The ordering ruling (spec: "a split-off of a split-off after its own source, pre-order")
+    // exists for exactly this shape, and upstream's `addnext` gets it wrong.
+    let svg = format!(
+        r#"<svg {NS}><g id="g"><rect id="r"/><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">abcdef</text><rect id="s"/></g></svg>"#
+    );
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let (mut pts, ct) = arena(&mut d);
+    assert_eq!(split_off(&mut pts, 0, &[vec![2, 3, 4, 5]]), [1]); // "cdef" leaves t
+    assert_eq!(split_off(&mut pts, 1, &[vec![1]]), [2]); // "d" leaves the split-off …
+    assert_eq!(split_off(&mut pts, 1, &[vec![1]]), [3]); // … and so does "e"
+    assert_eq!(
+        pts.iter().map(|p| p.text()).collect::<Vec<_>>(),
+        ["ab", "cf", "d", "e"]
+    );
+    assert_eq!((pts[2].split_src, pts[3].split_src), (Some(1), Some(1)));
+    let res = write_all(&mut d, &pts, &ct);
+    assert!(res.iter().all(|r| r.is_some()), "{res:?}");
+    let order: Vec<String> = d
+        .children(id(&d, "g"))
+        .filter(|&n| d.is_element(n))
+        .map(|n| match d.tag(n) {
+            "text" => d.text_content(n),
+            t => t.to_string(),
+        })
+        .collect();
+    // "d" after its own source "cf" (not after "ab"), and "e" after "d": the second split-off of
+    // "cf" only lands there because writing "d" advanced its source's slot.
+    assert_eq!(
+        order,
+        ["rect", "ab", "cf", "d", "e", "rect"],
+        "source, split, split-of-split"
+    );
+}
