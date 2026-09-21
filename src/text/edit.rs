@@ -152,7 +152,9 @@ pub fn remove_textlength(pt: &mut ParsedText) {
         }
         TextLengthAdj::Spacing(_) => {
             for c in pt.chars.iter_mut() {
-                let lsp = num::fmt(c.lsp);
+                // `px`, not upstream's bare number: a unitless CSS length is invalid and browsers
+                // drop the declaration (spec §A.1 stage 12, "deliberate defensive deviations")
+                let lsp = format!("{}px", num::fmt(c.lsp));
                 if c.sty.get("letter-spacing") != Some(lsp.as_str()) {
                     let mut s = (*c.sty).clone();
                     s.set("letter-spacing", &lsp);

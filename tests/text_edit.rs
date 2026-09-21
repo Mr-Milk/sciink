@@ -237,7 +237,8 @@ fn remove_textlength_restores_widths_and_records_the_transform() {
     assert_pos(&positions(&pt), &before);
     assert_eq!(
         pt.chars[0].sty.get("letter-spacing"),
-        Some(sciink::num::fmt(lsp).as_str())
+        Some(format!("{}px", sciink::num::fmt(lsp)).as_str()),
+        "a CSS length needs a unit"
     );
     assert!(sciink::geom::is_identity(pt.transform_extra));
 

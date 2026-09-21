@@ -287,7 +287,10 @@ text-anchor, direction, shape-inside}`. Finally, if all chunk x's are equal and 
 `max(fsz[i+1], min fsz)` are all equal (tol 0.001): `<text>` gets `font-size:<min utfs>`,
 `line-height:<(y1−y0)/max(fsz1,min)>` (1.25 for a single line), first chunk's x/y, and every tspan gets
 `sodipodi:role="line"` — so Inkscape's on-load re-layout reproduces the same y's. Numbers: round to 1e-6,
-shortest repr, `-0` → `0` (P:4749–4757).
+shortest repr, `-0` → `0` (P:4749–4757); emitted **lengths** carry their unit — `font-size` (on the `<text>`
+and on every chunk `<tspan>`) and `letter-spacing` (stage 2) are written as `<number>px`, where upstream
+writes a bare number (see "Deliberate defensive deviations"). Ratios and percentages are unitless as before:
+`line-height`, and the nested-tspan `font-size: …%`.
 
 ### Sub/superscripts summary
 Detected geometrically in stage 7; represented as `TChar.bshft` (uu) + `TChar.utfs`; written as nested
@@ -363,6 +366,10 @@ than the Python — a future parity reviewer must not "correct" them back:
 - The regenerated `<text>` does not inherit the old element's `x`/`y`/`dx`/`dy`/`rotate` lists (upstream
   copies every attribute; an ancestor list would re-apply to characters whose tspan list was trimmed);
   `xmlns:sodipodi` is declared on the root when `sodipodi:role` is written.
+- Emitted `font-size` and `letter-spacing` carry `px` (`write.rs` `make_tspan` + the `role="line"` block,
+  `edit.rs` `remove_textlength`); upstream writes `str(self.utfs)`, an invalid unitless CSS length that
+  Chrome and Firefox drop — the whole element then renders at the inherited/initial 16 px. Inkscape and
+  librsvg are lenient, so this changes nothing in Inkscape and fixes the browser case.
 - `perform_merges` records a clip union only when at least one merged element carries a resolvable
   `clip-path` (upstream RK:640–656 runs after every cross-element merge; for unclipped participants its
   only action, clearing the target's absent clip, is a no-op); a dangling `clip-path` reference on an

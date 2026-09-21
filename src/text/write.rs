@@ -142,7 +142,10 @@ fn make_tspan(doc: &mut Doc, pt: &ParsedText, li: usize, ci: usize, te: NodeId) 
     let chars: Vec<char> = cs.iter().map(|c| c.c).collect();
     let inherited = doc.specified_style(ts);
     let mut st = specified_diff(&cs[0].sty, &inherited);
-    st.set("font-size", &num::fmt(utfs));
+    // **Deviation:** `px`, where upstream writes a bare number (P:3483). A unitless CSS length is
+    // invalid, so browsers drop the declaration and the text falls back to 16 px; Inkscape and
+    // librsvg are lenient. See spec §A.1 stage 12.
+    st.set("font-size", &format!("{}px", num::fmt(utfs)));
     st.set("text-align", align_of(ln.spec.anchor));
     st.set("text-anchor", ln.spec.anchor.css());
     for k in ["line-height", "direction", "baseline-shift", "shape-inside"] {
@@ -336,7 +339,7 @@ pub fn write_clean_text(
         if same_x && same_step {
             let lh = if ys.len() > 1 { step(0) } else { 1.25 };
             ensure_sodipodi_ns(doc);
-            doc.set_style(te, "font-size", &num::fmt(tefsz));
+            doc.set_style(te, "font-size", &format!("{}px", num::fmt(tefsz)));
             doc.set_style(te, "line-height", &num::fmt(lh));
             doc.set_attr(te, "x", num::fmt(xs[0]));
             doc.set_attr(te, "y", num::fmt(ys[0]));

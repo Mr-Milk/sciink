@@ -113,7 +113,7 @@ fn writer_regenerates_a_clean_element_that_reparses_to_the_same_positions() {
     assert_eq!(d.attr(tspans[0], "x"), Some("0"));
     assert_eq!(d.attr(tspans[1], "y"), Some("20"));
     let s0 = Style::parse(d.attr(tspans[0], "style").unwrap());
-    assert_eq!(s0.get("font-size"), Some("10"));
+    assert_eq!(s0.get("font-size"), Some("10px"));
     assert_eq!(
         (s0.get("text-anchor"), s0.get("text-align")),
         (Some("start"), Some("start"))
@@ -139,7 +139,7 @@ fn writer_regenerates_a_clean_element_that_reparses_to_the_same_positions() {
             .all(|&t| d.attr(t, "sodipodi:role") == Some("line"))
     );
     assert_eq!((d.attr(te, "x"), d.attr(te, "y")), (Some("0"), Some("0")));
-    assert_eq!(st.get("font-size"), Some("10"));
+    assert_eq!(st.get("font-size"), Some("10px"));
     assert_eq!(st.get("line-height"), Some("2"));
     // appearance: re-parse the written document
     let s = out(&d);
