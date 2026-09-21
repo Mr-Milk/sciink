@@ -451,7 +451,7 @@ fn rechunk_absolute_y_only_chunks_carry_x_and_continue_lines_read_the_last_chunk
 
 use kurbo::Point;
 use sciink::text::edit::{Incoming, WType, append_chunks};
-use sciink::text::layout::{chunk_geom, snapshot_parsed};
+use sciink::text::layout::{chunk_char_pts, chunk_geom, snapshot_parsed};
 
 /// Two <text> elements, the second placed `gap_spaces` space-widths after the first.
 fn two_texts(gap_spaces: f64, second_style: &str) -> (Doc, Vec<ParsedText>, CharTable) {
@@ -736,4 +736,100 @@ fn append_chunks_host_follows_upstream_for_nested_and_shallow_chunk_ends() {
     assert_eq!((o.loc.node, o.loc.tail), (id(&d, "s"), true));
     assert_eq!(sel(&d, &o.loc), id(&d, "a"));
     assert!(close(o.utfs, 10.0));
+}
+
+use sciink::text::edit::split_off;
+use sciink::text::parse::Origin;
+
+#[test]
+fn split_off_makes_positioned_elements_and_leaves_no_glyph_behind() {
+    // one chunk "ab cd": split "cd" off → new element at c's left edge, everything stays put
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><g transform="translate(3,4)"><text id="t" xml:space="preserve" style="{DV};font-size:10px" x="10" y="20" class="k">ab cd</text></g></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (pt, _) = parsed(&mut d, "t");
+    let mut pts = vec![pt];
+    snapshot_parsed(&mut pts[0]);
+    let before = all_positions(&pts);
+    let c_left = chunk_char_pts(&pts[0], 0, 0)[3][0].x;
+    let news = split_off(&mut pts, 0, &[vec![3, 4]]);
+    assert_eq!(news, [1]);
+    assert_eq!(pts[0].text(), "ab ");
+    assert_eq!(pts[1].text(), "cd");
+    assert_eq!(pts[1].origin, Origin::SplitFrom);
+    assert_eq!(pts[1].el, pts[0].el, "remembers the element it came from");
+    assert_eq!(pts[1].transform, pts[0].transform);
+    assert_eq!(pts[1].lines.len(), 1);
+    assert_eq!(pts[1].lines[0].chunks.len(), 1);
+    assert!(close(pts[1].lines[0].chunks[0].x, c_left) && close(pts[1].lines[0].chunks[0].y, 20.0));
+    assert_eq!(pts[1].lines[0].spec.anchor, pts[0].lines[0].spec.anchor);
+    assert_eq!(
+        pts[1].parsed_ut.len(),
+        2,
+        "snapshots travel with the characters"
+    );
+    let after = all_positions(&pts);
+    for (b, a) in before.iter().zip(&after) {
+        assert!(
+            (b.1 - a.1).abs() < 1e-6 && (b.2 - a.2).abs() < 1e-6,
+            "{b:?} vs {a:?}"
+        );
+    }
+
+    // non-contiguous characters become separate runs; the survivors are re-spaced with dx
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:end" x="80" y="0">abcde</text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (pt, _) = parsed(&mut d, "t");
+    let mut pts = vec![pt];
+    let before = all_positions(&pts);
+    let news = split_off(&mut pts, 0, &[vec![1, 3]]); // 'b' and 'd'
+    assert_eq!(news, [1, 2]);
+    assert_eq!(pts[0].text(), "ace");
+    assert_eq!((pts[1].text().as_str(), pts[2].text().as_str()), ("b", "d"));
+    assert!(
+        pts[0].chars[1].dx.abs() > 1e-6,
+        "c keeps its place through dx"
+    );
+    assert!(pts[0].any_dx);
+    let after = all_positions(&pts);
+    for (b, a) in before.iter().zip(&after) {
+        assert!(
+            (b.1 - a.1).abs() < 1e-6 && (b.2 - a.2).abs() < 1e-6,
+            "{b:?} vs {a:?}"
+        );
+    }
+
+    // several lists keep their order; a whole chunk leaving a two-chunk line leaves one chunk
+    let mut d = Doc::parse(
+        format!(r#"<svg {NS}><text id="t" xml:space="preserve" style="{DV};font-size:10px;text-anchor:middle" x="0 50" y="0 0">ab<tspan x="0" y="30">cd</tspan></text></svg>"#).as_bytes(),
+    )
+    .unwrap();
+    let (pt, _) = parsed(&mut d, "t");
+    let mut pts = vec![pt];
+    let before = all_positions(&pts);
+    let line2: Vec<usize> = pts[0].lines[1].chars.clone();
+    let chunk_b: Vec<usize> = pts[0].lines[0].chunks[1].chars.clone();
+    let news = split_off(&mut pts, 0, &[line2, chunk_b]);
+    assert_eq!(news, [1, 2]);
+    assert_eq!(pts[1].text(), "cd");
+    assert_eq!(pts[2].text(), "b");
+    assert_eq!(pts[0].lines.len(), 1);
+    assert_eq!(pts[0].lines[0].chunks.len(), 1);
+    assert_eq!(pts[0].text(), "a");
+    let after = all_positions(&pts);
+    for (b, a) in before.iter().zip(&after) {
+        assert!(
+            (b.1 - a.1).abs() < 1e-6 && (b.2 - a.2).abs() < 1e-6,
+            "{b:?} vs {a:?}"
+        );
+    }
+    // middle anchor: the new element's x is the centre of its run
+    let g = chunk_geom(&pts[1], 0, 0);
+    assert!(close(
+        pts[1].lines[0].chunks[0].x,
+        0.5 * (g.left[0] + g.right[1])
+    ));
 }

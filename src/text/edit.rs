@@ -2,7 +2,7 @@
 //! built from). Everything here edits the `ParsedText` model only; the DOM is written once, later,
 //! by `text::write`. Upstream refs: parser.py (P:…) unless noted.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use kurbo::Affine;
@@ -12,8 +12,10 @@ use crate::geom::inverse;
 use crate::num;
 use crate::style::Style;
 
-use super::layout::{chunk_geom, dadv, full_extent, transform_pts, unrendered_space};
-use super::parse::{CharLoc, ParsedText, TChar, TextLengthAdj, XY_TOL};
+use super::layout::{
+    chunk_char_pts, chunk_geom, dadv, full_extent, transform_pts, unrendered_space,
+};
+use super::parse::{CharLoc, Origin, ParsedText, TChar, TChunk, TLine, TextLengthAdj, XY_TOL};
 use super::style::composed_font_size;
 use super::table::CharTable;
 
@@ -644,4 +646,197 @@ pub fn append_chunks(
         pt.lines[tli].chunks[tci].x += anfr * sum_wd;
     }
     reindex(pt);
+}
+
+/// P:1258–1440 (`split_off_characters`) minus the XML half: the requested characters leave this
+/// element and become new `ParsedText`s (`Origin::SplitFrom`, one line, one chunk each), one per
+/// maximal run of characters that were contiguous within one chunk. Each new element sits at
+/// `x = anfr·max_right + (1−anfr)·min_left` of its run and `y` = its first character's baseline,
+/// copies the source line's anchor/direction/transform, and both the remaining and the new chunks
+/// get `dx`/`dy`/anchor corrections so every glyph stays exactly where it was (P:1404–1431).
+/// Returns the arena indices of the new `ParsedText`s, in creation order.
+pub fn split_off(pts: &mut Vec<ParsedText>, src: usize, chr_lists: &[Vec<usize>]) -> Vec<usize> {
+    // current (left, right, base) of every character, by index (P:1267)
+    let mut before: HashMap<usize, (f64, f64, f64)> = HashMap::new();
+    for li in 0..pts[src].lines.len() {
+        for ci in 0..pts[src].lines[li].chunks.len() {
+            let p = chunk_char_pts(&pts[src], li, ci);
+            for (wi, &c) in pts[src].lines[li].chunks[ci].chars.iter().enumerate() {
+                before.insert(c, (p[wi][0].x, p[wi][3].x, p[wi][0].y));
+            }
+        }
+    }
+    // runs (P:1158–1187): bucket by chunk in first-seen order, sort by windex, cut where windex jumps
+    let mut runs: Vec<Vec<usize>> = Vec::new();
+    for list in chr_lists {
+        let mut order: Vec<(usize, usize)> = Vec::new();
+        let mut by: HashMap<(usize, usize), Vec<usize>> = HashMap::new();
+        for &c in list {
+            let k = (pts[src].chars[c].line, pts[src].chars[c].chunk);
+            if !by.contains_key(&k) {
+                order.push(k);
+            }
+            by.entry(k).or_default().push(c);
+        }
+        for k in order {
+            let mut cs = by.remove(&k).unwrap_or_default();
+            cs.sort_by_key(|&c| pts[src].chars[c].windex);
+            let mut run: Vec<usize> = Vec::new();
+            for &c in &cs {
+                if let Some(&p) = run.last() {
+                    if pts[src].chars[c].windex != pts[src].chars[p].windex + 1 {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                }
+                run.push(c);
+            }
+            if !run.is_empty() {
+                runs.push(run);
+            }
+        }
+    }
+    // one new ParsedText per run (P:1189–1256, P:1380–1402)
+    let mut news: Vec<(usize, Vec<usize>)> = Vec::new();
+    for run in &runs {
+        let s = &pts[src];
+        let f = &s.chars[run[0]];
+        let ln = &s.lines[f.line];
+        let anfr = ln.spec.anchor.anfr();
+        let minx = run
+            .iter()
+            .map(|c| before[c].0)
+            .fold(f64::INFINITY, f64::min);
+        let maxx = run
+            .iter()
+            .map(|c| before[c].1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let xv = anfr * maxx + (1.0 - anfr) * minx;
+        let yv = before[&run[0]].2;
+        let mut spec = ln.spec.clone();
+        spec.x = vec![Some(xv)];
+        spec.y = vec![Some(yv)];
+        spec.sprl = false;
+        spec.continue_x = false;
+        spec.continue_y = false;
+        spec.style_node = f.loc.node;
+        spec.first_run = 0;
+        let snap = !s.parsed_ut.is_empty();
+        let mut np = ParsedText {
+            el: s.el,
+            transform: s.transform,
+            chars: Vec::with_capacity(run.len()),
+            lines: Vec::new(),
+            is_flow: false,
+            is_inkscape: s.is_inkscape,
+            is_ml_inkscape: s.is_ml_inkscape,
+            text_length: None,
+            any_dx: false,
+            any_dy: false,
+            origin: Origin::SplitFrom,
+            parsed_ut: Vec::new(),
+            parsed_t: Vec::new(),
+            transform_extra: s.transform_extra,
+            text_anchor_override: None,
+            text_length_removed: s.text_length_removed,
+            next_chunk_id: 0,
+        };
+        let mut idx = Vec::with_capacity(run.len());
+        for (i, &c) in run.iter().enumerate() {
+            let mut tc = s.chars[c].clone();
+            tc.line = 0;
+            tc.chunk = 0;
+            tc.windex = i;
+            np.chars.push(tc);
+            if snap {
+                np.parsed_ut.push(s.parsed_ut.get(c).copied().flatten());
+                np.parsed_t.push(s.parsed_t.get(c).copied().flatten());
+            }
+            idx.push(i);
+        }
+        let id = np.new_chunk_id();
+        np.lines.push(TLine {
+            spec,
+            style: f.sty.clone(),
+            chars: idx.clone(),
+            chunks: vec![TChunk {
+                id,
+                x: xv,
+                y: yv,
+                chars: idx,
+                next: None,
+                prev: None,
+                prev_same_tspan: false,
+            }],
+        });
+        np.any_dx = np.chars.iter().any(|c| c.dx.abs() > XY_TOL);
+        np.any_dy = np.chars.iter().any(|c| c.dy.abs() > XY_TOL);
+        pts.push(np);
+        news.push((pts.len() - 1, run.clone()));
+    }
+    // remove from the source, then absorb every position error (P:1404–1431)
+    let all: Vec<usize> = chr_lists.iter().flatten().copied().collect();
+    let map = remove_chars(&mut pts[src], &all);
+    fix_positions(&mut pts[src], |i| {
+        map.get(i).and_then(|o| before.get(o)).copied()
+    });
+    for (npi, olds) in &news {
+        fix_positions(&mut pts[*npi], |i| {
+            olds.get(i).and_then(|o| before.get(o)).copied()
+        });
+    }
+    news.into_iter().map(|(i, _)| i).collect()
+}
+
+/// P:1404–1431: `old(i)` gives a character's previous `(left, right, base)`; the difference to its
+/// current position goes into `dx`/`dy` (as differences between consecutive errors) and the
+/// chunk anchor (the first error, anchor-weighted), rounded to `XY_TOL`.
+fn fix_positions(pt: &mut ParsedText, old: impl Fn(usize) -> Option<(f64, f64, f64)>) {
+    for li in 0..pt.lines.len() {
+        let anfr = pt.lines[li].spec.anchor.anfr();
+        for ci in 0..pt.lines[li].chunks.len() {
+            let now = chunk_char_pts(pt, li, ci);
+            let ids = pt.lines[li].chunks[ci].chars.clone();
+            let err: Vec<(f64, f64)> = ids
+                .iter()
+                .zip(&now)
+                .map(|(&c, p)| match old(c) {
+                    Some((l, _, b)) => (l - p[0].x, b - p[0].y),
+                    None => (0.0, 0.0),
+                })
+                .collect();
+            let Some(&needed) = err.first() else {
+                continue;
+            };
+            let mut dxs = vec![0.0; err.len()];
+            let mut dys = vec![0.0; err.len()];
+            for i in 1..err.len() {
+                dxs[i] = err[i].0 - err[i - 1].0;
+                dys[i] = err[i].1 - err[i - 1].1;
+            }
+            for (i, &c) in ids.iter().enumerate() {
+                if dxs[i].abs() > XY_TOL {
+                    pt.chars[c].dx += dxs[i];
+                }
+                if dys[i].abs() > XY_TOL {
+                    pt.chars[c].dy += dys[i];
+                }
+            }
+            let fc_dx = -anfr * dxs[1..].iter().sum::<f64>();
+            let shift_x = ((needed.0 - fc_dx) / XY_TOL).round() * XY_TOL;
+            let shift_y = if needed.1.is_nan() {
+                0.0
+            } else {
+                (needed.1 / XY_TOL).round() * XY_TOL
+            };
+            let ch = &mut pt.lines[li].chunks[ci];
+            if shift_x != 0.0 {
+                ch.x += shift_x;
+            }
+            if shift_y != 0.0 {
+                ch.y += shift_y;
+            }
+        }
+    }
+    pt.any_dx = pt.chars.iter().any(|c| c.dx.abs() > XY_TOL);
+    pt.any_dy = pt.chars.iter().any(|c| c.dy.abs() > XY_TOL);
 }
