@@ -516,9 +516,66 @@ pub(crate) fn scale_plot(
             };
         }
     } else {
-        // Task 5 replaces this branch (SP:413–440): Matching mode
-        let _ = (first, &mut bbmatch);
-        return;
+        // SP:413–440
+        let Mode::Matching {
+            hmatch,
+            vmatch,
+            bbox: matchbbox,
+            ..
+        } = o.mode
+        else {
+            return;
+        };
+        bbmatch = if matchbbox {
+            boxes.g.get(&first).copied()
+        } else {
+            let els: Vec<NodeId> = if doc.tag(first) == "g" {
+                doc.children(first).filter(|&k| doc.is_element(k)).collect()
+            } else {
+                vec![first]
+            };
+            let pa0 = find_plot_area(doc, &els, &boxes.g);
+            match (pa0.lvel, pa0.lhel) {
+                (Some(v), Some(h)) => union(boxes.g.get(&v).copied(), boxes.g.get(&h).copied()),
+                _ => {
+                    if doc.tag(first) != "image" {
+                        let fid = doc.attr(first, "id").unwrap_or("").to_string();
+                        warn_non_plot(&mut ctx.warn, 0, &fid);
+                    }
+                    boxes.g.get(&first).copied()
+                }
+            }
+        };
+        let (Some(bm), Some(bbpg), Some(bbag)) = (bbmatch, bbp.g, bba.g) else {
+            // the first selection has no box: nothing to match against (upstream crashes)
+            ctx.warn
+                .push("the first selection has no bounding box; nothing was matched".to_string());
+            return;
+        };
+        scalex = 1.0;
+        scaley = 1.0;
+        if hmatch {
+            scalex = if !matchbbox {
+                bm.width() / bbpg.width()
+            } else {
+                (bm.width() + bbpg.width() - bbag.width()) / bbpg.width()
+            };
+        }
+        if vmatch {
+            scaley = if !matchbbox {
+                bm.height() / bbpg.height()
+            } else {
+                (bm.height() + bbpg.height() - bbag.height()) / bbpg.height()
+            };
+        }
+        scalex = sane(scalex, "the horizontal match scale", &mut ctx.warn);
+        scaley = sane(scaley, "the vertical match scale", &mut ctx.warn);
+        // SP:443–449
+        (refx, refy) = if !matchbbox {
+            (bbpg.center().x, bbpg.center().y)
+        } else {
+            (bbag.center().x, bbag.center().y)
+        };
     }
     let (bbpg, bbag) = (bbp.g.unwrap(), bba.g.unwrap());
     // SP:442–466

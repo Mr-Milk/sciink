@@ -515,3 +515,195 @@ fn aspect_locked_children_scale_uniformly() {
     // sqrt(4 × 1) = 2: the marker is scaled by 2 in both directions
     assert!(close(w, 20.0, 1e-6) && close(h, 20.0, 1e-6), "{w} × {h}");
 }
+
+/// Two plots side by side: `a` (the target, 90 × 70 plot area) and `b` (60 × 40 plot area,
+/// with a label under it). `b_attrs` goes on plot b's group.
+fn two_plots(b_attrs: &str) -> String {
+    format!(
+        r#"<svg {NS}>
+<g id="a">
+  <path id="abox" d="M20,10 H110 V80 H20 Z" style="fill:none;stroke:#000;stroke-width:0.5"/>
+  <path id="adata" d="M25,70 L60,30 L105,50" style="fill:none;stroke:#1f77b4;stroke-width:2"/>
+  <text id="al" x="65" y="92" style="font-size:6px;text-anchor:middle;{DV}">a</text>
+</g>
+<g id="b" {b_attrs}>
+  <path id="bbox" d="M200,30 H260 V70 H200 Z" style="fill:none;stroke:#000;stroke-width:0.5"/>
+  <path id="bdata" d="M205,60 L230,35 L255,50" style="fill:none;stroke:#d62728;stroke-width:2"/>
+  <path id="bt" d="M230,70 V73" style="fill:none;stroke:#000;stroke-width:0.5"/>
+  <text id="bl" x="230" y="82" style="font-size:6px;text-anchor:middle;{DV}">b</text>
+</g>
+<rect id="r" x="300" y="10" width="45" height="35" style="fill:none;stroke:#000;stroke-width:1"/>
+</svg>"#
+    )
+}
+
+#[test]
+fn matching_scales_the_plot_area_to_the_first_selection() {
+    let svg = two_plots("");
+    // match width only (plot areas): b's box becomes 90 wide, height unchanged, text unscaled
+    let (s, msgs) = ok(
+        &svg,
+        &[
+            "--tab=matching",
+            "--hmatchopts=2",
+            "--vmatchopts=1",
+            "--matchprop=1",
+            "--id=a",
+            "--id=b",
+        ],
+    );
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (w, h, bb) = extent(&out, "bbox");
+    assert!(close(w, 90.0, 1e-6) && close(h, 40.0, 1e-6), "{w} × {h}");
+    assert!(is_translation(composed(&out, "bl")), "label unscaled");
+    assert!(
+        close(visual_stroke(&out, "bdata"), 2.0, 1e-6),
+        "visual stroke kept"
+    );
+    let (_, th, tb) = extent(&out, "bt");
+    assert!(
+        close(th, 3.0, 1e-6) && close(tb.y0, bb.y1, 1e-6),
+        "tick length kept, attached to the box"
+    );
+    // the target plot is untouched
+    let (aw, ah, abb) = extent(&out, "abox");
+    assert!(close(aw, 90.0, 1e-9) && close(ah, 70.0, 1e-9) && close(abb.x0, 20.0, 1e-9));
+    // match height and align vertically: b's box centre y equals a's, heights equal
+    let (s, _) = ok(
+        &svg,
+        &[
+            "--tab=matching",
+            "--hmatchopts=1",
+            "--vmatchopts=3",
+            "--id=a",
+            "--id=b",
+        ],
+    );
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (w, h, bb) = extent(&out, "bbox");
+    assert!(close(w, 60.0, 1e-6) && close(h, 70.0, 1e-6), "{w} × {h}");
+    assert!(
+        close(bb.center().y, 45.0, 1e-6),
+        "aligned to a's plot-area centre y (10..80): {}",
+        bb.center().y
+    );
+    assert!(close(bb.center().x, 230.0, 1e-6), "x untouched");
+}
+
+#[test]
+fn matching_can_target_a_plain_rectangle_and_delete_it() {
+    let svg = two_plots("");
+    let (s, msgs) = ok(
+        &svg,
+        &[
+            "--tab=matching",
+            "--hmatchopts=3",
+            "--vmatchopts=3",
+            "--deletematch=true",
+            "--id=r",
+            "--id=b",
+        ],
+    );
+    assert!(
+        msgs.is_empty(),
+        "a stroked rectangle IS a plot area: {msgs:?}"
+    );
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (w, h, bb) = extent(&out, "bbox");
+    assert!(close(w, 45.0, 1e-6) && close(h, 35.0, 1e-6), "{w} × {h}");
+    assert!(
+        close(bb.center().x, 322.5, 1e-6) && close(bb.center().y, 27.5, 1e-6),
+        "aligned on the rectangle's centre: {:?}",
+        bb.center()
+    );
+    assert!(out.by_id("r").is_none(), "the first selection was deleted");
+    // an unstroked filled rectangle has no plot area: warning, its box is used instead
+    let svg = svg.replace(
+        r#"style="fill:none;stroke:#000;stroke-width:1""#,
+        r#"style="fill:#ccc;stroke:none""#,
+    );
+    let (s, msgs) = ok(
+        &svg,
+        &[
+            "--tab=matching",
+            "--hmatchopts=2",
+            "--vmatchopts=2",
+            "--id=r",
+            "--id=b",
+        ],
+    );
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].contains("on the 1st selected plot (group ID r)"),
+        "{}",
+        msgs[0]
+    );
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (w, h, _) = extent(&out, "bbox");
+    assert!(close(w, 45.0, 1e-6) && close(h, 35.0, 1e-6));
+}
+
+#[test]
+fn matching_bounding_boxes_matches_the_whole_figure() {
+    let svg = two_plots("");
+    let (s, _) = ok(
+        &svg,
+        &[
+            "--tab=matching",
+            "--hmatchopts=2",
+            "--vmatchopts=2",
+            "--matchprop=2",
+            "--id=a",
+            "--id=b",
+        ],
+    );
+    let mut out = Doc::parse(s.as_bytes()).unwrap();
+    let (a, b) = (id(&out, "a"), id(&out, "b"));
+    let union_of = |m: &std::collections::HashMap<NodeId, Rect>| {
+        m.values()
+            .fold(None, |acc: Option<Rect>, r| {
+                Some(acc.map_or(*r, |u| u.union(*r)))
+            })
+            .unwrap()
+    };
+    // the match target of a group is its visual box (geometric_bbox of a non-path-like element);
+    // after matching, b's geometric union has that size: the margins (label below) are kept and
+    // the box grew by exactly the difference
+    let (fa, _) = boxes(&mut out, a);
+    let (_, gb) = boxes(&mut out, b);
+    let (ua, gb) = (union_of(&fa), union_of(&gb));
+    assert!(
+        close(gb.width(), ua.width(), 1e-6) && close(gb.height(), ua.height(), 1e-6),
+        "{gb:?} vs {ua:?}"
+    );
+}
+
+#[test]
+fn a_scaled_plot_is_corrected_before_matching_with_fresh_boxes() {
+    let svg = two_plots(r#"transform="matrix(2,0,0,2,-300,-40)""#);
+    let (s, msgs) = ok(
+        &svg,
+        &[
+            "--tab=matching",
+            "--hmatchopts=2",
+            "--vmatchopts=2",
+            "--id=a",
+            "--id=b",
+        ],
+    );
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (w, h, _) = extent(&out, "bbox");
+    assert!(
+        close(w, 90.0, 1e-6) && close(h, 70.0, 1e-6),
+        "matched after the correction pre-pass: {w} × {h}"
+    );
+    assert!(
+        is_translation(composed(&out, "bl")),
+        "the pre-pass unscaled the label: {:?}",
+        composed(&out, "bl")
+    );
+    let (_, th, _) = extent(&out, "bt");
+    assert!(close(th, 3.0, 1e-6), "and the tick: {th}");
+}
