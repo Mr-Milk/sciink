@@ -1669,7 +1669,8 @@ fn structural_oracle(name: &str) {
     assert_eq!(attr_count(&od, "layer1", "unlinked_clone"), 0, "{name}: markers are stripped");
     let flat = od.descendants().find(|n| n.attribute("id") == Some("layer1")).unwrap();
     assert_eq!(nsattr(flat, INKSCAPE_NS, "label"), Some("Layer 1 flat"));
-    let orig = flat.prev_siblings().find(|n| n.is_element()).expect("the duplicate precedes the flattened layer");
+    // roxmltree's `prev_siblings()` starts at the node itself
+    let orig = flat.prev_siblings().skip(1).find(|n| n.is_element()).expect("the duplicate precedes the flattened layer");
     assert_eq!(nsattr(orig, INKSCAPE_NS, "label"), Some("Layer 1 original"));
     assert_eq!((nsattr(orig, SODIPODI_NS, "insensitive"), orig.attribute("opacity")), (Some("true"), Some("0.3")));
 }
