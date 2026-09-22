@@ -150,8 +150,21 @@ fn fix_css_clipmask_pins_the_attribute_with_an_id_rule() {
     ));
     let r = id(&d, "r");
     fix_css_clipmask(&mut d, r, ClipKind::Clip);
-    assert!(!out(&d).contains("display:none"), "{}", out(&d));
+    assert_eq!(
+        d.sheet_value(r, "display"),
+        None,
+        "no rule was injected into the stylesheet"
+    );
+    assert_eq!(
+        d.sheet_value(r, "clip-path").as_deref(),
+        Some("url(#a)"),
+        "the sheet still says what it said"
+    );
     assert_eq!(out(&d).matches("#r{").count(), 1, "nothing appended");
+    assert!(
+        out(&d).contains(r#"clip-path="url(#a)} * {display:none} #z{""#),
+        "the attribute itself is the document's business and stays"
+    );
 }
 
 #[test]
