@@ -1615,7 +1615,7 @@ git commit -m "feat(ops): bounding boxes without Inkscape (bbox, bb2, has_bbox, 
   - `deswitch(doc, ctx, sw, lang: &str)`, `lang_matches(attr: &str, lang: &str) -> bool`, `preferences_language(xml: &str) -> Option<String>`, `ui_language() -> String`
   - `pub const TEXT_TAGS: &[&str] = &["text", "flowRoot"]`, `pub const UNUNGROUPABLE: &[&str] = &["namedview", "defs", "metadata", "foreignObject"]`
 
-**Deviations (documented in Task 8):** (a) duplicated clips/masks go to the root `<defs>` (upstream: next to the original); (b) `deswitch` matches a `systemLanguage` token when it equals the UI language case-insensitively or shares its primary subtag (`en-US` ~ `en`; upstream: exact string equality, which fails on every regional tag); (c) a singular node transform leaves the new clip un-counter-transformed with a warning (upstream raises); (d) `unlink` follows nested clones iteratively with a 10 000-step guard (a symbol that clones itself).
+**Deviations (documented in Task 8):** (a) duplicated clips/masks go to the root `<defs>` (upstream: next to the original); (e) an unlinked `<symbol>` clone's surviving `<g>` carries the clone's id and `unlinked_clone` marker (upstream sets them on the symbol copy it then dissolves); (b) `deswitch` matches a `systemLanguage` token when it equals the UI language case-insensitively or shares its primary subtag (`en-US` ~ `en`; upstream: exact string equality, which fails on every regional tag); (c) a singular node transform leaves the new clip un-counter-transformed with a warning (upstream raises); (d) `unlink` follows nested clones iteratively with a 10 000-step guard (a symbol that clones itself).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1781,6 +1781,7 @@ fn unlink_replaces_a_clone_with_a_composed_copy() {
     let n_us = id(&d, "us");
     let g = unlink(&mut d, &mut ctx, n_us).unwrap();
     assert_eq!(d.tag(g), "g");
+    assert_eq!((d.attr(g, "id"), d.attr(g, "unlinked_clone")), (Some("us"), Some("True")), "the group inherits the clone's id and marker");
     assert_eq!(d.attr(g, "transform"), Some("translate(1,1)"));
     assert_eq!(d.tag(kids(&d, g)[0]), "circle");
     assert_eq!(out(&d).matches("<symbol").count(), 1, "only the original symbol remains: {}", out(&d));
@@ -2093,16 +2094,18 @@ pub fn unlink(doc: &mut Doc, ctx: &mut Ctx, u: NodeId) -> Option<NodeId> {
         compose_all(doc, ctx, d, clip, mask, t, Some(&st), false);
         let id = doc.attr(u, "id").map(str::to_string);
         doc.detach(u);
-        if let Some(id) = id {
-            doc.set_attr(d, "id", id);
-        }
-        doc.set_attr(d, "unlinked_clone", "True");
         let mut d = d;
         if doc.tag(d) == "symbol" {
             let g = group(doc, &element_children(doc, d));
             ungroup(doc, ctx, d, false);
             d = g;
         }
+        // after the symbol conversion, so the SURVIVING element carries them (Deviation: upstream
+        // sets both on the symbol copy and then dissolves it, losing the id and the marker)
+        if let Some(id) = id {
+            doc.set_attr(d, "id", id);
+        }
+        doc.set_attr(d, "unlinked_clone", "True");
         // nested clones inside the copy (the copy itself is never a <use>: its target was not)
         let nested: Vec<NodeId> = doc
             .descendants(d)
