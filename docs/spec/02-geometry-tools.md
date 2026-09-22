@@ -426,9 +426,19 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
 - The `--testmode` duplicate carries no ids (upstream: random ids).
 - A reverted minus sign keeps a translucent fill's alpha as `fill-opacity`.
 - Thin-rectangle strokes are written as absolute `M … L …`.
-- Duplicate removal compares rgb only and checks alpha on the top element, as upstream's
-  `inkex.Color` equality does.
+- Duplicate removal compares the paints as rgba (alpha within 1e-9) like upstream's `inkex.Color`;
+  note that the specified-style equality checked first already implies equal alphas, so the paint
+  alpha test cannot change a decision.
 - `remove_kerning` never edits flowed text or text on a path (Plan 4).
 - An empty selection is an `Err` with upstream's message (the document is echoed unchanged).
 - The character table for the bbox stage covers the whole document (`Ctx::new()`, as upstream's
   `BB2(svg, ngs2)` covers all text of the selection's descendants).
+- `strip_whitespace` keeps a comment's tail by its parent's tag (upstream never clears comment
+  tails).
+- The duplicate pass skips a pair when either element has a `url(#…)` paint (upstream checks only
+  the paint that is present).
+- A `url(#…)`-filled rectangle-like element never enters the minus-sign reversion (upstream would
+  write `fill:None`).
+- A whitespace-only exclusion marker does not exclude (only `True` is ever written).
+- Out-of-range `markexc`/`justification` values are tolerated (`markexc ≠ 1` un-marks,
+  `justification` outside 1–3 means unchanged; upstream raises).

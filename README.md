@@ -12,8 +12,9 @@ release ships seven menu entries — three tools, three diagnostics and one debu
   transforms, clips and styles onto the leaves and unlinking clones), matplotlib minus-sign glyphs back
   to text, thin dark rectangles back to strokes, the text pipeline (manual-kerning removal, merges,
   splits, justification, optional font replacement, text clips removed), then overlapping duplicates
-  and white background rectangles removed. Objects marked on the Exclusions page are left alone.
-  Same options and defaults as the original.
+  and white background rectangles removed. Elements marked on the Exclusions page are not ungrouped
+  themselves (as in the original, what is inside them is still processed). Same options and defaults
+  as the original.
 - **Extensions ▸ Scientific ▸ Combine by Color** — merges the selected paths that share stroke, fill,
   width, dashes and markers into one path each (lines darker than the lightness threshold, such as
   axes and ticks, are left alone), releasing their clips and masks. Fewer elements, smaller files, a
@@ -95,7 +96,7 @@ search, mostly for tests and for reproducing a figure built elsewhere:
 
 The upstream oracles need the installed fonts and the `tests/upstream` fixture symlink; run them with
 
-    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster -- --ignored
+    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster -- --ignored --test-threads=1
 
 Set `SCIINK_LOG=/tmp/sciink.log` in Inkscape's environment to get timing lines.
 Releases: push a tag `vX.Y.Z` matching `Cargo.toml`'s version; the `release` workflow builds
