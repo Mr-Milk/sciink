@@ -405,3 +405,40 @@ fn composed_transform_excludes_root_svg_and_composes_outer_first() {
     );
     assert_eq!(d.transform(d.by_id("q").unwrap()), Affine::IDENTITY);
 }
+
+#[test]
+fn set_transform_writes_or_removes_the_attribute() {
+    let mut d = Doc::parse(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><g id="g" transform="scale(2)"/></svg>"#,
+    )
+    .unwrap();
+    let g = d.by_id("g").unwrap();
+    d.set_transform(g, Affine::translate((1.0, 2.0)));
+    assert_eq!(d.attr(g, "transform"), Some("translate(1,2)"));
+    d.set_transform(g, Affine::IDENTITY);
+    assert_eq!(d.attr(g, "transform"), None);
+    d.set_transform(g, Affine::new([1.0, 0.0, 0.0, 1.0, 1e-7, 0.0]));
+    assert_eq!(d.attr(g, "transform"), None, "within TOL of identity");
+}
+
+#[test]
+fn viewbox_parses_or_falls_back_to_width_height() {
+    let d =
+        Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"/>"#).unwrap();
+    let r = d.viewbox().unwrap();
+    assert!(close(r.x0, 0.0) && close(r.width(), 200.0) && close(r.height(), 100.0));
+    let d = Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="1,2,3,4"/>"#).unwrap();
+    let r = d.viewbox().unwrap();
+    assert!(
+        close(r.x0, 1.0) && close(r.y0, 2.0) && close(r.width(), 3.0) && close(r.height(), 4.0)
+    );
+    let d = Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="20mm"/>"#)
+        .unwrap();
+    let r = d.viewbox().unwrap();
+    assert!(
+        close(r.width(), 37.795275591) && close(r.height(), 75.590551181),
+        "{r:?}"
+    );
+    let d = Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
+    assert_eq!(d.viewbox(), None);
+}

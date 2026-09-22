@@ -485,3 +485,46 @@ fn xml_space_href_and_new_id_accessors() {
     d.append_child(d.svg(), n);
     assert_eq!(d.new_id("FMArrowstart"), "FMArrowstart3");
 }
+
+#[test]
+fn set_tag_keeps_the_prefix_and_invalidates_styles() {
+    let mut d = Doc::parse(
+        br#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg"><style>path{fill:red}</style><svg:line id="l" x1="0"/><rect id="r"/></svg>"#,
+    )
+    .unwrap();
+    let l = d.by_id("l").unwrap();
+    let r = d.by_id("r").unwrap();
+    assert_eq!(d.specified(l, "fill"), None);
+    d.set_tag(l, "path");
+    assert_eq!(d.qname(l), "svg:path");
+    assert_eq!(d.tag(l), "path");
+    assert_eq!(
+        d.specified(l, "fill").as_deref(),
+        Some("red"),
+        "tag selectors re-match"
+    );
+    d.set_tag(r, "path");
+    assert_eq!(d.qname(r), "path");
+    assert_eq!(d.by_id("l"), Some(l), "ids survive a rename");
+    let mut v = Vec::new();
+    d.write(&mut v);
+    let s = String::from_utf8(v).unwrap();
+    assert!(
+        s.contains(r#"<svg:path id="l" x1="0"/>"#) && s.contains(r#"<path id="r"/>"#),
+        "{s}"
+    );
+}
+
+#[test]
+fn set_tag_to_or_from_style_rebuilds_the_stylesheet() {
+    let mut d = Doc::parse(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><foo id="s">rect{fill:red}</foo><rect id="r"/></svg>"#,
+    )
+    .unwrap();
+    let (s, r) = (d.by_id("s").unwrap(), d.by_id("r").unwrap());
+    assert_eq!(d.specified(r, "fill"), None);
+    d.set_tag(s, "style");
+    assert_eq!(d.specified(r, "fill").as_deref(), Some("red"));
+    d.set_tag(s, "foo");
+    assert_eq!(d.specified(r, "fill"), None);
+}

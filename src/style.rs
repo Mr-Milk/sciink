@@ -616,6 +616,10 @@ fn read_ident(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
 /// Ties are broken lexicographically, so the highest key wins.
 type DeclKey = (bool, bool, (u32, u32, u32), usize);
 
+/// Sort key for a `sheet_value` match: `(important, specificity, order)` (no `is_inline`
+/// component — inline `style=""` is not a sheet declaration and never competes here).
+type SheetKey = (bool, (u32, u32, u32), usize);
+
 /// Per-document caches, invalidated through `Doc`'s generation counters.
 #[derive(Default)]
 pub struct Caches {
@@ -782,5 +786,29 @@ impl Doc {
         if PRESENTATION_ATTRS.contains(&prop) {
             self.remove_attr(n, prop);
         }
+    }
+
+    /// The value the `<style>` sheets alone give `prop` on `n` — no presentation attribute, no
+    /// inline `style` — i.e. what Inkscape would apply over an attribute we write (upstream
+    /// `svg.cssdict[id][prop]`, cache.py:1073–1164). Highest key `(!important, specificity,
+    /// source order)` wins; later declarations win ties.
+    pub fn sheet_value(&self, n: NodeId, prop: &str) -> Option<String> {
+        let sheet = self.stylesheet();
+        let mut best: Option<(SheetKey, String)> = None;
+        for rule in &sheet.rules {
+            if !rule.selector.matches(self, n) {
+                continue;
+            }
+            for (k, v, imp) in &rule.decls {
+                if k != prop {
+                    continue;
+                }
+                let key = (*imp, rule.selector.specificity, rule.order);
+                if best.as_ref().is_none_or(|(bk, _)| key >= *bk) {
+                    best = Some((key, v.clone()));
+                }
+            }
+        }
+        best.map(|(_, v)| v)
     }
 }

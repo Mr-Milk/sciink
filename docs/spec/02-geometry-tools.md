@@ -271,8 +271,9 @@ metadata/foreignObject/font/font-face/missing-glyph.
 
 ### Text Ghoster (`text_ghoster.py`)
 `EXTENT 0.5`, `OPACITY 0.75`, `STDDEV 0.5`. Per selected element: `<g>` **appended at end of parent**, move
-el in, `g.transform := el.transform`, remove el.transform. Singular composed transform → skip. `bb = bbox(el,
-transform=false)`; `fs = max composed font-size (ut values) over el and descendants that specify font-size`,
+el in; `g` takes el's `transform` (no `stroke-width` written on `g`), then el's own `transform` is removed.
+Singular composed transform → skip. `bb = bbox(el, transform=false)`; `fs = max composed font-size (ut
+values) over el and descendants that specify font-size`,
 fallback `ipx("8pt") = 10.6667`. `border = fs·0.5`. Insert `<filter><feGaussianBlur stdDeviation="border·0.5"/>
 </filter>` at index 0 of root `<defs>`; insert `<rect x=bb.x1−b y=bb.y1−b width=bb.w+2b height=bb.h+2b rx=b
 style="fill:#ffffff;stroke:none;filter:url(#f);opacity:0.75">` as first child of g. No bbox → wrapped, no rect.
@@ -359,3 +360,62 @@ Bbox memo: clear after any geometric mutation (simplest: per tool phase).
 geom → ops/style + ops/clip → ops/bbox + is_rectangle + strokefill → ops/cleanup → **Flattener non-text
 ships** (text steps no-op behind the engine) → ops/xform (fuse, global_transform) → Text Ghoster, Combine by
 color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favorite Markers any time.
+
+## Deliberate deviations (Plan 5)
+- `compose_style` writes `opacity` only when either side specified one — upstream writes `opacity:1.0` on
+  every ungrouped child.
+- `currentColor` resolves through the specified `color` — upstream treats it as no paint.
+- A `url(#…)` paint reports `is_url` with no colour or width — upstream keeps the width next to a gradient
+  element its own consumers then trip over.
+- An unparsable dash-array entry makes the whole list `None` — upstream raises.
+- Clips, masks and gradients duplicated by the ops are appended to the root `<defs>` — upstream places the
+  duplicate next to the original element.
+- `deswitch` matches a `systemLanguage` token by case-insensitive equality or a shared primary subtag
+  (`en-US` ~ `en`) — upstream's exact string equality fails on every regional tag.
+- A singular node transform leaves the new clip un-counter-transformed, with a warning — upstream raises.
+- `unlink` follows nested clones iteratively with a 10 000-step guard — guards against a symbol that clones
+  itself.
+- The bbox memo lives inside one `bbox`/`bb2` call and the spec's `parsed` flag is dropped — there is no
+  cross-mutation invalidation to get wrong, and a box computed from a fresh parse already is the parsed box.
+- `%` and unspecified stroke widths count as `0` in bounding boxes — matches upstream's own `"0px"` default
+  and the silent `except` around its percentage parse.
+- Recursive helpers (`bbox`, clip merging, `is_rectangle`) stop at `MAX_NEST = 64` — a Rust stack overflow
+  can't be caught the way Python's `RecursionError` can.
+- `object_to_path` removes the shape attributes it converted — upstream leaves `x1`, `points`, … behind on
+  the new `<path>`.
+- Rect corner radii are scaled by `|a|`, `|d|` when a transform is fused into the geometry — upstream leaves
+  them unscaled.
+- An element that only inherits its stroke gets an explicit, scaled `stroke-width` on fuse (the specified
+  default, 1) — otherwise there is nothing to scale and the visual width would silently drift.
+- `global_transform` rewrites `stroke-width`/`stroke-dasharray` only when the restored value differs from
+  the current one — upstream always writes it, even `1.0` on an untouched group.
+- The shear test compares against `geom::TOL` instead of exact zero — floating-point transform components
+  are rarely exactly zero once arithmetic has touched them.
+- Gradients are duplicated only when `gradientUnits="userSpaceOnUse"` — upstream duplicates every gradient,
+  even ones that already follow the new bounding box on their own.
+- The `inkscape-scientific-combined-by-color` indices count the `BezPath` elements of the `d` we write —
+  upstream counts source commands, but an arc becomes several cubics.
+- A combine target with a singular composed transform is left alone with a warning — upstream raises.
+- Combine by Color skips url-painted and already-merged elements and reports an empty selection — upstream
+  crashes comparing `efflightness` on a gradient element and is silent when nothing is selected.
+- Text Ghoster computes the rectangle in the element's own frame, wraps a boxless or singular-transform
+  element without a rectangle (with a warning), and reports an empty selection — upstream removes the
+  composed transform with two `global_transform` calls (which leaves a spurious `stroke-width:1.0` on the
+  group) and crashes or skips silently instead.
+- Every tool stays silent on success — stderr is reserved for warnings and fatal messages (spec §C.3), not
+  routine status.
+- An unlinked `<symbol>` clone's surviving `<g>` carries the clone's id and `unlinked_clone` marker —
+  upstream sets them on the symbol copy it then dissolves, losing both.
+- Combine by Color deduplicates the selection's descendants (upstream double-counts an element selected both
+  directly and through an ancestor).
+- Combine by Color compares dash arrays with ±0.001 per entry (upstream: exact list equality).
+- A single-integer `inkscape-scientific-combined-by-color` contributes one start index (upstream: none).
+- `rgba()` paints multiply the colour's own alpha into the effective alpha.
+- `drop_dangling_refs` sweeps only `clip-path`/`mask`, like upstream; `href`/`url()` paint references to
+  deleted elements stay dangling.
+- `fix_css_clipmask` pins only `none`/`url(#name)` values; a crafted value is left unpinned (stylesheet
+  injection hardening).
+- `merge_clipmask` and `is_rectangle` carry a `MAX_STEPS = 10 000` work budget besides `MAX_NEST`: a clip
+  tree that references itself from several children grows exponentially with depth.
+- `combine_paths` leaves elements whose geometry cannot be read in place (warning) and refuses a target
+  without geometry or an out-of-range merge index (upstream would raise or silently drop them).

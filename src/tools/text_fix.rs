@@ -13,6 +13,7 @@ use crate::text::Warnings;
 use crate::text::fonts::FontSystem;
 use crate::text::kerning::{KerningOptions, remove_kerning};
 
+use super::first_line;
 use super::font_probe::text_elements;
 
 #[derive(Parser, Debug)]
@@ -36,13 +37,7 @@ pub struct TextFixCli {
 }
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
-    let cli = TextFixCli::try_parse_from(argv).map_err(|e| {
-        e.to_string()
-            .lines()
-            .next()
-            .unwrap_or("invalid arguments")
-            .to_string()
-    })?;
+    let cli = TextFixCli::try_parse_from(argv).map_err(first_line)?;
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
     let els = text_elements(&doc, &cli.common.ids);
     if els.is_empty() {

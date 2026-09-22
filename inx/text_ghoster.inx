@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Text Ghoster (sciink)</name>
+    <id>org.sciink.text-ghoster</id>
+    <param name="tool" type="string" gui-hidden="true">text-ghoster</param>
+    <param name="tab" type="notebook">
+        <page name="scaling" gui-text="Options">
+            <label>Adds a blurred, semi-transparent white rectangle behind each selected object, sized from its text.</label>
+            <label>Useful when text has to sit on top of data. To treat several text objects as one, group them first.</label>
+        </page>
+    </param>
+    <effect needs-live-preview="true">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific"/>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>

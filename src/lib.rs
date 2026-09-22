@@ -7,6 +7,7 @@ pub mod dom;
 pub mod geom;
 pub mod log;
 pub mod num;
+pub mod ops;
 pub mod paths;
 pub mod style;
 pub mod text;
@@ -39,8 +40,11 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         "font-probe" => tools::font_probe::run(argv, input),
         "text-highlight" => tools::text_highlight::run(argv, input),
         "text-fix" => tools::text_fix::run(argv, input),
-        "flattener" | "scaler" | "homogenizer" | "text-ghoster" | "combine-by-color"
-        | "favorite-markers" => Err(format!("the {tool} tool is not implemented yet")),
+        "combine-by-color" => tools::combine_by_color::run(argv, input),
+        "text-ghoster" => tools::text_ghoster::run(argv, input),
+        "flattener" | "scaler" | "homogenizer" | "favorite-markers" => {
+            Err(format!("the {tool} tool is not implemented yet"))
+        }
         other => Err(format!("unknown tool '{other}'")),
     }
 }
