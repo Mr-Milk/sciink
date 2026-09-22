@@ -145,7 +145,7 @@ impl Options {
 }
 
 /// F:187–194: the Exclusions page sets (`True`) or removes the marker on the selection.
-pub fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
+pub(crate) fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
     for &el in sel {
         if exclude {
             doc.set_attr(el, EXCLUDE_ATTR, "True");
@@ -159,7 +159,7 @@ pub fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
 /// labelled `<label> original`, locked (`sodipodi:insensitive`), at opacity 0.3 — while the
 /// original is labelled `<label> flat` and its element children become the selection to flatten.
 /// **Deviation:** the copy carries no ids (`Doc::deep_clone` drops them; upstream assigns random ones).
-pub fn duplicate_for_testmode(doc: &mut Doc, sel: &[NodeId]) -> Vec<NodeId> {
+pub(crate) fn duplicate_for_testmode(doc: &mut Doc, sel: &[NodeId]) -> Vec<NodeId> {
     let mut out = Vec::new();
     for &el in sel {
         let d = doc.deep_clone(el);
@@ -182,7 +182,7 @@ fn excluded(doc: &Doc, n: NodeId) -> bool {
 
 /// F:195–201 `seld`: the selection (minus excluded elements) and every element under it, in
 /// document order, deduplicated, minus the elements that carry the exclusion marker themselves.
-pub fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
+pub(crate) fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for &root in sel {
@@ -199,7 +199,7 @@ pub fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// The members of `els` still in the document.
-pub fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
+pub(crate) fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
     els.iter()
         .copied()
         .filter(|&n| doc.parent(n).is_some())
@@ -207,7 +207,7 @@ pub fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// `ngs` (F:224): the attached members of `seld` that are neither containers nor unrendered.
-pub fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
+pub(crate) fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
     attached(doc, seld)
         .into_iter()
         .filter(|&n| !CONTAINER_TAGS.contains(&doc.tag(n)))
@@ -215,7 +215,7 @@ pub fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// `gs` (F:223): the attached groups of `seld`.
-pub fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
+pub(crate) fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
     attached(doc, seld)
         .into_iter()
         .filter(|&n| doc.tag(n) == "g")
@@ -283,7 +283,7 @@ pub const MPL_COMMENT: &str = "mpl_comment";
 /// F:203–218: every selected `<defs>`, `<clipPath>` and `<mask>` is appended to the root `<defs>`
 /// (a `<defs>` moves whole, nested); it and its descendants leave the working set. The root
 /// `<defs>` itself (and anything containing it) is never moved.
-pub fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
+pub(crate) fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
     for pass in [&["defs"][..], &["clipPath", "mask"][..]] {
         let movers: Vec<NodeId> = seld
             .iter()
@@ -307,7 +307,7 @@ pub fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
 
 /// F:229–246: every `<use>` of the working set whose target exists and is not a `<symbol>` is
 /// unlinked; the clone leaves the set and the copy's subtree joins it.
-pub fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
+pub(crate) fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
     let uses: Vec<NodeId> = seld
         .iter()
         .copied()
@@ -332,7 +332,7 @@ pub fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
 /// children are all comments, `<defs>` or unlinked clones is a matplotlib text group: it keeps
 /// its glyphs grouped, gets `mpl_comment` = its comments joined by `;`, and loses the comments.
 /// A group already carrying `mpl_comment` is kept. Everything else is dissolved with `ungroup`.
-pub fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
+pub(crate) fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
     let mut gs: Vec<(usize, NodeId)> = groups(doc, seld)
         .into_iter()
         .map(|g| {
@@ -396,12 +396,16 @@ fn first_three(p: &BezPath) -> BezPath {
     BezPath::from_vec(p.elements().iter().take(3).copied().collect())
 }
 
+/// `MINUS_D` parsed once and reused, instead of re-parsing it on every `is_minus_glyph` call.
+static MINUS: std::sync::LazyLock<Option<kurbo::BezPath>> =
+    std::sync::LazyLock::new(|| parse_d(MINUS_D).map(|p| p.path));
+
 /// `d` starts with the minus glyph's `M 106,355 H 732 V 272` (F:312–315).
-pub fn is_minus_glyph(d: &str) -> bool {
-    let (Some(p), Some(m)) = (parse_d(d), parse_d(MINUS_D)) else {
+pub(crate) fn is_minus_glyph(d: &str) -> bool {
+    let (Some(p), Some(m)) = (parse_d(d), MINUS.as_ref()) else {
         return false;
     };
-    p.path.elements().len() >= 3 && path_eq(&first_three(&p.path), &first_three(&m.path), 1e-9)
+    p.path.elements().len() >= 3 && path_eq(&first_three(&p.path), &first_three(m), 1e-9)
 }
 
 fn hex(r: u8, g: u8, b: u8) -> String {
@@ -506,7 +510,7 @@ fn revert_thin(doc: &mut Doc, el: NodeId, bb: kurbo::Rect, fill: (u8, u8, u8, f6
 /// `reversions` a matplotlib minus glyph becomes a `<text>`; with `revertpaths` a dark thin
 /// rectangle becomes a stroke. Returns the white-rectangle candidates; `ngs` gets the reverted
 /// texts in place of their glyph paths.
-pub fn rect_passes(
+pub(crate) fn rect_passes(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs: &mut Vec<NodeId>,
@@ -565,7 +569,7 @@ pub fn rect_passes(
 /// F:372–388 `setreplacement`: every `<text>`/`<tspan>` of the working set loses its inline
 /// `-inkscape-font-specification` and gets `replacement` appended to its family list (or as its
 /// family when it has none), unless the list already ends with it.
-pub fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
+pub(crate) fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
     for el in attached(doc, ngs) {
         if !matches!(doc.tag(el), "text" | "tspan") {
             continue;
@@ -596,8 +600,9 @@ pub fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
     }
 }
 
-/// F:370–413: font replacement, language switches, the kerning pipeline, text clips.
-pub fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
+/// F:370–413: font replacement, language switches, the kerning pipeline, text clips; fonts load
+/// only when there is text to process.
+pub(crate) fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
     if o.setreplacement {
         replace_fonts(doc, ngs, &o.replacement);
     }
@@ -614,18 +619,20 @@ pub fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Optio
             .copied()
             .filter(|&n| matches!(doc.tag(n), "text" | "flowRoot"))
             .collect();
-        let kopts = KerningOptions::from_inx(
-            o.removemanualkerning,
-            o.mergesubsuper,
-            o.splitdistant,
-            o.mergenearby,
-            o.justification,
-        );
-        let out = remove_kerning(doc, &tels, &kopts, FontSystem::load(), &mut ctx.warn);
-        let tset: HashSet<NodeId> = tels.into_iter().collect();
-        ngs.retain(|n| !tset.contains(n));
-        *ngs = attached(doc, ngs); // tspans of rewritten texts are gone
-        ngs.extend(out.into_iter().filter(|&n| doc.parent(n).is_some()));
+        if !tels.is_empty() {
+            let kopts = KerningOptions::from_inx(
+                o.removemanualkerning,
+                o.mergesubsuper,
+                o.splitdistant,
+                o.mergenearby,
+                o.justification,
+            );
+            let out = remove_kerning(doc, &tels, &kopts, FontSystem::load(), &mut ctx.warn);
+            let tset: HashSet<NodeId> = tels.into_iter().collect();
+            ngs.retain(|n| !tset.contains(n));
+            *ngs = attached(doc, ngs); // tspans of rewritten texts are gone
+            ngs.extend(out.into_iter().filter(|&n| doc.parent(n).is_some()));
+        }
     }
     if o.removetextclips {
         for el in attached(doc, ngs) {
@@ -646,13 +653,13 @@ fn shape_inside_targets(doc: &Doc) -> HashSet<NodeId> {
         .collect()
 }
 
-fn same_rgb(a: &crate::ops::style::Rgba, b: &crate::ops::style::Rgba) -> bool {
-    (a.r, a.g, a.b) == (b.r, b.g, b.b)
+fn same_rgba(a: &crate::ops::style::Rgba, b: &crate::ops::style::Rgba) -> bool {
+    (a.r, a.g, a.b) == (b.r, b.g, b.b) && (a.alpha - b.alpha).abs() < 1e-9
 }
 
 /// F:422–497: prune identical overlapping paths — of two rectangle-like elements with the same
-/// rough box, style, paints and global geometry, the one underneath goes.
-pub fn remove_duplicates(
+/// rough box, style, rgba paints and global geometry, the one underneath goes.
+pub(crate) fn remove_duplicates(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs2: &mut Vec<NodeId>,
@@ -680,6 +687,7 @@ pub fn remove_duplicates(
             && (a.y1 - b.y1).abs() <= tol
     };
     let mut sfs: Vec<Option<crate::ops::style::StrokeFill>> = vec![None; els.len()];
+    let mut paths: Vec<Option<kurbo::BezPath>> = vec![None; els.len()];
     let mut removed: HashSet<usize> = HashSet::new();
     for jj in (0..els.len()).rev() {
         for ii in 0..jj {
@@ -697,25 +705,33 @@ pub fn remove_duplicates(
                 continue;
             }
             if let Some(s) = &my.stroke {
-                if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgb(s, o)) {
+                if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgba(s, o)) {
                     continue;
                 }
             }
             if let Some(f) = &my.fill {
-                if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgb(f, o)) {
+                if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgba(f, o)) {
                     continue;
                 }
             }
             if !style_eq(&doc.specified_style(els[jj]), &doc.specified_style(els[ii])) {
                 continue;
             }
-            let (Some(pj), Some(pi)) = (shape_path(doc, els[jj]), shape_path(doc, els[ii])) else {
+            if paths[jj].is_none() {
+                if let Some(pp) = shape_path(doc, els[jj]) {
+                    paths[jj] = Some(doc.composed_transform(els[jj]) * pp.path);
+                }
+            }
+            if paths[ii].is_none() {
+                if let Some(pp) = shape_path(doc, els[ii]) {
+                    paths[ii] = Some(doc.composed_transform(els[ii]) * pp.path);
+                }
+            }
+            let (Some(gj), Some(gi)) = (&paths[jj], &paths[ii]) else {
                 continue;
             };
-            let gj = doc.composed_transform(els[jj]) * pj.path;
-            let gi = doc.composed_transform(els[ii]) * pi.path;
             let tol = 1e-6 * size(&boxes[ii]).max(size(&boxes[jj]));
-            if !(path_eq(&gj, &gi, tol) || path_eq(&gj, &reverse(&gi), tol)) {
+            if !(path_eq(gj, gi, tol) || path_eq(gj, &reverse(gi), tol)) {
                 continue;
             }
             delete_up(doc, ctx, els[ii]);
@@ -729,7 +745,7 @@ pub fn remove_duplicates(
 /// F:499–509: a white-rectangle candidate with nothing behind it (no earlier element whose box
 /// strictly intersects its own) is a background and goes; a deleted one no longer counts as
 /// being behind the next.
-pub fn remove_white_rects(
+pub(crate) fn remove_white_rects(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs2: &[NodeId],
@@ -757,7 +773,13 @@ pub fn remove_white_rects(
 }
 
 /// F:415–510: rough boxes of the drawn working set, then duplicates, then white rectangles.
-pub fn bbox_stage(doc: &mut Doc, ctx: &mut Ctx, ngs: &[NodeId], wrects: &[NodeId], o: &Options) {
+pub(crate) fn bbox_stage(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    ngs: &[NodeId],
+    wrects: &[NodeId],
+    o: &Options,
+) {
     let ngset: HashSet<NodeId> = attached(doc, ngs).into_iter().collect();
     let mut ngs2: Vec<NodeId> = doc
         .descendants(doc.svg())
