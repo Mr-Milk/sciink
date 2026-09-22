@@ -103,3 +103,29 @@ fn ungroup_only_flattener_is_visually_invariant_on_acid_tests() {
     eprintln!("Acid_tests ungroup-only pixel diff: {:.4} %", d * 100.0);
     assert!(d <= 0.005, "{d}");
 }
+
+/// Duplicate removal deletes only what an identical opaque element already covers: invisible by construction.
+#[test]
+fn duplicate_removal_is_visually_invariant_on_text_tests() {
+    let Some(dir) = support::upstream_data_dir() else {
+        return;
+    };
+    let input = std::fs::read(dir.join("svg/Text_tests.svg")).unwrap();
+    let out = run(
+        &[
+            "--tool=flattener",
+            "--tab=Options",
+            "--id=layer1",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removerectw=false",
+        ],
+        &input,
+    );
+    let d = diff(&input, &out);
+    eprintln!(
+        "Text_tests duplicate-removal pixel diff: {:.4} %",
+        d * 100.0
+    );
+    assert!(d <= 0.005, "{d}");
+}

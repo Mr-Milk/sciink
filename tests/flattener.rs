@@ -145,7 +145,7 @@ fn test_mode_duplicates_the_selected_layer_and_flattens_the_original() {
 }
 
 #[test]
-fn unknown_ids_are_dropped_and_options_are_anded_with_fixtext() {
+fn options_are_anded_with_fixtext_and_hidden_parameters_are_accepted() {
     use clap::Parser;
     use sciink::tools::flattener::{FlattenerCli, Options};
     let cli = FlattenerCli::try_parse_from(args(&[
@@ -200,6 +200,25 @@ fn unknown_ids_are_dropped_and_options_are_anded_with_fixtext() {
     ]))
     .unwrap();
     assert!(cli.debugparser);
+    let svg = format!(r#"<svg {NS}><g id="a"><path id="p" d="M0 0h1"/></g></svg>"#);
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=nosuch",
+            "--id=a",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    assert!(
+        !roxmltree::Document::parse(&s)
+            .unwrap()
+            .descendants()
+            .any(|n| n.attribute("id") == Some("a")),
+        "an unknown id is dropped, the known one is flattened: {s}"
+    );
 }
 
 #[test]
@@ -737,5 +756,123 @@ fn the_shape_inside_target_of_a_text_is_never_a_duplicate_candidate() {
     assert!(
         has(&d, "frame") && has(&d, "frame2"),
         "frame2 is a text's shape-inside, so the pair is never considered: {s}"
+    );
+}
+
+#[test]
+fn moving_defs_skips_the_root_defs_and_moves_masks() {
+    let svg = format!(
+        r#"<svg {NS}><defs id="root"><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><g id="layer"><mask id="m"><rect width="1" height="1"/></mask><path id="p" d="M0 0h1" mask="url(#m)"/></g></svg>"#
+    );
+    // selecting the root <defs> itself must not move it into itself; the loose <mask> moves
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=root",
+            "--id=m",
+            "--id=p",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let root = by_id(&d, "root");
+    assert_eq!(
+        root.parent().unwrap().tag_name().name(),
+        "svg",
+        "the root defs stays where it is: {s}"
+    );
+    let ids: Vec<Option<&str>> = kids(root).iter().map(|n| n.attribute("id")).collect();
+    assert_eq!(ids, vec![Some("c"), Some("m")], "{s}");
+    assert_eq!(by_id(&d, "p").attribute("mask"), Some("url(#m)"));
+}
+
+#[test]
+fn a_switch_is_left_alone_when_no_kerning_option_is_on() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><switch id="sw"><text id="de" systemLanguage="de" style="{DV};font-size:10px" x="0" y="0">Hallo</text><text id="en" style="{DV};font-size:10px" x="0" y="0">Hi</text></switch></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=sw",
+            "--splitdistant=false",
+            "--mergenearby=false",
+            "--removemanualkerning=false",
+            "--mergesubsuper=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "sw") && has(&d, "de") && has(&d, "en"),
+        "upstream resolves switches only on the kerning path: {s}"
+    );
+}
+
+#[test]
+fn duplicate_removal_and_white_rectangles_interact_through_the_working_set() {
+    // the white rectangle's only backing element is the lower duplicate: once that is removed,
+    // nothing is behind the rectangle and it goes too
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><path id="bottom" d="M0 0 L10 0 L10 5 Z" style="fill:#0000ff"/><rect id="white" x="2" y="1" width="3" height="3" style="fill:#ffffff"/><path id="top" d="M0 0 L10 0 L10 5 Z" style="fill:#0000ff"/></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &["--id=layer", "--fixtext=false", "--revertpaths=false"],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(!has(&d, "bottom") && has(&d, "top"), "{s}");
+    assert!(
+        !has(&d, "white"),
+        "its only backing element was the removed duplicate: {s}"
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "white"),
+        "with the duplicate in place the rectangle has something behind it: {s}"
+    );
+}
+
+#[test]
+fn an_excluded_group_inside_the_selection_is_not_dissolved_but_its_contents_are_processed() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><g id="keepme" inkscape-scientific-flattenexclude="True"><g id="sub"><rect id="r1" width="1" height="1" style="fill:#000000"/></g></g><path id="p" d="M0 0h1"/></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "keepme"),
+        "the marked group itself is not ungrouped: {s}"
+    );
+    assert!(
+        !has(&d, "sub"),
+        "…but, as upstream, its descendants still are: {s}"
+    );
+    assert_eq!(
+        by_id(&d, "r1").parent().unwrap().attribute("id"),
+        Some("keepme")
     );
 }
