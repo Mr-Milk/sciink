@@ -5,13 +5,20 @@ use std::collections::HashSet;
 use std::ffi::OsString;
 
 use clap::Parser;
+use kurbo::{Affine, BezPath};
 
 use crate::Output;
 use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
+use crate::geom::inverse;
+use crate::geom::path::{parse_d, path_eq};
+use crate::num;
 use crate::ops::Ctx;
+use crate::ops::bbox::{BboxOpts, bbox, is_rectangle};
 use crate::ops::cleanup::{strip_attr, strip_whitespace};
 use crate::ops::clip::{ungroup, unlink};
+use crate::ops::style::strokefill;
+use crate::ops::xform::object_to_path;
 
 use super::first_line;
 
@@ -239,7 +246,12 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         deep_ungroup(&mut doc, &mut ctx, &seld, opts.removetextclips);
     }
     let mut ngs = non_containers(&doc, &seld);
-    let _ = (&mut ngs, &opts); // consumed by the phases of Tasks 4–6
+    let wrects = if opts.removerectw || opts.reversions || opts.revertpaths {
+        rect_passes(&mut doc, &mut ctx, &mut ngs, &opts)
+    } else {
+        Vec::new()
+    };
+    let _ = (&wrects, &mut ngs); // consumed by Tasks 5–6
     finish(doc, ctx, true)
 }
 
@@ -361,4 +373,183 @@ pub fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_c
             ungroup(doc, ctx, g, remove_text_clip);
         }
     }
+}
+
+/// Aspect ratio beyond which a dark filled rectangle is really a line (F:288).
+pub const RECT_THRESHOLD: f64 = 2.49;
+/// The matplotlib minus-sign glyph (F:285–287); only its first three commands are compared.
+pub const MINUS_D: &str = "M 106,355 H 732 V 272 H 106 Z";
+/// Tags the rectangle passes look at (F:277).
+const RECT_TAGS: &[&str] = &["path", "rect", "line"];
+/// Parents that disqualify an element from the rectangle passes (F:281).
+const FLOW_TAGS: &[&str] = &["flowPara", "flowRegion", "flowRoot"];
+
+fn first_three(p: &BezPath) -> BezPath {
+    BezPath::from_vec(p.elements().iter().take(3).copied().collect())
+}
+
+/// `d` starts with the minus glyph's `M 106,355 H 732 V 272` (F:312–315).
+pub fn is_minus_glyph(d: &str) -> bool {
+    let (Some(p), Some(m)) = (parse_d(d), parse_d(MINUS_D)) else {
+        return false;
+    };
+    p.path.elements().len() >= 3 && path_eq(&first_three(&p.path), &first_three(&m.path), 1e-9)
+}
+
+fn hex(r: u8, g: u8, b: u8) -> String {
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// F:326–340: the glyph path becomes a `<text>` holding U+2212 in the group's frame, re-flipped
+/// about the glyph's centre when the composed transform mirrors (matplotlib draws glyphs with a
+/// negative y scale), with upstream's literal position and size. Returns the new element.
+fn revert_minus(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    el: NodeId,
+    fill: (u8, u8, u8, f64),
+) -> Option<NodeId> {
+    let parent = doc.parent(el)?;
+    let mut t0 = doc.composed_transform(el);
+    if t0.determinant() < 0.0 {
+        let o = BboxOpts {
+            transform: false,
+            stroke: false,
+            rough: false,
+            clip: true,
+        };
+        if let Some(bb) = bbox(doc, ctx, el, o) {
+            let c = bb.center().to_vec2();
+            t0 = t0 * Affine::translate(c) * Affine::FLIP_Y * Affine::translate(-c);
+        }
+    }
+    let inv = inverse(doc.composed_transform(parent))?;
+    let nt = doc.new_element("text");
+    doc.insert_before(nt, el);
+    let id = doc.attr(el, "id").map(str::to_string);
+    doc.detach(el);
+    if let Some(id) = id {
+        doc.set_attr(nt, "id", id);
+    }
+    let txt = doc.new_text("\u{2212}");
+    doc.append_child(nt, txt);
+    doc.set_transform(nt, inv * t0);
+    doc.set_attr(nt, "x", "19.3964");
+    doc.set_attr(nt, "y", "626.924");
+    let (r, g, b, a) = fill;
+    let mut style = format!(
+        "font-size:999.997;font-family:sans-serif;fill:{}",
+        hex(r, g, b)
+    );
+    if a != 1.0 {
+        // Deviation: upstream drops a translucent fill's alpha
+        style.push_str(&format!(";fill-opacity:{}", num::fmt(a)));
+    }
+    doc.set_attr(nt, "style", style);
+    Some(nt)
+}
+
+/// F:342–368: a dark, unstroked rectangle at least `RECT_THRESHOLD` times taller than wide (or
+/// wider than tall) becomes a stroked centre line of the same colour and thickness.
+fn revert_thin(doc: &mut Doc, el: NodeId, bb: kurbo::Rect, fill: (u8, u8, u8, f64)) {
+    let (r, g, b, a) = fill;
+    let (w, h) = (bb.width(), bb.height());
+    let (d, width) = if w < h / RECT_THRESHOLD {
+        let xc = bb.center().x;
+        (
+            format!(
+                "M {},{} L {},{}",
+                num::fmt(xc),
+                num::fmt(bb.y0),
+                num::fmt(xc),
+                num::fmt(bb.y1)
+            ),
+            w,
+        )
+    } else if h < w / RECT_THRESHOLD {
+        let yc = bb.center().y;
+        (
+            format!(
+                "M {},{} L {},{}",
+                num::fmt(bb.x0),
+                num::fmt(yc),
+                num::fmt(bb.x1),
+                num::fmt(yc)
+            ),
+            h,
+        )
+    } else {
+        return;
+    };
+    object_to_path(doc, el);
+    doc.set_attr(el, "d", d);
+    doc.set_style(el, "stroke", &hex(r, g, b));
+    if a != 1.0 {
+        doc.set_style(el, "stroke-opacity", &num::fmt(a));
+        doc.set_style(el, "opacity", "1");
+    }
+    doc.set_style(el, "fill", "none");
+    doc.set_style(el, "stroke-width", &num::fmt(width));
+    doc.set_style(el, "stroke-linecap", "butt");
+}
+
+/// F:277–368: over the non-container working set, every unstroked filled rectangle-like element
+/// (not inside flowed text) is a white-rectangle candidate when its fill is opaque white; with
+/// `reversions` a matplotlib minus glyph becomes a `<text>`; with `revertpaths` a dark thin
+/// rectangle becomes a stroke. Returns the white-rectangle candidates; `ngs` gets the reverted
+/// texts in place of their glyph paths.
+pub fn rect_passes(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    ngs: &mut Vec<NodeId>,
+    o: &Options,
+) -> Vec<NodeId> {
+    let mut wrects = Vec::new();
+    for el in attached(doc, ngs) {
+        if !RECT_TAGS.contains(&doc.tag(el)) {
+            continue;
+        }
+        let Some(parent) = doc.parent(el) else {
+            continue;
+        };
+        if FLOW_TAGS.contains(&doc.tag(parent)) || !is_rectangle(doc, el, false) {
+            continue;
+        }
+        let stroke = doc
+            .specified(el, "stroke")
+            .unwrap_or_else(|| "none".to_string());
+        let fill = doc
+            .specified(el, "fill")
+            .unwrap_or_else(|| "black".to_string());
+        if stroke.trim() != "none" || fill.trim() == "none" {
+            continue;
+        }
+        let sf = strokefill(doc, el);
+        let Some(f) = sf.fill else { continue };
+        let rgba = (f.r, f.g, f.b, f.alpha);
+        if (f.r, f.g, f.b) == (255, 255, 255) && f.alpha == 1.0 {
+            wrects.push(el);
+        }
+        if o.reversions && doc.attr(el, "d").is_some_and(is_minus_glyph) {
+            if let Some(nt) = revert_minus(doc, ctx, el, rgba) {
+                if let Some(i) = ngs.iter().position(|&n| n == el) {
+                    ngs.remove(i);
+                }
+                ngs.push(nt);
+                continue;
+            }
+        }
+        if o.revertpaths && !sf.fill_is_url && f.efflightness < 16.0 / 255.0 {
+            let lo = BboxOpts {
+                transform: false,
+                stroke: false,
+                rough: false,
+                clip: false,
+            };
+            if let Some(bb) = bbox(doc, ctx, el, lo) {
+                revert_thin(doc, el, bb, rgba);
+            }
+        }
+    }
+    wrects
 }

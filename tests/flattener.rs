@@ -411,3 +411,119 @@ fn ungroup_of_a_clipped_out_child_does_not_panic_on_its_dissolved_group() {
     );
     assert!(has(&d, "r") && has(&d, "layer"));
 }
+
+#[test]
+fn matplotlib_minus_glyphs_become_minus_signs() {
+    // a real matplotlib minus: the DejaVu glyph path under the usual flip
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><g id="t" transform="translate(50,60) scale(0.1,-0.1)"><path id="m" d="M 106,355 H 732 V 272 H 106 Z" style="fill:#336699;fill-opacity:0.5"/></g><path id="other" d="M 106,355 H 732 V 272 H 106 Z" transform="scale(0.1)" style="fill:#000000"/></g></svg>"#
+    );
+    // reversions and fixtext stay at their `true` defaults; the four kerning flags off keep
+    // `remove_kerning` from touching the new <text>
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--revertpaths=false",
+            "--splitdistant=false",
+            "--mergenearby=false",
+            "--removemanualkerning=false",
+            "--mergesubsuper=false",
+            "--removetextclips=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let m = by_id(&d, "m");
+    assert_eq!(m.tag_name().name(), "text", "{s}");
+    assert_eq!(m.text(), Some("\u{2212}"));
+    assert_eq!(
+        (m.attribute("x"), m.attribute("y")),
+        (Some("19.3964"), Some("626.924"))
+    );
+    let st = style_of(m);
+    assert_eq!(st.get("font-size"), Some("999.997"));
+    assert_eq!(st.get("font-family"), Some("sans-serif"));
+    assert_eq!(st.get("fill"), Some("#336699"));
+    assert_eq!(
+        st.get("fill-opacity"),
+        Some("0.5"),
+        "translucent fill is kept (Deviation)"
+    );
+    // the glyph was drawn flipped (det < 0): the text is re-flipped about the glyph's centre so
+    // it reads upright, and lands in the (now dissolved) group's frame
+    let t = sciink::geom::parse_transform(m.attribute("transform").unwrap()).unwrap();
+    assert!(t.determinant() > 0.0, "upright: {t:?}");
+    let [a, b, c, dd, _, _] = t.as_coeffs();
+    assert!(
+        (a - 0.1).abs() < 1e-9 && b.abs() < 1e-9 && c.abs() < 1e-9 && (dd - 0.1).abs() < 1e-9,
+        "{t:?}"
+    );
+    // an upright glyph keeps its transform as is
+    let o = by_id(&d, "other");
+    assert_eq!(o.tag_name().name(), "text");
+    let ot = sciink::geom::parse_transform(o.attribute("transform").unwrap()).unwrap();
+    assert!(
+        sciink::geom::affine_eq(ot, sciink::geom::Affine::scale(0.1)),
+        "{ot:?}"
+    );
+    assert_eq!(style_of(o).get("fill-opacity"), None);
+}
+
+#[test]
+fn thin_dark_rectangles_become_strokes() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><path id="v" d="M10 0 h2 v100 h-2 z" style="fill:#0a0a0a"/><rect id="h" x="0" y="50" width="80" height="1" style="fill:#000000;fill-opacity:0.95"/><rect id="fat" width="10" height="10" style="fill:#000000"/><rect id="light" x="0" y="0" width="1" height="50" style="fill:#c0c0c0"/><path id="stroked" d="M0 0 h2 v100 h-2 z" style="fill:#000000;stroke:#ff0000"/></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--revertpaths=true",
+            "--fixtext=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let v = by_id(&d, "v");
+    assert_eq!(v.tag_name().name(), "path");
+    assert_eq!(
+        v.attribute("d"),
+        Some("M 11,0 L 11,100"),
+        "vertical centre line: {s}"
+    );
+    let st = style_of(v);
+    // #0a0a0a: L = 10 → effective lightness 10/255 < 16/255 (a #202020 fill, L = 32, is not "dark")
+    assert_eq!(
+        (
+            st.get("stroke"),
+            st.get("fill"),
+            st.get("stroke-width"),
+            st.get("stroke-linecap")
+        ),
+        (Some("#0a0a0a"), Some("none"), Some("2"), Some("butt"))
+    );
+    assert_eq!(st.get("stroke-opacity"), None);
+    let h = by_id(&d, "h");
+    assert_eq!(h.tag_name().name(), "path", "a <rect> is converted");
+    assert_eq!(h.attribute("d"), Some("M 0,50.5 L 80,50.5"));
+    let st = style_of(h);
+    // black at 95 %: effective lightness 0.05 < 16/255, so it is dark AND translucent
+    assert_eq!(
+        (
+            st.get("stroke-width"),
+            st.get("stroke-opacity"),
+            st.get("opacity")
+        ),
+        (Some("1"), Some("0.95"), Some("1"))
+    );
+    assert_eq!(h.attribute("width"), None, "shape attributes are gone");
+    for i in ["fat", "light", "stroked"] {
+        assert!(
+            style_of(by_id(&d, i)).get("stroke-linecap").is_none(),
+            "{i} is not thin, dark and unstroked"
+        );
+    }
+}
