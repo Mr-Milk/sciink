@@ -9,15 +9,18 @@ use clap::Parser;
 use crate::Output;
 use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
-use crate::geom::{Affine, Rect, inverse};
+use crate::geom::{Affine, Rect, inverse, union};
+use crate::num;
 use crate::ops::Ctx;
 use crate::ops::bbox::bb2;
 use crate::ops::style::remove_inline;
-use crate::ops::xform::global_transform;
+use crate::ops::xform::{OTP_SUPPORT, fuse, global_transform};
 use crate::style::Style;
 use crate::text::fonts::FontSystem;
+use crate::text::style::{baseline_shift, composed_width};
 
 use super::first_line;
+use super::scaler::{find_plot_area, geometric_bbox, warn_non_plot};
 
 /// Never restyled (`HG:31–39`).
 pub const BAD_TAGS: &[&str] = &[
@@ -196,6 +199,109 @@ pub fn inkscape_spec_to_css(fstr: &str, families: &[String]) -> Option<Style> {
     Some(sty)
 }
 
+/// Upstream's `font-size` rounding (`HG:207–208`): two decimals when `|v| > 1`, else three
+/// significant digits, trailing zeros trimmed, `px` appended.
+pub fn fmt_font_size(v: f64) -> String {
+    let rounded = if v.abs() > 1.0 {
+        (v * 100.0).round() / 100.0
+    } else {
+        format!("{v:.2e}").parse::<f64>().unwrap_or(v)
+    };
+    format!("{}px", num::fmt(rounded))
+}
+
+fn mean(v: &[f64]) -> f64 {
+    v.iter().sum::<f64>() / v.len() as f64
+}
+fn median(v: &[f64]) -> f64 {
+    let mut s = v.to_vec();
+    s.sort_by(|a, b| a.total_cmp(b));
+    let n = s.len();
+    if n % 2 == 1 {
+        s[n / 2]
+    } else {
+        (s[n / 2 - 1] + s[n / 2]) / 2.0
+    }
+}
+
+/// `HG:153–208`: the largest character size (pt) of every text, the target from `mode`
+/// (2 fixed pt, 3 scale %, 4 scale so the largest becomes `fontsize` pt, 5–8 mean/median/min/max
+/// of the sizes), then every text and every descendant carrying a `font-size` is rewritten:
+/// relative spans (`%` or a baseline shift) as a percentage of their parent, the rest absolute.
+pub(crate) fn set_font_size(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    tels: &[NodeId],
+    fontsize: f64,
+    mode: u8,
+) {
+    let onept = (4.0 / 3.0) / doc.px_per_uu(); // 1 pt in user units (`cdocsize.unittouu("1pt")`)
+    let mut szs: Vec<(NodeId, f64)> = Vec::new();
+    for &el in tels {
+        let Some(pt) = ctx.parse_text(doc, el) else {
+            continue;
+        };
+        let max = pt
+            .chars
+            .iter()
+            .map(|c| c.tfs / onept)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if max.is_finite() {
+            szs.push((el, max));
+        }
+    }
+    let values: Vec<f64> = szs.iter().map(|(_, v)| *v).collect();
+    let (mut fontsize, mut fixedscale) = (fontsize, false);
+    let stat = |f: fn(&[f64]) -> f64| if values.is_empty() { 12.0 } else { f(&values) };
+    match mode {
+        3 => fixedscale = true,
+        4 => {
+            fixedscale = true;
+            let m = stat(|v| v.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+            fontsize = fontsize / m * 100.0;
+        }
+        5 => fontsize = stat(mean),
+        6 => fontsize = stat(median),
+        7 => fontsize = stat(|v| v.iter().cloned().fold(f64::INFINITY, f64::min)),
+        8 => fontsize = stat(|v| v.iter().cloned().fold(f64::NEG_INFINITY, f64::max)),
+        _ => {}
+    }
+    for (el, _) in szs {
+        let nodes: Vec<NodeId> = doc.descendants(el).filter(|&n| doc.is_element(n)).collect();
+        for &d in nodes.iter().rev() {
+            let sty = doc.specified_style(d);
+            if d != el && sty.get("font-size").is_none() {
+                continue;
+            }
+            let fs = composed_width(doc, d, "font-size");
+            if fs.tfs == 0.0 {
+                continue;
+            }
+            let bshift = baseline_shift(doc, d, &sty);
+            let relative = bshift != 0.0 || sty.get("font-size").is_some_and(|v| v.contains('%'));
+            if relative {
+                // a sub/superscript stays relative to its parent
+                let Some(parent) = doc.parent(d).filter(|&p| doc.is_element(p)) else {
+                    continue;
+                };
+                let pfs = composed_width(doc, parent, "font-size").tfs;
+                if pfs == 0.0 {
+                    continue;
+                }
+                doc.set_style(d, "font-size", &format!("{:.2}%", fs.tfs / pfs * 100.0));
+            } else {
+                let scl = if fixedscale {
+                    fontsize / 100.0
+                } else {
+                    fontsize * onept / fs.tfs
+                };
+                doc.set_style(d, "font-size", &fmt_font_size(fs.utfs * scl));
+            }
+        }
+    }
+    ctx.reset_char_table();
+}
+
 /// `HG:210–225`: replace each text's composed transform by the conformal one with the same
 /// area (`sqrt|det|`), rotation and flip. Deviation: only `text`/`flowRoot` — upstream also
 /// "fixes" tspans, writing `transform` attributes they cannot carry.
@@ -278,8 +384,146 @@ pub(crate) fn recentre(
         }
         return;
     }
-    // Task 8 fills this branch (HG:265–319)
-    let _ = sel0;
+    let gbbs: HashMap<NodeId, Rect> = bbs
+        .iter()
+        .map(|(&n, &v)| (n, geometric_bbox(doc, n, v, None)))
+        .collect();
+    for (i0, &g) in sel0.iter().enumerate() {
+        let pels: Vec<NodeId> = doc
+            .children(g)
+            .filter(|&k| doc.is_element(k) && bbs.contains_key(&k))
+            .collect();
+        let pa = find_plot_area(doc, &pels, &gbbs);
+        let (lvel, lhel) = match (pa.lvel, pa.lhel) {
+            (Some(v), Some(h)) => (Some(v), Some(h)),
+            _ => {
+                let gid = doc.attr(g, "id").unwrap_or("").to_string();
+                warn_non_plot(&mut ctx.warn, i0, &gid);
+                (None, None)
+            }
+        };
+        let mut bbp: Option<Rect> = None;
+        for &el in &pels {
+            if Some(el) == lvel || Some(el) == lhel {
+                bbp = union(bbp, gbbs.get(&el).copied());
+            }
+        }
+        let texts: Vec<NodeId> = doc.descendants(g).filter(|n| tels.contains(n)).collect();
+        for el in texts {
+            let (Some(&b1), Some(&b2)) = (bbs.get(&el), bbs2.get(&el)) else {
+                continue;
+            };
+            let centred = (b1.center().x - b2.center().x, b1.center().y - b2.center().y);
+            let (dx, dy) = match bbp {
+                Some(p) if b1.width() > 0.0 && b1.height() > 0.0 => {
+                    let dx = if b1.center().x < p.x0 {
+                        (p.x0 - b2.x1) - (p.x0 - b1.x1) * b2.width() / b1.width()
+                    } else if b1.center().x > p.x1 {
+                        (b1.x0 - p.x1) * b2.width() / b1.width() - (b2.x0 - p.x1)
+                    } else {
+                        centred.0
+                    };
+                    let dy = if b1.center().y < p.y0 {
+                        (p.y0 - b2.y1) - (p.y0 - b1.y1) * b2.height() / b1.height()
+                    } else if b1.center().y > p.y1 {
+                        (b1.y0 - p.y1) * b2.height() / b1.height() - (b2.y0 - p.y1)
+                    } else {
+                        centred.1
+                    };
+                    (dx, dy)
+                }
+                _ => centred,
+            };
+            global_transform(doc, ctx, el, Affine::translate((dx, dy)), None, true);
+        }
+    }
+}
+
+/// `HG:321–361` with the spec's restriction to elements whose specified stroke is not `none`
+/// (upstream writes a width on every element, unstroked ones included, and its statistics count
+/// them at the default width 1). Mode 2 = fixed px (converted to user units), 3 = scale %,
+/// 5–8 = mean/median/min/max of the visual widths. Written as `visual / sf` + `px`.
+pub(crate) fn set_stroke(doc: &mut Doc, ctx: &mut Ctx, sela: &[NodeId], setstrokew: f64, mode: u8) {
+    let stroked: Vec<(NodeId, f64, f64)> = sela
+        .iter()
+        .filter(|&&n| {
+            doc.specified(n, "stroke")
+                .is_some_and(|s| s.trim() != "none")
+        })
+        .map(|&n| {
+            let w = composed_width(doc, n, "stroke-width");
+            (n, w.tfs, w.scf)
+        })
+        .collect();
+    if stroked.is_empty() {
+        ctx.warn.push(
+            "stroke width: no stroked elements in the selection; nothing changed".to_string(),
+        );
+        return;
+    }
+    let widths: Vec<f64> = stroked.iter().map(|(_, w, _)| *w).collect();
+    let mut fixedscale = false;
+    let target = match mode {
+        2 => setstrokew / doc.px_per_uu(),
+        3 => {
+            fixedscale = true;
+            setstrokew
+        }
+        5 => mean(&widths),
+        6 => median(&widths),
+        7 => widths.iter().cloned().fold(f64::INFINITY, f64::min),
+        8 => widths.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+        _ => setstrokew,
+    };
+    for (n, w, sf) in stroked {
+        if sf == 0.0 {
+            continue;
+        }
+        let new = if fixedscale {
+            w * target / 100.0
+        } else {
+            target
+        };
+        doc.set_style(n, "stroke-width", &format!("{}px", num::fmt(new / sf)));
+    }
+}
+
+/// `HG:363–369`: bake each shape's composed transform into its geometry (and stroke), then give
+/// it the inverse of its parent's composed transform — the path data ends up in global
+/// coordinates. Elements under a singular transform are left alone with a warning.
+pub(crate) fn fuse_all(doc: &mut Doc, ctx: &mut Ctx, sela: &[NodeId]) {
+    for &el in sela {
+        if !OTP_SUPPORT.contains(&doc.tag(el)) || doc.parent(el).is_none() {
+            continue;
+        }
+        let parent_ct = doc
+            .parent(el)
+            .map(|p| doc.composed_transform(p))
+            .unwrap_or(Affine::IDENTITY);
+        let Some(inv) = inverse(parent_ct) else {
+            ctx.warn.push(format!(
+                "{}: singular parent transform; not fused",
+                crate::ops::label(doc, el)
+            ));
+            continue;
+        };
+        fuse(doc, ctx, el, parent_ct, None, true);
+        doc.set_transform(el, inv);
+    }
+}
+
+/// `HG:372–375` as the spec reads it: the `clip-path`/`mask` attributes and inline values go;
+/// an inline `none` is written only where a stylesheet rule would otherwise still apply one.
+pub(crate) fn clear_clipmasks(doc: &mut Doc, sela: &[NodeId]) {
+    for &el in sela {
+        for prop in ["clip-path", "mask"] {
+            doc.remove_attr(el, prop);
+            remove_inline(doc, el, prop);
+            if doc.sheet_value(el, prop).is_some() {
+                doc.set_style(el, prop, "none");
+            }
+        }
+    }
 }
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
@@ -336,7 +580,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         bb2(&mut doc, &mut ctx, &tels, false)
     };
     if cli.setfontsize {
-        // Task 8: set_font_size(&mut doc, &mut ctx, &tels, cli.fontsize, cli.fontmodes);
+        set_font_size(&mut doc, &mut ctx, &tels, cli.fontsize, cli.fontmodes);
     }
     if cli.fixtextdistortion {
         fix_distortion(&mut doc, &mut ctx, &tels);
@@ -348,15 +592,14 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         recentre(&mut doc, &mut ctx, &sel0, &tels, &bbs, cli.plotaware);
     }
     if cli.setstroke {
-        // Task 8: set_stroke(&mut doc, &mut ctx, &sela, cli.setstrokew, cli.strokemodes);
+        set_stroke(&mut doc, &mut ctx, &sela, cli.setstrokew, cli.strokemodes);
     }
     if cli.fusetransforms {
-        // Task 8: fuse_all(&mut doc, &mut ctx, &sela);
+        fuse_all(&mut doc, &mut ctx, &sela);
     }
     if cli.clearclipmasks {
-        // Task 8: clear_clipmasks(&mut doc, &sela);
+        clear_clipmasks(&mut doc, &sela);
     }
-    let _ = &sela;
     finish(doc, ctx, messages)
 }
 
