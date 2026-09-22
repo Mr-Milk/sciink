@@ -407,3 +407,17 @@ fn is_rectangle_survives_a_branching_self_referencing_clip() {
         t0.elapsed()
     );
 }
+
+#[test]
+fn ctx_parse_text_reads_the_characters() {
+    let mut doc = sciink::dom::Doc::parse(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><text id="t" style="font-family:'DejaVu Sans'">Hi</text><rect id="r"/></svg>"#,
+    )
+    .unwrap();
+    let (t, r) = (doc.by_id("t").unwrap(), doc.by_id("r").unwrap());
+    let mut ctx = sciink::ops::Ctx::new();
+    let pt = support::with_vendored_fonts(|| ctx.parse_text(&mut doc, t)).unwrap();
+    assert_eq!(pt.text(), "Hi");
+    assert_eq!(pt.chars.len(), 2);
+    assert!(ctx.parse_text(&mut doc, r).is_none(), "not a text element");
+}
