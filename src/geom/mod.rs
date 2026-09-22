@@ -6,7 +6,7 @@ pub mod path;
 
 use std::str::FromStr;
 
-pub use kurbo::{Affine, BezPath, Point, Rect, Vec2};
+pub use kurbo::{Affine, BezPath, PathEl, Point, Rect, Vec2};
 
 use crate::num;
 
