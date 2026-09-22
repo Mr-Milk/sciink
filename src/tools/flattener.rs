@@ -16,9 +16,11 @@ use crate::num;
 use crate::ops::Ctx;
 use crate::ops::bbox::{BboxOpts, bbox, is_rectangle};
 use crate::ops::cleanup::{strip_attr, strip_whitespace};
-use crate::ops::clip::{ungroup, unlink};
-use crate::ops::style::strokefill;
+use crate::ops::clip::{deswitch, ui_language, ungroup, unlink};
+use crate::ops::style::{remove_inline, strokefill};
 use crate::ops::xform::object_to_path;
+use crate::text::fonts::FontSystem;
+use crate::text::kerning::{KerningOptions, remove_kerning};
 
 use super::first_line;
 
@@ -251,7 +253,10 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     } else {
         Vec::new()
     };
-    let _ = (&wrects, &mut ngs); // consumed by Tasks 5–6
+    if opts.fixtext {
+        text_phase(&mut doc, &mut ctx, &mut ngs, &opts);
+    }
+    let _ = (&wrects, &ngs); // consumed by Task 6
     finish(doc, ctx, true)
 }
 
@@ -552,4 +557,79 @@ pub fn rect_passes(
         }
     }
     wrects
+}
+
+/// F:372–388 `setreplacement`: every `<text>`/`<tspan>` of the working set loses its inline
+/// `-inkscape-font-specification` and gets `replacement` appended to its family list (or as its
+/// family when it has none), unless the list already ends with it.
+pub fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
+    for el in attached(doc, ngs) {
+        if !matches!(doc.tag(el), "text" | "tspan") {
+            continue;
+        }
+        let ff = doc.specified(el, "font-family");
+        remove_inline(doc, el, "-inkscape-font-specification");
+        let ff = ff.map(|s| s.trim().to_string()).unwrap_or_default();
+        if ff.is_empty() || ff == "none" {
+            doc.set_style(el, "font-family", replacement);
+        } else if ff == replacement {
+            // nothing to do
+        } else {
+            let mut fams: Vec<String> = ff
+                .split(',')
+                .map(|f| {
+                    f.trim_matches(|c| matches!(c, '\'' | '"' | ' '))
+                        .to_string()
+                })
+                .collect();
+            if !fams
+                .last()
+                .is_some_and(|l| l.eq_ignore_ascii_case(replacement))
+            {
+                fams.push(replacement.to_string());
+            }
+            doc.set_style(el, "font-family", &fams.join(","));
+        }
+    }
+}
+
+/// F:370–413: font replacement, language switches, the kerning pipeline, text clips.
+pub fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
+    if o.setreplacement {
+        replace_fonts(doc, ngs, &o.replacement);
+    }
+    if o.removemanualkerning || o.mergesubsuper || o.splitdistant || o.mergenearby {
+        let lang = ui_language();
+        for sw in attached(doc, ngs) {
+            if doc.tag(sw) == "switch" {
+                deswitch(doc, ctx, sw, &lang);
+            }
+        }
+        *ngs = attached(doc, ngs);
+        let tels: Vec<NodeId> = ngs
+            .iter()
+            .copied()
+            .filter(|&n| matches!(doc.tag(n), "text" | "flowRoot"))
+            .collect();
+        let kopts = KerningOptions::from_inx(
+            o.removemanualkerning,
+            o.mergesubsuper,
+            o.splitdistant,
+            o.mergenearby,
+            o.justification,
+        );
+        let out = remove_kerning(doc, &tels, &kopts, FontSystem::load(), &mut ctx.warn);
+        let tset: HashSet<NodeId> = tels.into_iter().collect();
+        ngs.retain(|n| !tset.contains(n));
+        *ngs = attached(doc, ngs); // tspans of rewritten texts are gone
+        ngs.extend(out.into_iter().filter(|&n| doc.parent(n).is_some()));
+    }
+    if o.removetextclips {
+        for el in attached(doc, ngs) {
+            if matches!(doc.tag(el), "text" | "flowRoot") {
+                doc.remove_attr(el, "clip-path");
+                doc.remove_attr(el, "mask");
+            }
+        }
+    }
 }

@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use support::with_vendored_fonts;
 
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:sodipodi=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\"";
+const DV: &str = "font-family:'DejaVu Sans'";
 
 fn args(v: &[&str]) -> Vec<OsString> {
     std::iter::once("sciink")
@@ -526,4 +527,131 @@ fn thin_dark_rectangles_become_strokes() {
             "{i} is not thin, dark and unstroked"
         );
     }
+}
+
+#[test]
+fn font_replacement_appends_the_family_and_drops_the_inkscape_spec() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><text id="a" style="font-family:'Franklin Gothic Book', serif;-inkscape-font-specification:'Franklin Gothic Book'" x="0" y="0">a<tspan id="s" style="font-family:Arial">b</tspan></text><text id="none" style="font-family:none" x="0" y="20">c</text><text id="bare" x="0" y="40">d</text><text id="same" style="font-family:arial" x="0" y="60">e</text></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--setreplacement=true",
+            "--replacement=Arial",
+            "--splitdistant=false",
+            "--mergenearby=false",
+            "--removemanualkerning=false",
+            "--mergesubsuper=false",
+            "--reversions=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let st = style_of(by_id(&d, "a"));
+    assert_eq!(
+        st.get("font-family"),
+        Some("Franklin Gothic Book,serif,Arial"),
+        "{s}"
+    );
+    assert_eq!(st.get("-inkscape-font-specification"), None);
+    assert_eq!(
+        style_of(by_id(&d, "s")).get("font-family"),
+        Some("Arial"),
+        "a tspan already at the replacement is left alone"
+    );
+    assert_eq!(
+        style_of(by_id(&d, "none")).get("font-family"),
+        Some("Arial")
+    );
+    assert_eq!(
+        style_of(by_id(&d, "bare")).get("font-family"),
+        Some("Arial"),
+        "no family at all → the replacement"
+    );
+    assert_eq!(
+        style_of(by_id(&d, "same")).get("font-family"),
+        Some("arial"),
+        "case-insensitive match of the last entry: nothing appended"
+    );
+}
+
+#[test]
+fn text_phase_merges_split_words_and_removes_text_clips() {
+    // "Hello" + " world" as two elements one space apart (DejaVu Sans 10 px), a clipped text, and a
+    // language switch — the Flattener's text phase merges, strips the clip and resolves the switch
+    let svg = format!(
+        r#"<svg {NS}><defs><clipPath id="c"><rect width="1000" height="1000"/></clipPath></defs><g id="layer"><text id="h" xml:space="preserve" style="{DV};font-size:10px" x="0" y="0">Hello</text><text id="w" xml:space="preserve" style="{DV};font-size:10px" x="28.5" y="0">world</text><text id="clipped" style="{DV};font-size:10px" x="0" y="50" clip-path="url(#c)" mask="url(#c)">clipped</text><switch id="sw"><text id="de" systemLanguage="de" style="{DV};font-size:10px" x="0" y="80">Hallo</text><text id="en" style="{DV};font-size:10px" x="0" y="80">Hi</text></switch></g></svg>"#
+    );
+    let (s, msgs) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    assert!(msgs.iter().all(|m| m.starts_with("warning: ")), "{msgs:?}");
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let texts: Vec<String> = d
+        .descendants()
+        .filter(|n| n.has_tag_name("text"))
+        .map(|n| {
+            n.descendants()
+                .filter(|c| c.is_text())
+                .filter_map(|c| c.text())
+                .collect::<String>()
+        })
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.split_whitespace().collect::<Vec<_>>().join(" ") == "Hello world"),
+        "merged: {texts:?}"
+    );
+    let clipped = d
+        .descendants()
+        .find(|n| n.has_tag_name("text") && n.descendants().any(|c| c.text() == Some("clipped")))
+        .expect("clipped text survives");
+    assert_eq!(
+        (clipped.attribute("clip-path"), clipped.attribute("mask")),
+        (None, None),
+        "text clips removed: {s}"
+    );
+    assert!(
+        !has(&d, "sw") && !has(&d, "de"),
+        "the switch is resolved to the matching child: {s}"
+    );
+    assert!(texts.iter().any(|t| t.trim() == "Hi"));
+    assert!(!s.contains("<switch"));
+}
+
+#[test]
+fn fixtext_off_leaves_text_untouched() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><text id="h" xml:space="preserve" style="{DV};font-size:10px;-inkscape-font-specification:x" x="0" y="0">Hello</text><text id="w" xml:space="preserve" style="{DV};font-size:10px" x="28.5" y="0">world</text></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--fixtext=false",
+            "--setreplacement=true",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "h") && has(&d, "w"), "{s}");
+    assert!(
+        style_of(by_id(&d, "h"))
+            .get("-inkscape-font-specification")
+            .is_some(),
+        "setreplacement is ANDed with fixtext"
+    );
 }
