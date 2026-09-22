@@ -226,8 +226,9 @@ fn median(v: &[f64]) -> f64 {
 
 /// `HG:153–208`: the largest character size (pt) of every text, the target from `mode`
 /// (2 fixed pt, 3 scale %, 4 scale so the largest becomes `fontsize` pt, 5–8 mean/median/min/max
-/// of the sizes), then every text and every descendant carrying a `font-size` is rewritten:
-/// relative spans (`%` or a baseline shift) as a percentage of their parent, the rest absolute.
+/// of the sizes), then every text and every descendant whose SPECIFIED (inherited) font-size
+/// resolves is rewritten: relative spans (`%` or a baseline shift) as a percentage of their
+/// parent, the rest absolute.
 pub(crate) fn set_font_size(
     doc: &mut Doc,
     ctx: &mut Ctx,
@@ -251,8 +252,13 @@ pub(crate) fn set_font_size(
         }
     }
     let values: Vec<f64> = szs.iter().map(|(_, v)| *v).collect();
+    if values.is_empty() {
+        ctx.warn
+            .push("font size: no text could be measured; nothing changed".to_string());
+        return;
+    }
     let (mut fontsize, mut fixedscale) = (fontsize, false);
-    let stat = |f: fn(&[f64]) -> f64| if values.is_empty() { 12.0 } else { f(&values) };
+    let stat = |f: fn(&[f64]) -> f64| f(&values);
     match mode {
         3 => fixedscale = true,
         4 => {
@@ -493,13 +499,13 @@ pub(crate) fn set_stroke(doc: &mut Doc, ctx: &mut Ctx, sela: &[NodeId], setstrok
 /// coordinates. Elements under a singular transform are left alone with a warning.
 pub(crate) fn fuse_all(doc: &mut Doc, ctx: &mut Ctx, sela: &[NodeId]) {
     for &el in sela {
-        if !OTP_SUPPORT.contains(&doc.tag(el)) || doc.parent(el).is_none() {
+        if !OTP_SUPPORT.contains(&doc.tag(el)) {
             continue;
         }
-        let parent_ct = doc
-            .parent(el)
-            .map(|p| doc.composed_transform(p))
-            .unwrap_or(Affine::IDENTITY);
+        let Some(parent) = doc.parent(el) else {
+            continue;
+        };
+        let parent_ct = doc.composed_transform(parent);
         let Some(inv) = inverse(parent_ct) else {
             ctx.warn.push(format!(
                 "{}: singular parent transform; not fused",
@@ -534,9 +540,9 @@ pub(crate) fn clear_clipmasks(doc: &mut Doc, sela: &[NodeId]) {
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = HomogenizerCli::try_parse_from(argv).map_err(first_line)?;
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
-    let mut ctx = Ctx::new();
     let mut messages: Vec<String> = Vec::new();
     let sel0 = doc.selection(&cli.common.ids);
+    let mut ctx = Ctx::for_roots(sel0.clone());
     // HG:118: the selection and every descendant, each once, document order
     let mut sel: Vec<NodeId> = Vec::new();
     let mut seen: HashSet<NodeId> = HashSet::new();

@@ -59,7 +59,7 @@ type Scan = (fontdb::Database, Vec<(fontdb::ID, FaceInfo)>);
 static SCANS: OnceLock<Mutex<HashMap<ScanKey, Arc<Scan>>>> = OnceLock::new();
 static SCAN_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// How many filesystem font scans this process has run (tests; About prints it).
+/// How many filesystem font scans this process has run (tests).
 pub fn scan_count() -> usize {
     SCAN_COUNT.load(Ordering::SeqCst)
 }

@@ -463,7 +463,10 @@ pub(crate) fn scale_plot(
         let (sx, sy) = own_scale(doc.transform(plot));
         scalex = sane(sx, "the plot's horizontal scale", &mut ctx.warn);
         scaley = sane(sy, "the plot's vertical scale", &mut ctx.warn);
-        let (bbp_g, bba_f) = (bbp.g.unwrap(), bba.f.unwrap());
+        let (bbp_g, bba_f) = (
+            bbp.g.expect("guarded: pels has a box"),
+            bba.f.expect("guarded: pels has a box"),
+        );
         (refx, refy) = if !o.figure {
             (bbp_g.center().x, bbp_g.center().y)
         } else {
@@ -577,7 +580,10 @@ pub(crate) fn scale_plot(
             (bbag.center().x, bbag.center().y)
         };
     }
-    let (bbpg, bbag) = (bbp.g.unwrap(), bba.g.unwrap());
+    let (bbpg, bbag) = (
+        bbp.g.expect("guarded: pels has a box"),
+        bba.g.expect("guarded: pels has a box"),
+    );
     // SP:442–466
     let (mut finx, mut finy) = (refx, refy);
     if let (
@@ -714,13 +720,13 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = ScalerCli::try_parse_from(argv).map_err(first_line)?;
     let o = Options::from_cli(&cli);
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
-    let mut ctx = Ctx::new();
     // SP:231–232: selection order matters (the first selection is the Matching target)
     let sel: Vec<NodeId> = doc
         .selection_ordered(&cli.common.ids)
         .into_iter()
         .filter(|&n| !EXCLUDE_TAGS.contains(&doc.tag(n)))
         .collect();
+    let mut ctx = Ctx::for_roots(sel.clone());
     if let Mode::Advanced { mark } = o.mode {
         // SP:250–260
         for &el in &sel {
