@@ -873,8 +873,10 @@ pub fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_c
                 })
                 .collect();
             doc.set_attr(g, MPL_COMMENT, cmnt.join(";"));
-            for k in kids.iter().filter(|&&k| doc.is_comment(k)) {
-                doc.detach(*k);
+            // collect first: the filter borrows `doc` immutably while `detach` needs it mutably
+            let comments: Vec<NodeId> = kids.iter().copied().filter(|&k| doc.is_comment(k)).collect();
+            for k in comments {
+                doc.detach(k);
             }
         } else if doc.attr(g, MPL_COMMENT).is_some() {
             // leave grouped
