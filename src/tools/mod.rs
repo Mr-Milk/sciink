@@ -5,6 +5,7 @@ pub mod about;
 pub mod combine_by_color;
 pub mod font_probe;
 pub mod text_fix;
+pub mod text_ghoster;
 pub mod text_highlight;
 
 /// The first line of a clap error (its usage dump is noise in an Inkscape dialog).
