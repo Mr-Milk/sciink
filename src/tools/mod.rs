@@ -3,6 +3,7 @@
 
 pub mod about;
 pub mod combine_by_color;
+pub mod flattener;
 pub mod font_probe;
 pub mod text_fix;
 pub mod text_ghoster;
