@@ -655,3 +655,87 @@ fn fixtext_off_leaves_text_untouched() {
         "setreplacement is ANDed with fixtext"
     );
 }
+
+#[test]
+fn overlapping_identical_paths_lose_the_one_underneath() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><path id="bottom" d="M0 0 L10 0 L10 5" style="stroke:#ff0000;fill:none"/><path id="top" d="M0 0 L10 0 L10 5" style="stroke:#ff0000;fill:none"/><path id="reversed" d="M10 5 L10 0 L0 0" style="stroke:#ff0000;fill:none"/><path id="other_style" d="M0 0 L10 0 L10 5" style="stroke:#ff0000;fill:none;stroke-width:3"/><path id="translucent_top" d="M20 0 L30 0" style="stroke:#0000ff;fill:none;stroke-opacity:0.5"/><path id="translucent_top2" d="M20 0 L30 0" style="stroke:#0000ff;fill:none;stroke-opacity:0.5"/><g id="wrap"><path id="moved" d="M0 0 L10 0 L10 5" transform="translate(40,0)" style="fill:#00ff00"/></g><path id="moved_dup" d="M40 0 L50 0 L50 5" style="fill:#00ff00"/></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        !has(&d, "bottom") && !has(&d, "top"),
+        "top ≡ reversed: `reversed` is the topmost of the three, it survives; the two below it go: {s}"
+    );
+    assert!(has(&d, "reversed"));
+    assert!(
+        has(&d, "other_style"),
+        "a different stroke width is not a duplicate"
+    );
+    assert!(
+        has(&d, "translucent_top") && has(&d, "translucent_top2"),
+        "a translucent top element never deletes what is under it"
+    );
+    assert!(
+        !has(&d, "moved") && has(&d, "moved_dup"),
+        "duplicates are compared in root coordinates, through transforms: {s}"
+    );
+    assert!(!has(&d, "wrap"), "the emptied group went with it");
+}
+
+#[test]
+fn white_background_rectangles_go_when_nothing_is_behind_them() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><rect id="bg" width="100" height="100" style="fill:#ffffff"/><path id="axis" d="M10 25 L90 25" style="stroke:#000000"/><rect id="cover" x="20" y="20" width="10" height="10" style="fill:#ffffff"/><rect id="alone" x="200" y="200" width="10" height="10" style="fill:#ffffff"/><rect id="stroked" x="300" y="300" width="10" height="10" style="fill:#ffffff;stroke:#000000"/><rect id="offwhite" x="400" y="400" width="10" height="10" style="fill:#fffffe"/></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removeduppaths=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(!has(&d, "bg"), "nothing is behind the background: {s}");
+    assert!(
+        has(&d, "cover"),
+        "the axis line is behind it → kept (it may be hiding something on purpose)"
+    );
+    assert!(!has(&d, "alone"));
+    assert!(
+        has(&d, "stroked") && has(&d, "offwhite"),
+        "only unstroked pure-white fills are candidates"
+    );
+    assert!(has(&d, "axis"));
+}
+
+#[test]
+fn the_shape_inside_target_of_a_text_is_never_a_duplicate_candidate() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><rect id="frame" width="10" height="10" style="fill:#000000"/><rect id="frame2" width="10" height="10" style="fill:#000000"/><text id="t" style="shape-inside:url(#frame2);{DV};font-size:3px" x="0" y="0"><tspan x="0" y="3">x</tspan></text></g></svg>"#
+    );
+    let (s, _) = flatten(
+        &svg,
+        &[
+            "--id=layer",
+            "--fixtext=false",
+            "--revertpaths=false",
+            "--removerectw=false",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "frame") && has(&d, "frame2"),
+        "frame2 is a text's shape-inside, so the pair is never considered: {s}"
+    );
+}

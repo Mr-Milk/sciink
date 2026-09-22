@@ -1,24 +1,25 @@
 //! The Flattener (spec §B.3; upstream flatten_plots.py): deep ungroup, rectangle reversions,
 //! the text pipeline, duplicate and white-rectangle removal, cleanup.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 
 use clap::Parser;
-use kurbo::{Affine, BezPath};
+use kurbo::{Affine, BezPath, Rect};
 
 use crate::Output;
 use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
-use crate::geom::inverse;
-use crate::geom::path::{parse_d, path_eq};
+use crate::geom::path::{parse_d, path_eq, reverse, shape_path};
+use crate::geom::{intersects, inverse};
 use crate::num;
 use crate::ops::Ctx;
-use crate::ops::bbox::{BboxOpts, bbox, is_rectangle};
-use crate::ops::cleanup::{strip_attr, strip_whitespace};
+use crate::ops::bbox::{BboxOpts, bb2, bbox, is_drawn, is_rectangle};
+use crate::ops::cleanup::{delete_up, strip_attr, strip_whitespace, url_id};
 use crate::ops::clip::{deswitch, ui_language, ungroup, unlink};
 use crate::ops::style::{remove_inline, strokefill};
 use crate::ops::xform::object_to_path;
+use crate::text::edit::style_eq;
 use crate::text::fonts::FontSystem;
 use crate::text::kerning::{KerningOptions, remove_kerning};
 
@@ -256,7 +257,9 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     if opts.fixtext {
         text_phase(&mut doc, &mut ctx, &mut ngs, &opts);
     }
-    let _ = (&wrects, &ngs); // consumed by Task 6
+    if opts.removerectw || opts.removeduppaths {
+        bbox_stage(&mut doc, &mut ctx, &ngs, &wrects, &opts);
+    }
     finish(doc, ctx, true)
 }
 
@@ -631,5 +634,140 @@ pub fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Optio
                 doc.remove_attr(el, "mask");
             }
         }
+    }
+}
+
+/// Elements some `<text>`'s specified `shape-inside` points at (F:425–426).
+fn shape_inside_targets(doc: &Doc) -> HashSet<NodeId> {
+    doc.descendants(doc.svg())
+        .filter(|&n| doc.is_element(n) && doc.tag(n) == "text")
+        .filter_map(|t| doc.specified(t, "shape-inside"))
+        .filter_map(|v| url_id(&v).and_then(|id| doc.by_id(id)))
+        .collect()
+}
+
+fn same_rgb(a: &crate::ops::style::Rgba, b: &crate::ops::style::Rgba) -> bool {
+    (a.r, a.g, a.b) == (b.r, b.g, b.b)
+}
+
+/// F:422–497: prune identical overlapping paths — of two rectangle-like elements with the same
+/// rough box, style, paints and global geometry, the one underneath goes.
+pub fn remove_duplicates(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    ngs2: &mut Vec<NodeId>,
+    bbs: &HashMap<NodeId, Rect>,
+) {
+    let inside = shape_inside_targets(doc);
+    let els: Vec<NodeId> = ngs2
+        .iter()
+        .copied()
+        .filter(|&n| {
+            RECT_TAGS.contains(&doc.tag(n)) && bbs.contains_key(&n) && !inside.contains(&n)
+        })
+        .collect();
+    let boxes: Vec<Rect> = els.iter().map(|n| bbs[n]).collect();
+    let size = |r: &Rect| r.width().max(r.height());
+    let equal = |i: usize, j: usize| -> bool {
+        let (a, b) = (&boxes[i], &boxes[j]);
+        if a.width() == 0.0 || a.height() == 0.0 || b.width() == 0.0 || b.height() == 0.0 {
+            return false;
+        }
+        let tol = 1e-6 * size(a).max(size(b));
+        (a.x0 - b.x0).abs() <= tol
+            && (a.y0 - b.y0).abs() <= tol
+            && (a.x1 - b.x1).abs() <= tol
+            && (a.y1 - b.y1).abs() <= tol
+    };
+    let mut sfs: Vec<Option<crate::ops::style::StrokeFill>> = vec![None; els.len()];
+    let mut removed: HashSet<usize> = HashSet::new();
+    for jj in (0..els.len()).rev() {
+        for ii in 0..jj {
+            if removed.contains(&ii) || !equal(ii, jj) {
+                continue;
+            }
+            if sfs[jj].is_none() {
+                sfs[jj] = Some(strokefill(doc, els[jj]));
+            }
+            if sfs[ii].is_none() {
+                sfs[ii] = Some(strokefill(doc, els[ii]));
+            }
+            let (my, oth) = (sfs[jj].as_ref().unwrap(), sfs[ii].as_ref().unwrap());
+            if my.stroke_is_url || my.fill_is_url || (my.stroke.is_none() && my.fill.is_none()) {
+                continue;
+            }
+            if let Some(s) = &my.stroke {
+                if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgb(s, o)) {
+                    continue;
+                }
+            }
+            if let Some(f) = &my.fill {
+                if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgb(f, o)) {
+                    continue;
+                }
+            }
+            if !style_eq(&doc.specified_style(els[jj]), &doc.specified_style(els[ii])) {
+                continue;
+            }
+            let (Some(pj), Some(pi)) = (shape_path(doc, els[jj]), shape_path(doc, els[ii])) else {
+                continue;
+            };
+            let gj = doc.composed_transform(els[jj]) * pj.path;
+            let gi = doc.composed_transform(els[ii]) * pi.path;
+            let tol = 1e-6 * size(&boxes[ii]).max(size(&boxes[jj]));
+            if !(path_eq(&gj, &gi, tol) || path_eq(&gj, &reverse(&gi), tol)) {
+                continue;
+            }
+            delete_up(doc, ctx, els[ii]);
+            removed.insert(ii);
+        }
+    }
+    let gone: HashSet<NodeId> = removed.iter().map(|&i| els[i]).collect();
+    ngs2.retain(|n| !gone.contains(n));
+}
+
+/// F:499–509: a white-rectangle candidate with nothing behind it (no earlier element whose box
+/// strictly intersects its own) is a background and goes; a deleted one no longer counts as
+/// being behind the next.
+pub fn remove_white_rects(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    ngs2: &[NodeId],
+    bbs: &HashMap<NodeId, Rect>,
+    wrects: &[NodeId],
+) {
+    let ngs3: Vec<NodeId> = ngs2
+        .iter()
+        .copied()
+        .filter(|n| doc.parent(*n).is_some() && bbs.contains_key(n))
+        .collect();
+    let white: HashSet<NodeId> = wrects.iter().copied().collect();
+    let mut deleted: HashSet<usize> = HashSet::new();
+    for ii in 0..ngs3.len() {
+        if !white.contains(&ngs3[ii]) {
+            continue;
+        }
+        let wb = bbs[&ngs3[ii]];
+        let behind = (0..ii).any(|k| !deleted.contains(&k) && intersects(bbs[&ngs3[k]], wb));
+        if !behind {
+            delete_up(doc, ctx, ngs3[ii]);
+            deleted.insert(ii);
+        }
+    }
+}
+
+/// F:415–510: rough boxes of the drawn working set, then duplicates, then white rectangles.
+pub fn bbox_stage(doc: &mut Doc, ctx: &mut Ctx, ngs: &[NodeId], wrects: &[NodeId], o: &Options) {
+    let ngset: HashSet<NodeId> = attached(doc, ngs).into_iter().collect();
+    let mut ngs2: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .filter(|n| ngset.contains(n) && is_drawn(doc, *n))
+        .collect();
+    let bbs = bb2(doc, ctx, &ngs2, true);
+    if o.removeduppaths {
+        remove_duplicates(doc, ctx, &mut ngs2, &bbs);
+    }
+    if o.removerectw {
+        remove_white_rects(doc, ctx, &ngs2, &bbs, wrects);
     }
 }
