@@ -1625,12 +1625,14 @@ fn matching_bounding_boxes_matches_the_whole_figure() {
     let (a, b) = (id(&out, "a"), id(&out, "b"));
     let union_of = |m: &std::collections::HashMap<NodeId, Rect>| m.values().fold(None, |acc: Option<Rect>, r| Some(acc.map_or(*r, |u| u.union(*r)))).unwrap();
     // the match target of a group is its visual box (geometric_bbox of a non-path-like element);
-    // after matching, b's geometric union has that size: the margins (label below) are kept and
-    // the box grew by exactly the difference
+    // after matching, the geometric union of b's CHILDREN has that size: the margins (label
+    // below) are kept and the box grew by exactly the difference. The group's own entry is its
+    // visual box (stroke-padded), so it is left out; 1e-3 covers num::fmt's 8-digit round trip.
     let (fa, _) = boxes(&mut out, a);
-    let (_, gb) = boxes(&mut out, b);
+    let (_, mut gb) = boxes(&mut out, b);
+    gb.remove(&b);
     let (ua, gb) = (union_of(&fa), union_of(&gb));
-    assert!(close(gb.width(), ua.width(), 1e-6) && close(gb.height(), ua.height(), 1e-6), "{gb:?} vs {ua:?}");
+    assert!(close(gb.width(), ua.width(), 1e-3) && close(gb.height(), ua.height(), 1e-3), "{gb:?} vs {ua:?}");
 }
 
 #[test]
