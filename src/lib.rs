@@ -43,7 +43,8 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         "combine-by-color" => tools::combine_by_color::run(argv, input),
         "text-ghoster" => tools::text_ghoster::run(argv, input),
         "flattener" => tools::flattener::run(argv, input),
-        "scaler" | "homogenizer" | "favorite-markers" => {
+        "scaler" => tools::scaler::run(argv, input),
+        "homogenizer" | "favorite-markers" => {
             Err(format!("the {tool} tool is not implemented yet"))
         }
         other => Err(format!("unknown tool '{other}'")),

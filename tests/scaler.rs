@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 
 use sciink::dom::{Doc, NodeId};
-use sciink::geom::Rect;
+use sciink::geom::{Point, Rect};
 use sciink::ops::Ctx;
 use sciink::ops::bbox::bb2;
 use sciink::tools::scaler::{find_plot_area, geometric_bbox, global_points, ordinal};
@@ -13,7 +13,6 @@ use support::with_vendored_fonts;
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:sodipodi=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\"";
 const DV: &str = "font-family:'DejaVu Sans'";
 
-#[allow(dead_code)]
 fn args(v: &[&str]) -> Vec<OsString> {
     std::iter::once("sciink")
         .chain(v.iter().copied())
@@ -23,7 +22,6 @@ fn args(v: &[&str]) -> Vec<OsString> {
 fn id(d: &Doc, i: &str) -> NodeId {
     d.by_id(i).unwrap_or_else(|| panic!("no element {i}"))
 }
-#[allow(dead_code)]
 fn by_id<'a, 'i>(d: &'a roxmltree::Document<'i>, id: &str) -> roxmltree::Node<'a, 'i> {
     d.descendants()
         .find(|n| n.attribute("id") == Some(id))
@@ -201,4 +199,317 @@ fn ordinals_follow_upstream() {
     assert_eq!(ordinal(13), "13th");
     assert_eq!(ordinal(21), "21st");
     assert_eq!(ordinal(112), "112th");
+}
+
+fn scale(svg: &str, extra: &[&str]) -> Result<(String, Vec<String>), String> {
+    let mut a = vec!["--tool=scaler"];
+    a.extend(extra);
+    let out = with_vendored_fonts(|| sciink::run(&args(&a), svg.as_bytes()))?;
+    Ok((String::from_utf8(out.svg).unwrap(), out.messages))
+}
+fn ok(svg: &str, extra: &[&str]) -> (String, Vec<String>) {
+    scale(svg, extra).unwrap_or_else(|e| panic!("scaler failed: {e}"))
+}
+/// x- and y-extent of an element's global end points in an output document.
+fn extent(doc: &Doc, id_: &str) -> (f64, f64, Rect) {
+    let pts = global_points(doc, id(doc, id_), None);
+    assert!(!pts.is_empty(), "{id_} has geometry");
+    let r = Rect::from_points(pts[0], pts[0]);
+    let r = pts.iter().fold(r, |r, p| r.union_pt(*p));
+    (r.width(), r.height(), r)
+}
+fn composed(doc: &Doc, id_: &str) -> [f64; 6] {
+    doc.composed_transform(id(doc, id_)).as_coeffs()
+}
+fn is_translation(c: [f64; 6]) -> bool {
+    close(c[0], 1.0, 1e-9)
+        && close(c[1], 0.0, 1e-9)
+        && close(c[2], 0.0, 1e-9)
+        && close(c[3], 1.0, 1e-9)
+}
+fn visual_stroke(doc: &Doc, id_: &str) -> f64 {
+    let n = id(doc, id_);
+    let w: f64 = doc
+        .specified(n, "stroke-width")
+        .unwrap()
+        .trim_end_matches("px")
+        .parse()
+        .unwrap();
+    w * sciink::geom::scale_factor(doc.composed_transform(n))
+}
+/// The plot manually scaled by (2, 0.5): sx = 2, sy = 0.5.
+fn scaled_plot(extra_group_attrs: &str) -> String {
+    plot_svg("").replace(
+        r#"<g id="plot">"#,
+        &format!(r#"<g id="plot" transform="matrix(2,0,0,0.5,5,7)" {extra_group_attrs}>"#),
+    )
+}
+
+#[test]
+fn advanced_tab_marks_and_clears_the_selection_and_changes_nothing_else() {
+    let svg = plot_svg("");
+    let (s, msgs) = ok(
+        &svg,
+        &["--tab=options", "--marksf=2", "--id=box", "--id=lbl"],
+    );
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert_eq!(
+        by_id(&d, "box").attribute("inkscape-scientific-scaletype"),
+        Some("aspect_locked")
+    );
+    assert_eq!(
+        by_id(&d, "lbl").attribute("inkscape-scientific-scaletype"),
+        Some("aspect_locked")
+    );
+    assert_eq!(
+        by_id(&d, "data").attribute("d"),
+        Some("M25,70 L60,30 L105,50"),
+        "untouched"
+    );
+    for (m, v) in [("1", "scale_free"), ("3", "normal"), ("4", "plot_area")] {
+        let (s, _) = ok(
+            &svg,
+            &["--tab=options", &format!("--marksf={m}"), "--id=box"],
+        );
+        let d = roxmltree::Document::parse(&s).unwrap();
+        assert_eq!(
+            by_id(&d, "box").attribute("inkscape-scientific-scaletype"),
+            Some(v)
+        );
+    }
+    let (s, _) = ok(&s, &["--tab=options", "--marksf=5", "--id=box", "--id=lbl"]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert_eq!(
+        by_id(&d, "box").attribute("inkscape-scientific-scaletype"),
+        None,
+        "cleared"
+    );
+    assert_eq!(
+        by_id(&d, "lbl").attribute("inkscape-scientific-scaletype"),
+        None
+    );
+}
+
+#[test]
+fn errors_follow_upstream() {
+    let svg = format!(
+        r#"<svg {NS}><image id="i" width="1" height="1"/><rect id="r" width="1" height="1"/><g id="g"/></svg>"#
+    );
+    let e = scale(&svg, &["--tab=correction", "--id=i"]).unwrap_err();
+    assert!(
+        e.starts_with("Thanks for using Scientific Inkscape!"),
+        "{e}"
+    );
+    let e = scale(&svg, &["--tab=correction", "--id=r"]).unwrap_err();
+    assert!(
+        e.starts_with("Non-Group objects detected in selection."),
+        "{e}"
+    );
+    let e = scale(&svg, &["--tab=correction"]).unwrap_err();
+    assert_eq!(e, "No objects selected!");
+    // matching: the first selection may be anything, the plots must be groups
+    let e = scale(&svg, &["--tab=matching", "--id=r", "--id=i"]).unwrap_err();
+    assert!(
+        e.starts_with("Non-Group objects detected in selection."),
+        "{e}"
+    );
+    // the Advanced tab never errors on images
+    ok(&svg, &["--tab=options", "--marksf=1", "--id=i"]);
+}
+
+#[test]
+fn correction_restores_text_and_ticks_and_keeps_the_plot_area_size() {
+    let svg = scaled_plot("");
+    let (s, msgs) = ok(&svg, &["--tab=correction", "--figuremode=1", "--id=plot"]);
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    // the group's scale is gone (a pure translation is left), the plot area keeps its manual size
+    assert!(
+        is_translation(out.transform(id(&out, "plot")).as_coeffs()),
+        "{:?}",
+        out.transform(id(&out, "plot"))
+    );
+    let (bw, bh, bbox) = extent(&out, "box");
+    assert!(
+        close(bw, 180.0, 1e-6) && close(bh, 35.0, 1e-6),
+        "box {bw} × {bh}"
+    );
+    // data scales with the plot area, its visual stroke width is preserved (3 × sqrt(2 × 0.5) = 3)
+    let (dw, dh, _) = extent(&out, "data");
+    assert!(
+        close(dw, 160.0, 1e-6) && close(dh, 20.0, 1e-6),
+        "data {dw} × {dh}"
+    );
+    assert!(close(visual_stroke(&out, "data"), 3.0, 1e-6));
+    // the label is unscaled again
+    assert!(
+        is_translation(composed(&out, "lbl")),
+        "{:?}",
+        composed(&out, "lbl")
+    );
+    // the bottom ticks keep their length and stay attached to the box's bottom edge
+    let (_, th, tbox) = extent(&out, "t1");
+    assert!(close(th, 4.0, 1e-6), "tick length {th}");
+    assert!(
+        close(tbox.y0, bbox.y1, 1e-6),
+        "tick top {} on box bottom {}",
+        tbox.y0,
+        bbox.y1
+    );
+    // the left tick keeps its length and touches the box's left edge
+    let (tw, _, tbox) = extent(&out, "t3");
+    assert!(close(tw, 4.0, 1e-6) && close(tbox.x1, bbox.x0, 1e-6));
+    // the solid background rectangle is a "normal" element: it scales with the plot
+    let (gw, gh, _) = extent(&out, "bg");
+    assert!(close(gw, 240.0, 1e-6) && close(gh, 50.0, 1e-6));
+}
+
+#[test]
+fn tick_correction_can_be_disabled_and_wholeplot_skips_detection() {
+    let svg = scaled_plot("");
+    let (s, _) = ok(
+        &svg,
+        &["--tab=correction", "--tickcorrect=false", "--id=plot"],
+    );
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (_, th, _) = extent(&out, "t1");
+    assert!(close(th, 2.0, 1e-6), "ticks scale with the plot: {th}");
+    let (s, msgs) = ok(
+        &svg,
+        &["--tab=correction", "--wholeplot3=true", "--id=plot"],
+    );
+    assert!(msgs.is_empty(), "no plot-area warning: {msgs:?}");
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    assert!(
+        is_translation(composed(&out, "lbl")),
+        "text is still scale-free"
+    );
+    let (_, th, _) = extent(&out, "t1");
+    assert!(close(th, 2.0, 1e-6), "no tick correction either");
+}
+
+#[test]
+fn figure_mode_keeps_the_figure_bounding_box() {
+    // labels outside the plot area supply the margins; no background rectangle
+    let svg = format!(
+        r#"<svg {NS}><g id="plot" transform="matrix(2,0,0,0.5,5,7)">
+  <path id="box" d="M20,10 H110 V80 H20 Z" style="fill:none;stroke:#000000;stroke-width:0.5"/>
+  <path id="data" d="M25,70 L60,30 L105,50" style="fill:none;stroke:#1f77b4;stroke-width:3"/>
+  <text id="xl" x="65" y="95" style="font-size:6px;text-anchor:middle;{DV}">time</text>
+  <text id="yl" x="8" y="45" style="font-size:6px;text-anchor:middle;{DV}" transform="rotate(-90,8,45)">value</text>
+</g></svg>"#
+    );
+    let before = {
+        let mut d = Doc::parse(svg.as_bytes()).unwrap();
+        let plot = id(&d, "plot");
+        let (f, _) = boxes(&mut d, plot);
+        f.values()
+            .fold(None, |acc: Option<Rect>, r| {
+                Some(acc.map_or(*r, |a| a.union(*r)))
+            })
+            .unwrap()
+    };
+    let (s, msgs) = ok(&svg, &["--tab=correction", "--figuremode=2", "--id=plot"]);
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let mut out = Doc::parse(s.as_bytes()).unwrap();
+    let plot = id(&out, "plot");
+    let (f, _) = boxes(&mut out, plot);
+    let after = f
+        .values()
+        .fold(None, |acc: Option<Rect>, r| {
+            Some(acc.map_or(*r, |a| a.union(*r)))
+        })
+        .unwrap();
+    assert!(
+        close(after.x0, before.x0, 1e-6) && close(after.y0, before.y0, 1e-6),
+        "top-left kept: {after:?} vs {before:?}"
+    );
+    assert!(
+        close(after.width(), before.width(), 1e-6) && close(after.height(), before.height(), 1e-6),
+        "size kept: {after:?} vs {before:?}"
+    );
+    assert!(is_translation(composed(&out, "xl")), "labels unscaled");
+}
+
+#[test]
+fn a_plot_without_a_box_warns_and_is_still_scaled() {
+    let svg = format!(
+        r#"<svg {NS}><g id="plot" transform="scale(2,1)">
+  <path id="data" d="M0,0 L50,40 L100,10" style="fill:none;stroke:#f00;stroke-width:1"/>
+  <text id="t" x="50" y="60" style="font-size:6px;{DV}">x</text>
+</g></svg>"#
+    );
+    let (s, msgs) = ok(&svg, &["--tab=correction", "--id=plot"]);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(msgs[0].starts_with("warning: A box-like plot area could not be automatically detected on the 1st selected plot (group ID plot)."), "{}", msgs[0]);
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (dw, _, _) = extent(&out, "data");
+    assert!(
+        close(dw, 200.0, 1e-6),
+        "everything is the plot area: data keeps its manual width {dw}"
+    );
+    assert!(is_translation(composed(&out, "t")));
+}
+
+#[test]
+fn combined_by_colour_pieces_are_unscaled_one_by_one() {
+    let svg = format!(
+        r#"<svg {NS}><g id="plot" transform="scale(2,1)">
+  <path id="box" d="M0,0 H200 V100 H0 Z" style="fill:none;stroke:#000;stroke-width:0.5"/>
+  <path id="mk" d="M0,50 L10,50 M50,50 L60,50" style="fill:none;stroke:#00f;stroke-width:1" inkscape-scientific-scaletype="scale_free" inkscape-scientific-combined-by-color="0 2 4"/>
+</g></svg>"#
+    );
+    let (s, msgs) = ok(&svg, &["--tab=correction", "--id=plot"]);
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let mk = id(&out, "mk");
+    assert_eq!(
+        out.attr(mk, "inkscape-scientific-combined-by-color"),
+        Some("0 2 4"),
+        "ranges kept"
+    );
+    let a = global_points(&out, mk, Some(0..2));
+    let b = global_points(&out, mk, Some(2..4));
+    let len = |p: &[Point]| (p[1].x - p[0].x).abs();
+    assert!(
+        close(len(&a), 10.0, 1e-6) && close(len(&b), 10.0, 1e-6),
+        "each piece keeps its length: {a:?} {b:?}"
+    );
+    let ca = (a[0].x + a[1].x) / 2.0;
+    let cb = (b[0].x + b[1].x) / 2.0;
+    assert!(
+        close(cb - ca, 100.0, 1e-6),
+        "piece centres follow the plot's scale (gap 50 → 100): {}",
+        cb - ca
+    );
+    // the same path WITHOUT the ranges attribute is unscaled as one piece: gap stays 50
+    let svg = svg.replace(r#" inkscape-scientific-combined-by-color="0 2 4""#, "");
+    let (s, _) = ok(&svg, &["--tab=correction", "--id=plot"]);
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let mk = id(&out, "mk");
+    let (a, b) = (
+        global_points(&out, mk, Some(0..2)),
+        global_points(&out, mk, Some(2..4)),
+    );
+    assert!(close(
+        (b[0].x + b[1].x) / 2.0 - (a[0].x + a[1].x) / 2.0,
+        50.0,
+        1e-6
+    ));
+}
+
+#[test]
+fn aspect_locked_children_scale_uniformly() {
+    let svg = format!(
+        r#"<svg {NS}><g id="plot" transform="matrix(4,0,0,1,0,0)">
+  <path id="box" d="M0,0 H200 V100 H0 Z" style="fill:none;stroke:#000;stroke-width:0.5"/>
+  <rect id="m" x="95" y="45" width="10" height="10" style="fill:#0f0" inkscape-scientific-scaletype="aspect_locked"/>
+</g></svg>"#
+    );
+    let (s, _) = ok(&svg, &["--tab=correction", "--id=plot"]);
+    let out = Doc::parse(s.as_bytes()).unwrap();
+    let (w, h, _) = extent(&out, "m");
+    // sqrt(4 × 1) = 2: the marker is scaled by 2 in both directions
+    assert!(close(w, 20.0, 1e-6) && close(h, 20.0, 1e-6), "{w} × {h}");
 }
