@@ -157,3 +157,32 @@ fn scaler_correction_of_an_unscaled_plot_is_visually_invariant() {
     );
     assert!(d <= 0.001, "{d}");
 }
+
+#[test]
+fn homogenizer_fuse_transforms_is_visually_invariant() {
+    let Some(dir) = support::upstream_data_dir() else {
+        return;
+    };
+    let input = std::fs::read(dir.join("svg/Other_tests.svg")).unwrap();
+    let out = with_vendored_fonts(|| {
+        sciink::run(
+            &args(&[
+                "--tool=homogenizer",
+                "--tab=scaling",
+                "--fusetransforms=true",
+                "--id=layer1",
+            ]),
+            &input,
+        )
+    })
+    .unwrap();
+    assert!(
+        out.messages.is_empty(),
+        "fusing alone loads no fonts: {:?}",
+        out.messages
+    );
+    let (a, b) = (render_png(&input, 1500), render_png(&out.svg, 1500));
+    let d = pixel_diff_fraction(&a, &b, 32);
+    eprintln!("homogenizer fuse: {:.4} % pixels differ", d * 100.0);
+    assert!(d <= 0.001, "{d}");
+}

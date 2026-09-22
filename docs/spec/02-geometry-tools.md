@@ -317,13 +317,14 @@ else marker; parse `url(#id)` properly).
 
 ## B.5 Rust layout and LOC
 ```
-src/geom/mod.rs      fmt_num, ipx, transform parse/fmt, inverse, sf, Option<Rect> algebra, uniquetol   ~220
+src/geom/mod.rs      fmt_num, ipx, transform parse/fmt, inverse, sf, Option<Rect> algebra, uniquetol,
+                     Doc::px_per_uu                                                                   ~220
 src/geom/path.rs     ParsedPath/parse_d/fmt_d/shape_path/end_points/reverse/eq_tol                     ~250
 src/ops/style.rs     compose_style, fix_css_clipmask, composed_width, composed_list, strokefill         ~260
 src/ops/clip.rs      merge_clipmask, compose_all, ungroup, group, unlink, deswitch                      ~350
 src/ops/bbox.rs      BboxOpts, bbox (memo), has_bbox, is_drawn, bb2, is_rectangle                      ~260
 src/ops/xform.rs     fuse, global_transform, combine_paths                                             ~330
-src/ops/cleanup.rs   delete_up, gc_created_clips, strip_whitespace, doc_scale                          ~120
+src/ops/cleanup.rs   delete_up, gc_created_clips, strip_whitespace                                     ~120
 src/tools/flatten.rs / scale.rs / homogenize.rs / ghost.rs / combine.rs / markers.rs   ~400/450/220/90/120/260
                                                                                               total ≈ 3.5k
 ```
@@ -442,3 +443,30 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
 - A whitespace-only exclusion marker does not exclude (only `True` is ever written).
 - Out-of-range `markexc`/`justification` values are tolerated (`markexc ≠ 1` un-marks,
   `justification` outside 1–3 means unchanged; upstream raises).
+
+## Deliberate deviations (Plan 7)
+- `FontSystem::load()` scans the filesystem once per process and environment (upstream builds
+  a font list per character table); a Flattener or Homogenizer run no longer scans twice.
+- `Doc::px_per_uu` (upstream `document_size`) gives the geometric mean of the two factors for
+  `preserveAspectRatio="none"` with a non-uniform document (upstream: no scale, every unit
+  conversion fails).
+- Scaler: an empty selection is "No objects selected!" (upstream shows the raster-image message,
+  `all([])` being true); option values outside upstream's tables are tolerated (`figuremode`/
+  `matchprop` ≠ 2 mean the first option, `marksf` outside 1–4 clears the mark); Matching's
+  correction pre-pass re-measures the plot before matching (upstream matches against the boxes
+  measured before the pre-pass, spec R9); a plot or a first selection without any bounding box is
+  skipped with a warning and a zero or non-finite scale is treated as 1 with a warning (upstream
+  divides by zero); `find_plot_area` skips elements without a box (upstream reads a stale variable
+  for a non-path-like element); combined-by-colour ranges index BezPath elements of the written
+  `d` (Plan 5's convention); the hidden Fixed mode is absent (upstream too — its parameters are
+  accepted and ignored).
+- Homogenizer: an empty selection is a no-op with a message; the distortion fix touches only
+  `text`/`flowRoot` (upstream also processes tspans, writing `transform` attributes they cannot
+  carry); `character_fixer` (Avenir/Whitney non-letters moved into 'Avenir Next'/'Arial' tspans) is
+  not ported — the text engine falls back per character; the stroke width is written only on
+  elements whose specified stroke is not `none`, and the statistics run over those (upstream writes
+  on every element and counts unstroked ones at width 1); a statistic over no stroked element
+  leaves widths alone with a warning (upstream raises); clip/mask clearing removes the attributes
+  and inline values and pins `none` only where a stylesheet rule remains (upstream writes inline
+  `none` on every element); font-size strings are rounded as upstream does and then formatted by
+  `num::fmt`; the installed-family list comes from fontdb, not fontconfig.

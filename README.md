@@ -6,7 +6,7 @@ Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled bin
 works with Inkscape 1.2 and later.
 
 Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
-release ships eight menu entries — four tools, three diagnostics and one debug editor:
+release ships nine menu entries — five tools, three diagnostics and one debug editor:
 
 - **Extensions ▸ Scientific ▸ Flattener** — makes an imported plot editable: deep ungroup (composing
   transforms, clips and styles onto the leaves and unlinking clones), matplotlib minus-sign glyphs back
@@ -20,6 +20,11 @@ release ships eight menu entries — four tools, three diagnostics and one debug
   every selected plot the plot area (or bounding box) of the first selection, optionally aligned;
   the Advanced tab marks objects as unscaled, aspect-locked, scaled or plot-area-determining. Same
   options and defaults as the original (the original's hidden Fixed mode is gone upstream too).
+- **Extensions ▸ Scientific ▸ Homogenizer** — makes a selection uniform without moving anything's
+  centre: one font size (fixed, scaled, or the selection's mean/median/min/max), one font (an
+  Inkscape font specification such as `Avenir Next Bold`), distorted text made conformal, one
+  stroke width (the same modes), transforms fused into paths, clips and masks removed. Plot-aware
+  mode keeps labels at their distance from the plot area. Same options and defaults as the original.
 - **Extensions ▸ Scientific ▸ Combine by Color** — merges the selected paths that share stroke, fill,
   width, dashes and markers into one path each (lines darker than the lightness threshold, such as
   axes and ticks, are left alone), releasing their clips and masks. Fewer elements, smaller files, a
@@ -101,7 +106,7 @@ search, mostly for tests and for reproducing a figure built elsewhere:
 
 The upstream oracles need the installed fonts and the `tests/upstream` fixture symlink; run them with
 
-    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster -- --ignored --test-threads=1
+    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test scaler_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
 
 Set `SCIINK_LOG=/tmp/sciink.log` in Inkscape's environment to get timing lines.
 Releases: push a tag `vX.Y.Z` matching `Cargo.toml`'s version; the `release` workflow builds
