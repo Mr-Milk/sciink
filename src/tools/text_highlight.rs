@@ -19,6 +19,7 @@ use crate::text::layout::{
 use crate::text::parse::ParsedText;
 use crate::text::table::CharTable;
 
+use super::first_line;
 use super::font_probe::text_elements;
 
 #[derive(Parser, Debug)]
@@ -57,13 +58,7 @@ fn char_rects(pt: &ParsedText, ink: bool) -> Vec<(usize, Rect)> {
 }
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
-    let cli = TextHighlightCli::try_parse_from(argv).map_err(|e| {
-        e.to_string()
-            .lines()
-            .next()
-            .unwrap_or("invalid arguments")
-            .to_string()
-    })?;
+    let cli = TextHighlightCli::try_parse_from(argv).map_err(first_line)?;
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
     let els = text_elements(&doc, &cli.common.ids);
     let mut warn = Warnings::default();

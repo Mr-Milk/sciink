@@ -15,19 +15,13 @@ use crate::text::fonts::{FontSpec, FontStyle, FontSystem};
 use crate::text::table::CharTable;
 use crate::text::tree::{TextTree, run_text};
 
+use super::first_line;
+
 #[derive(Parser, Debug)]
 #[command(name = "sciink", disable_help_flag = true, disable_version_flag = true)]
 pub struct FontProbeCli {
     #[command(flatten)]
     pub common: Common,
-}
-
-fn first_line(e: clap::Error) -> String {
-    e.to_string()
-        .lines()
-        .next()
-        .unwrap_or("invalid arguments")
-        .to_string()
 }
 
 /// `<family> (<file>)` or `(no font found)`.
