@@ -25,7 +25,7 @@ fn kids(d: &Doc, n: NodeId) -> Vec<NodeId> {
     d.children(n).filter(|&c| d.is_element(c)).collect()
 }
 
-use sciink::ops::xform::{Ranges, fuse, global_transform, object_to_path};
+use sciink::ops::xform::{Ranges, combine_paths, fuse, global_transform, object_to_path};
 use sciink::style::Style;
 
 fn style_of(d: &Doc, n: NodeId) -> Style {
@@ -327,4 +327,105 @@ fn global_transform_works_in_the_parent_frame_and_preserves_strokes() {
     let s = id(&d, "s");
     global_transform(&mut d, &mut ctx, s, Affine::scale(2.0), None, false);
     assert_eq!(style_of(&d, s).get("stroke-width"), Some("2"));
+}
+
+#[test]
+fn combine_paths_concatenates_global_geometry_into_the_target_frame() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><g id="wrap" transform="translate(10,0)"><path id="a" d="M0 0 L1 0"/></g><path id="b" d="M0 0 L0 1 Z" transform="scale(2)" clip-path="url(#c)" style="fill:red"/></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let (a, b) = (id(&d, "a"), id(&d, "b"));
+    assert!(combine_paths(&mut d, &mut ctx, &[b, a], 0));
+    // b: 3 elements (M L Z) in root coordinates, then a's 2 → starts 0, 3, total 5
+    assert_eq!(
+        d.attr(b, "inkscape-scientific-combined-by-color"),
+        Some("0 3 5")
+    );
+    // written back in b's own frame (inverse of scale(2)): a's global M10 0 L11 0 → M5 0 L5.5 0
+    assert_eq!(d.attr(b, "d"), Some("M 0,0 L 0,1 Z M 5,0 L 5.5,0"));
+    assert_eq!(
+        d.attr(b, "transform"),
+        Some("scale(2)"),
+        "the target keeps its transform attribute as written"
+    );
+    assert_eq!(
+        (d.attr(b, "clip-path"), d.attr(b, "mask")),
+        (Some("none"), Some("none")),
+        "clips and masks are released"
+    );
+    assert_eq!(d.attr(b, "style"), Some("fill:red"));
+    assert_eq!(d.by_id("a"), None);
+    assert_eq!(
+        d.by_id("wrap"),
+        None,
+        "the emptied group went with it (delete_up)"
+    );
+    assert!(ctx.deleted.contains("a") && ctx.deleted.contains("wrap"));
+}
+
+#[test]
+fn combine_paths_welds_existing_indices_and_converts_a_line_target() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><path id="a" d="M0 0 L1 0 M0 1 L1 1" inkscape-scientific-combined-by-color="0 2 4"/><path id="b" d="M5 5 L6 5 Z"/><line id="l" x1="0" y1="0" x2="1" y2="1" style="stroke:#000"/></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let (a, b, l) = (id(&d, "a"), id(&d, "b"), id(&d, "l"));
+    assert!(combine_paths(&mut d, &mut ctx, &[a, b], 0));
+    assert_eq!(
+        d.attr(a, "inkscape-scientific-combined-by-color"),
+        Some("0 2 4 7"),
+        "a's own pieces stay separate pieces"
+    );
+    assert_eq!(
+        d.attr(a, "d"),
+        Some("M 0,0 L 1,0 M 0,1 L 1,1 M 5,5 L 6,5 Z")
+    );
+    assert_eq!(d.by_id("b"), None);
+    // a <line> target becomes a <path>
+    assert!(combine_paths(&mut d, &mut ctx, &[a, l], 1));
+    assert_eq!(d.tag(l), "path");
+    assert_eq!(d.attr(l, "x1"), None);
+    assert_eq!(
+        d.attr(l, "d"),
+        Some("M 0,0 L 1,0 M 0,1 L 1,1 M 5,5 L 6,5 Z M 0,0 L 1,1"),
+        "geometry follows the list order, a first"
+    );
+    assert_eq!(
+        d.attr(l, "inkscape-scientific-combined-by-color"),
+        Some("0 2 4 7 9")
+    );
+    assert_eq!(d.attr(l, "style"), Some("stroke:#000"));
+    assert_eq!(d.by_id("a"), None);
+    // a singular target is refused and nothing changes
+    let mut d = doc(&format!(
+        r#"<svg {NS}><path id="a" d="M0 0 L1 0"/><path id="b" d="M0 0 L1 0" transform="scale(0)"/></svg>"#
+    ));
+    let (a, b) = (id(&d, "a"), id(&d, "b"));
+    assert!(!combine_paths(&mut d, &mut ctx, &[a, b], 1));
+    assert!(d.by_id("a").is_some() && d.attr(b, "inkscape-scientific-combined-by-color").is_none());
+    assert!(
+        ctx.warn.0.iter().any(|w| w.contains("singular")),
+        "{:?}",
+        ctx.warn.0
+    );
+}
+
+#[test]
+fn combine_paths_pins_released_clips_against_a_stylesheet() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><style>#a{{clip-path:url(#c)}}</style><defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><path id="a" d="M0 0 L1 0" clip-path="url(#c)"/><path id="b" d="M2 0 L3 0"/></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let (a, b) = (id(&d, "a"), id(&d, "b"));
+    assert!(combine_paths(&mut d, &mut ctx, &[a, b], 0));
+    assert!(
+        out(&d).contains("\n#a{clip-path:none}</style>"),
+        "{}",
+        out(&d)
+    );
+    assert!(
+        !out(&d).contains("#a{mask"),
+        "the sheet says nothing about masks → nothing pinned"
+    );
 }

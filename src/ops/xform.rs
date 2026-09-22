@@ -12,7 +12,7 @@ use crate::num;
 use crate::style::Style;
 use crate::text::style::composed_width;
 
-use super::cleanup::url_id;
+use super::cleanup::{delete_up, url_id};
 use super::clip::duplicate_into_defs;
 use super::style::{composed_list, fix_css_clipmask};
 use super::{ClipKind, Ctx, clip_ref, label};
@@ -365,4 +365,69 @@ pub fn global_transform(
             }
         }
     }
+}
+
+/// DH:1111–1147: concatenates the root-coordinate geometry of `els` (in the given order) into
+/// `els[merge_idx]`, written back in the target's own frame, releases the target's clip and mask
+/// (`none`, pinned against the stylesheet) and deletes the others with `delete_up`. Piece
+/// boundaries land in `inkscape-scientific-combined-by-color` (`s0 s1 … total`; an element that
+/// already carries the attribute contributes its own pieces). Returns `false`, changing nothing,
+/// when the target's composed transform is singular.
+pub fn combine_paths(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], merge_idx: usize) -> bool {
+    let mel = els[merge_idx];
+    let Some(inv) = inverse(doc.composed_transform(mel)) else {
+        ctx.warn.push(format!(
+            "{}: singular transform, paths not combined",
+            label(doc, mel)
+        ));
+        return false;
+    };
+    let mut pnew = BezPath::new();
+    let mut si: Vec<usize> = Vec::new();
+    for &el in els {
+        let Some(pp) = shape_path(doc, el) else {
+            ctx.warn
+                .push(format!("{}: no geometry, skipped", label(doc, el)));
+            continue;
+        };
+        let n0 = pnew.elements().len();
+        match doc.attr(el, "inkscape-scientific-combined-by-color") {
+            Some(cbc) => {
+                let v: Vec<usize> = cbc
+                    .split_whitespace()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                match v.split_last() {
+                    Some((_, pieces)) if !pieces.is_empty() => {
+                        si.extend(pieces.iter().map(|x| x + n0));
+                    }
+                    _ => si.push(n0),
+                }
+            }
+            None => si.push(n0),
+        }
+        let global = doc.composed_transform(el) * pp.path;
+        for e in global.elements() {
+            pnew.push(*e);
+        }
+    }
+    si.push(pnew.elements().len());
+    object_to_path(doc, mel);
+    doc.set_attr(mel, "d", fmt_d(&(inv * pnew)));
+    doc.set_attr(mel, "clip-path", "none");
+    doc.set_attr(mel, "mask", "none");
+    fix_css_clipmask(doc, mel, ClipKind::Clip);
+    fix_css_clipmask(doc, mel, ClipKind::Mask);
+    let joined: Vec<String> = si.iter().map(|v| v.to_string()).collect();
+    doc.set_attr(
+        mel,
+        "inkscape-scientific-combined-by-color",
+        joined.join(" "),
+    );
+    for (i, &el) in els.iter().enumerate() {
+        if i != merge_idx {
+            delete_up(doc, ctx, el);
+        }
+    }
+    true
 }
