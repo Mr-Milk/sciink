@@ -986,8 +986,10 @@ fn figure_mode_keeps_the_figure_bounding_box() {
     let plot = id(&out, "plot");
     let (f, _) = boxes(&mut out, plot);
     let after = f.values().fold(None, |acc: Option<Rect>, r| Some(acc.map_or(*r, |a| a.union(*r)))).unwrap();
-    assert!(close(after.x0, before.x0, 1e-6) && close(after.y0, before.y0, 1e-6), "top-left kept: {after:?} vs {before:?}");
-    assert!(close(after.width(), before.width(), 1e-6) && close(after.height(), before.height(), 1e-6), "size kept: {after:?} vs {before:?}");
+    // `after` is re-measured from the serialised output: `num::fmt` writes 8 significant digits,
+    // so coordinates near 200 carry ~1e-5 of rounding — 1e-3 is still 5 ppm of the figure
+    assert!(close(after.x0, before.x0, 1e-3) && close(after.y0, before.y0, 1e-3), "top-left kept: {after:?} vs {before:?}");
+    assert!(close(after.width(), before.width(), 1e-3) && close(after.height(), before.height(), 1e-3), "size kept: {after:?} vs {before:?}");
     assert!(is_translation(composed(&out, "xl")), "labels unscaled");
 }
 
