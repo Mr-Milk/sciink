@@ -102,6 +102,7 @@ fn anchor(doc: &Doc, n: NodeId) -> Option<Point> {
 /// Font-independent comparisons; returns (shapes compared, texts compared, max anchor deviation).
 fn compare(ours: &Doc, reference: &Doc) -> (usize, usize, f64) {
     let (mut shapes, mut texts, mut max_anchor) = (0usize, 0usize, 0.0_f64);
+    let (mut strokes, mut sizes) = (0usize, 0usize);
     for id in ids_under(reference, "layer1") {
         let (Some(a), Some(b)) = (ours.by_id(&id), reference.by_id(&id)) else {
             panic!("{id}: present in the reference but not in our output")
@@ -127,6 +128,7 @@ fn compare(ours: &Doc, reference: &Doc) -> (usize, usize, f64) {
                     (wa - wb).abs() <= 1e-3 * wb.max(1.0),
                     "{id}: visual stroke {wa} vs {wb}"
                 );
+                strokes += 1;
             }
             shapes += 1;
         } else if tag == "text" {
@@ -137,6 +139,7 @@ fn compare(ours: &Doc, reference: &Doc) -> (usize, usize, f64) {
             ) {
                 if let (Some(x), Some(y)) = (num_attr(&fa), num_attr(&fb)) {
                     assert!((x - y).abs() <= 0.011, "{id}: font-size {fa} vs {fb}");
+                    sizes += 1;
                 }
             }
             // the distortion fix depends only on transforms
@@ -160,8 +163,9 @@ fn compare(ours: &Doc, reference: &Doc) -> (usize, usize, f64) {
         }
     }
     assert!(
-        shapes > 20 && texts > 5,
-        "compared {shapes} shapes and {texts} texts — the ids did not line up"
+        shapes > 20 && texts > 5 && strokes > 20 && sizes > 5,
+        "compared {shapes} shapes, {texts} texts, {strokes} strokes, {sizes} font-sizes — \
+         a value dropped on our side must not silently skip the comparison"
     );
     (shapes, texts, max_anchor)
 }
@@ -180,6 +184,10 @@ fn homogenizer_matches_the_reference_geometry_on_other_tests() {
     eprintln!(
         "homogenizer Other_tests: {s} shapes, {t} texts, max anchor deviation {m:.4} uu (vendored fonts)"
     );
+    // regression guard under the vendored fonts (measured 2026-09-23: 0.5927 uu on Other_tests,
+    // 0.0153 uu on the non-uniform document); the reference was produced with other fonts, so
+    // this cannot be TEXT_TOL — it only catches a text that stops being re-centred
+    assert!(m <= 1.0, "text anchors moved: {m}");
 }
 
 #[test]
@@ -196,10 +204,16 @@ fn homogenizer_matches_the_reference_geometry_on_the_non_uniform_document() {
     eprintln!(
         "homogenizer Other_tests_nonuniform: {s} shapes, {t} texts, max anchor deviation {m:.4} uu (vendored fonts)"
     );
+    // regression guard under the vendored fonts (measured 2026-09-23: 0.5927 uu on Other_tests,
+    // 0.0153 uu on the non-uniform document); the reference was produced with other fonts, so
+    // this cannot be TEXT_TOL — it only catches a text that stops being re-centred
+    assert!(m <= 1.0, "text anchors moved: {m}");
 }
 
 /// With the installed fonts (Avenir): family and anchors too.
 /// Run: `SCIINK_SYSTEM_FONTS=1 cargo test --test homogenizer_fixtures -- --ignored --nocapture --test-threads=1`
+/// Run with `--ignored`, never `--include-ignored`: the sibling tests pin the vendored fonts for
+/// the whole binary.
 #[test]
 #[ignore = "needs the installed Avenir; run with SCIINK_SYSTEM_FONTS=1"]
 fn homogenizer_matches_the_reference_with_avenir() {

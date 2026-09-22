@@ -81,6 +81,7 @@ fn visual_stroke(doc: &Doc, n: NodeId) -> Option<f64> {
 fn compare(ours: &Doc, reference: &Doc, plots: &[&str]) -> f64 {
     let mut max_text = 0.0_f64;
     let mut paths = 0usize;
+    let mut strokes = 0usize;
     for plot in plots {
         for id in ids_under(reference, plot) {
             let (Some(a), Some(b)) = (ours.by_id(&id), reference.by_id(&id)) else {
@@ -108,6 +109,7 @@ fn compare(ours: &Doc, reference: &Doc, plots: &[&str]) -> f64 {
                         (wa - wb).abs() <= 1e-3 * wb.max(1.0),
                         "{id}: visual stroke {wa} vs {wb}"
                     );
+                    strokes += 1;
                 }
                 paths += 1;
             } else if tag == "text" {
@@ -120,6 +122,10 @@ fn compare(ours: &Doc, reference: &Doc, plots: &[&str]) -> f64 {
     assert!(
         paths > 20,
         "the oracle compared {paths} shapes — the ids did not line up"
+    );
+    assert!(
+        strokes > 20,
+        "the oracle compared {strokes} visual strokes — a value dropped on our side must not silently skip the comparison"
     );
     max_text
 }

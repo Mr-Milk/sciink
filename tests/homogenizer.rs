@@ -326,6 +326,16 @@ fn font_size_modes_follow_upstream() {
         ],
     );
     assert_eq!(font_size(&s, "t"), "0.5px");
+    // no text under the selection: warn instead of silently falling back to 12pt
+    let svg = format!(r#"<svg {NS}><rect id="r" width="1" height="1"/></svg>"#);
+    let (s, msgs) = ok(&svg, &["--setfontsize=true", "--fontmodes=5", "--id=r"]);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].starts_with("warning: font size: no text could be measured"),
+        "{}",
+        msgs[0]
+    );
+    assert!(s.contains(r#"<rect id="r""#), "left alone: {s}");
 }
 
 #[test]
@@ -613,5 +623,25 @@ fn clearing_clips_and_masks_removes_attributes_and_pins_stylesheet_rules() {
     assert!(
         s.contains(r#"<clipPath id="c">"#),
         "clips we did not create stay in defs"
+    );
+}
+
+#[test]
+fn fuse_skips_an_element_under_a_singular_parent_with_a_warning() {
+    let svg = format!(
+        r#"<svg {NS}><g id="g" transform="scale(0)"><path id="p" d="M0,0 L1,0" style="fill:none;stroke:#000;stroke-width:1"/></g></svg>"#
+    );
+    let (s, msgs) = ok(&svg, &["--fusetransforms=true", "--id=g"]);
+    assert_eq!(msgs.len(), 1, "{msgs:?}");
+    assert!(
+        msgs[0].starts_with("warning: ") && msgs[0].contains("singular"),
+        "{}",
+        msgs[0]
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert_eq!(
+        by_id(&d, "p").attribute("d"),
+        Some("M0,0 L1,0"),
+        "left alone"
     );
 }

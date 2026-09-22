@@ -709,3 +709,16 @@ fn a_scaled_plot_is_corrected_before_matching_with_fresh_boxes() {
     let (_, th, _) = extent(&out, "bt");
     assert!(close(th, 3.0, 1e-6), "and the tick: {th}");
 }
+
+#[test]
+fn a_degenerate_group_transform_warns_and_does_not_panic() {
+    let svg = format!(
+        r#"<svg {NS}><g id="plot" transform="matrix(0,0,0,0,10,10)"><path id="box" d="M0,0 H10 V10 H0 Z" style="fill:none;stroke:#000;stroke-width:0.5"/><text id="t" style="font-size:4px;{DV}">x</text></g></svg>"#
+    );
+    let (_, msgs) = ok(&svg, &["--tab=correction", "--id=plot"]);
+    assert!(
+        msgs.iter()
+            .any(|m| m.starts_with("warning: ") && m.contains("degenerate")),
+        "{msgs:?}"
+    );
+}
