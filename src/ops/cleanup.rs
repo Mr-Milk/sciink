@@ -163,7 +163,9 @@ const TEXT_KEEP: &[&str] = &[
 
 /// F:542–548 `strip_whitespace`: removes every text node that is not the leading text of a
 /// text-bearing element or the tail of a text-run element — the indentation whitespace a deep
-/// ungroup leaves behind — so the written document has no stray whitespace between elements.
+/// ungroup leaves behind — so the written document has no stray whitespace between elements. A
+/// text node after a comment is treated like a leading text node (upstream never clears a
+/// comment's tail, so a comment inside e.g. `<text>` must not eat the text that follows it).
 pub fn strip_whitespace(doc: &mut Doc) {
     let texts: Vec<NodeId> = doc
         .descendants(doc.svg())
@@ -172,8 +174,8 @@ pub fn strip_whitespace(doc: &mut Doc) {
     for t in texts {
         let keep = match doc.prev_sibling(t) {
             Some(prev) if doc.is_element(prev) => TAIL_KEEP.contains(&doc.tag(prev)),
-            Some(_) => false, // a comment's tail
-            None => doc
+            // after a comment, or first: the parent decides (upstream never clears a comment's tail)
+            _ => doc
                 .parent(t)
                 .is_some_and(|p| doc.is_element(p) && TEXT_KEEP.contains(&doc.tag(p))),
         };

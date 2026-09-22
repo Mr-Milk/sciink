@@ -168,7 +168,7 @@ fn delete_up_never_touches_the_root() {
 #[test]
 fn strip_whitespace_keeps_text_only_where_inkscape_needs_it() {
     let mut d = doc(&format!(
-        "<svg {NS}>\n  <style>rect{{fill:red}}</style>\n  <g id=\"g\">\n    <path id=\"p\"/>\n    <!-- c -->\n    tail of comment\n  </g>\n  <text id=\"t\" xml:space=\"preserve\">a<tspan id=\"s\">b</tspan> c<textPath id=\"tp\">d</textPath> e</text>\n  <flowRoot id=\"f\">x<flowPara id=\"fp\">y</flowPara> z</flowRoot>\n</svg>"
+        "<svg {NS}>\n  <style>rect{{fill:red}}</style>\n  <g id=\"g\">\n    <path id=\"p\"/>\n    <!-- c -->\n    tail of comment\n  </g>\n  <text id=\"c\">A<!--note-->B</text>\n  <text id=\"t\" xml:space=\"preserve\">a<tspan id=\"s\">b</tspan> c<textPath id=\"tp\">d</textPath> e</text>\n  <flowRoot id=\"f\">x<flowPara id=\"fp\">y</flowPara> z</flowRoot>\n</svg>"
     ));
     strip_whitespace(&mut d);
     let s = out(&d);
@@ -179,6 +179,10 @@ fn strip_whitespace_keeps_text_only_where_inkscape_needs_it() {
     assert!(
         s.contains("<g id=\"g\"><path id=\"p\"/><!-- c --></g>"),
         "group whitespace and the comment's tail go: {s}"
+    );
+    assert!(
+        s.contains("<text id=\"c\">A<!--note-->B</text>"),
+        "text after a comment inside <text> stays: {s}"
     );
     assert!(s.contains("<text id=\"t\" xml:space=\"preserve\">a<tspan id=\"s\">b</tspan> c<textPath id=\"tp\">d</textPath> e</text>"), "text runs and tspan/textPath tails stay: {s}");
     assert!(
