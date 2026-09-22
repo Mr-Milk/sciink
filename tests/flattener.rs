@@ -29,6 +29,13 @@ fn has(d: &roxmltree::Document, id: &str) -> bool {
 fn kids<'a, 'i>(n: roxmltree::Node<'a, 'i>) -> Vec<roxmltree::Node<'a, 'i>> {
     n.children().filter(|c| c.is_element()).collect()
 }
+const INKSCAPE_NS: &str = "http://www.inkscape.org/namespaces/inkscape";
+const SODIPODI_NS: &str = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd";
+/// roxmltree resolves prefixes: a namespaced attribute is looked up by (namespace, local name),
+/// never by its prefixed spelling.
+fn nsattr<'a>(n: roxmltree::Node<'a, '_>, ns: &str, local: &str) -> Option<&'a str> {
+    n.attribute((ns, local))
+}
 
 #[test]
 fn exclusions_tab_marks_and_unmarks_the_selection_and_nothing_else_runs() {
@@ -114,14 +121,14 @@ fn test_mode_duplicates_the_selected_layer_and_flattens_the_original() {
         "a duplicate layer sits BEFORE the flattened original: {s}"
     );
     let (dup, orig) = (top[0], top[1]);
-    assert_eq!(dup.attribute("inkscape:label"), Some("Layer 1 original"));
-    assert_eq!(dup.attribute("sodipodi:insensitive"), Some("true"));
+    assert_eq!(nsattr(dup, INKSCAPE_NS, "label"), Some("Layer 1 original"));
+    assert_eq!(nsattr(dup, SODIPODI_NS, "insensitive"), Some("true"));
     assert_eq!(dup.attribute("opacity"), Some("0.3"));
     assert_eq!(dup.attribute("id"), None, "the copy carries no ids");
     assert_eq!(kids(dup).len(), 2, "the copy is the untouched layer");
     assert_eq!(kids(kids(dup)[0]).len(), 1, "…with its nested group intact");
     assert_eq!(
-        (orig.attribute("id"), orig.attribute("inkscape:label")),
+        (orig.attribute("id"), nsattr(orig, INKSCAPE_NS, "label")),
         (Some("layer1"), Some("Layer 1 flat"))
     );
     let names: Vec<&str> = kids(orig).iter().map(|n| n.tag_name().name()).collect();
