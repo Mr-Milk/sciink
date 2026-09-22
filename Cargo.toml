@@ -27,6 +27,7 @@ ttf-parser = "0.25.1"
 
 [dev-dependencies]
 roxmltree = "0.21"
+resvg = "0.48.1"
 
 [profile.release]
 opt-level = 3

@@ -164,3 +164,40 @@ pub fn assert_same_positions(
         );
     }
 }
+
+/// Renders an SVG with resvg using ONLY the vendored fonts, longest side `max_side` px.
+/// Returns `(width, height, premultiplied RGBA8)`.
+pub fn render_png(svg: &[u8], max_side: u32) -> (u32, u32, Vec<u8>) {
+    let mut opt = resvg::usvg::Options::default();
+    opt.fontdb_mut().load_fonts_dir(fontdir());
+    opt.fontdb_mut().set_sans_serif_family("DejaVu Sans");
+    opt.font_family = "DejaVu Sans".to_string();
+    let tree = resvg::usvg::Tree::from_data(svg, &opt).expect("resvg parses the document");
+    let size = tree.size();
+    let scale = max_side as f32 / size.width().max(size.height());
+    let w = ((size.width() * scale).round() as u32).max(1);
+    let h = ((size.height() * scale).round() as u32).max(1);
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).expect("pixmap");
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    (w, h, pixmap.data().to_vec())
+}
+
+/// Fraction of pixels whose largest channel difference exceeds `threshold` (spec §C.5 (c)).
+pub fn pixel_diff_fraction(a: &(u32, u32, Vec<u8>), b: &(u32, u32, Vec<u8>), threshold: u8) -> f64 {
+    assert_eq!((a.0, a.1), (b.0, b.1), "renders differ in size");
+    let n = (a.0 as usize) * (a.1 as usize);
+    let differing =
+        a.2.chunks_exact(4)
+            .zip(b.2.chunks_exact(4))
+            .filter(|(p, q)| {
+                p.iter()
+                    .zip(q.iter())
+                    .any(|(x, y)| x.abs_diff(*y) > threshold)
+            })
+            .count();
+    differing as f64 / n.max(1) as f64
+}
