@@ -390,3 +390,20 @@ fn is_rectangle_cases() {
         "…but a <rect> is one by definition without it"
     );
 }
+
+#[test]
+fn is_rectangle_survives_a_branching_self_referencing_clip() {
+    let d = doc(&format!(
+        r#"<svg {NS}><defs><clipPath id="loop"><rect clip-path="url(#loop)" width="1" height="1"/><rect clip-path="url(#loop)" width="1" height="1"/></clipPath></defs><rect id="r" width="3" height="3" clip-path="url(#loop)"/></svg>"#
+    ));
+    let t0 = std::time::Instant::now();
+    assert!(
+        !is_rectangle(&d, id(&d, "r"), true),
+        "an unresolvable clip is not a rectangle"
+    );
+    assert!(
+        t0.elapsed().as_secs() < 10,
+        "must terminate, took {:?}",
+        t0.elapsed()
+    );
+}

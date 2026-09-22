@@ -144,6 +144,14 @@ fn fix_css_clipmask_pins_the_attribute_with_an_id_rule() {
         Some("url(#m)"),
         "the new sheet is seen"
     );
+    // a crafted value is never copied into the stylesheet (braces would inject rules)
+    let mut d = doc(&format!(
+        r#"<svg {NS}><style>#r{{clip-path:url(#a)}}</style><rect id="r" clip-path="url(#a)}} * {{display:none}} #z{{"/></svg>"#
+    ));
+    let r = id(&d, "r");
+    fix_css_clipmask(&mut d, r, ClipKind::Clip);
+    assert!(!out(&d).contains("display:none"), "{}", out(&d));
+    assert_eq!(out(&d).matches("#r{").count(), 1, "nothing appended");
 }
 
 #[test]

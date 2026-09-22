@@ -13,7 +13,7 @@ use crate::text::layout::full_extent;
 use crate::text::parse::ParsedText;
 
 use super::cleanup::url_id;
-use super::{ClipKind, Ctx, MAX_NEST, clip_ref, label};
+use super::{ClipKind, Ctx, MAX_NEST, MAX_STEPS, clip_ref, label};
 
 /// Which box: `transform` = in root coordinates (else in the element's own frame, before its own
 /// `transform`); `stroke` = grow shapes by half the stroke width; `rough` = control-point box
@@ -285,11 +285,24 @@ const PATH_LETTERS: &str = "MmZzLlHhVvCcSsQqTtAa";
 /// without its transform. Rejected when masked, filtered by an existing filter, or clipped by a
 /// non-rectangular clip child.
 pub fn is_rectangle(doc: &Doc, n: NodeId, including_transform: bool) -> bool {
-    is_rect_rec(doc, n, including_transform, 0)
+    let mut steps = 0usize;
+    is_rectangle_with(doc, n, including_transform, &mut steps)
 }
 
-fn is_rect_rec(doc: &Doc, n: NodeId, inc: bool, depth: usize) -> bool {
-    if depth > MAX_NEST || !doc.is_element(n) {
+/// `is_rectangle` drawing on a caller's work budget (`ops::MAX_STEPS`), so a clip merge and the
+/// rectangle tests it runs share one bound.
+pub(crate) fn is_rectangle_with(
+    doc: &Doc,
+    n: NodeId,
+    including_transform: bool,
+    steps: &mut usize,
+) -> bool {
+    is_rect_rec(doc, n, including_transform, 0, steps)
+}
+
+fn is_rect_rec(doc: &Doc, n: NodeId, inc: bool, depth: usize, steps: &mut usize) -> bool {
+    *steps += 1;
+    if depth > MAX_NEST || *steps > MAX_STEPS || !doc.is_element(n) {
         return false;
     }
     let tag = doc.tag(n);
@@ -331,7 +344,7 @@ fn is_rect_rec(doc: &Doc, n: NodeId, inc: bool, depth: usize) -> bool {
     } else if tag == "use" {
         // upstream quirk kept: a clone of a missing target stays "rectangular"
         match doc.resolve_href(n) {
-            Some(t) => is_rect_rec(doc, t, true, depth + 1),
+            Some(t) => is_rect_rec(doc, t, true, depth + 1, steps),
             None => true,
         }
     } else {
@@ -351,7 +364,10 @@ fn is_rect_rec(doc: &Doc, n: NodeId, inc: bool, depth: usize) -> bool {
     }
     if let Some(c) = clip_ref(doc, n, ClipKind::Clip) {
         let kids: Vec<NodeId> = doc.children(c).filter(|&k| doc.is_element(k)).collect();
-        if kids.iter().any(|&k| !is_rect_rec(doc, k, true, depth + 1)) {
+        if kids
+            .iter()
+            .any(|&k| !is_rect_rec(doc, k, true, depth + 1, steps))
+        {
             return false;
         }
     }

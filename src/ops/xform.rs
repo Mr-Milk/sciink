@@ -369,12 +369,18 @@ pub fn global_transform(
 
 /// DH:1111–1147: concatenates the root-coordinate geometry of `els` (in the given order) into
 /// `els[merge_idx]`, written back in the target's own frame, releases the target's clip and mask
-/// (`none`, pinned against the stylesheet) and deletes the others with `delete_up`. Piece
-/// boundaries land in `inkscape-scientific-combined-by-color` (`s0 s1 … total`; an element that
-/// already carries the attribute contributes its own pieces). Returns `false`, changing nothing,
-/// when the target's composed transform is singular.
+/// (`none`, pinned against the stylesheet) and deletes the contributing elements with `delete_up`.
+/// Piece boundaries land in `inkscape-scientific-combined-by-color` (`s0 s1 … total`; an element
+/// that already carries the attribute contributes its own pieces). An element without readable
+/// geometry is left in place with a warning, never deleted. Returns `false`, changing nothing,
+/// when `merge_idx` is out of range, the target has no readable geometry, or the target's
+/// composed transform is singular.
 pub fn combine_paths(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], merge_idx: usize) -> bool {
-    let mel = els[merge_idx];
+    let Some(&mel) = els.get(merge_idx) else {
+        ctx.warn
+            .push("combine_paths: merge index out of range, paths not combined".to_string());
+        return false;
+    };
     let Some(inv) = inverse(doc.composed_transform(mel)) else {
         ctx.warn.push(format!(
             "{}: singular transform, paths not combined",
@@ -382,12 +388,20 @@ pub fn combine_paths(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], merge_idx: us
         ));
         return false;
     };
+    if shape_path(doc, mel).is_none() {
+        ctx.warn.push(format!(
+            "{}: target has no geometry, paths not combined",
+            label(doc, mel)
+        ));
+        return false;
+    }
     let mut pnew = BezPath::new();
     let mut si: Vec<usize> = Vec::new();
+    let mut contributed: Vec<NodeId> = Vec::new();
     for &el in els {
         let Some(pp) = shape_path(doc, el) else {
             ctx.warn
-                .push(format!("{}: no geometry, skipped", label(doc, el)));
+                .push(format!("{}: no geometry, left in place", label(doc, el)));
             continue;
         };
         let n0 = pnew.elements().len();
@@ -410,6 +424,7 @@ pub fn combine_paths(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], merge_idx: us
         for e in global.elements() {
             pnew.push(*e);
         }
+        contributed.push(el);
     }
     si.push(pnew.elements().len());
     object_to_path(doc, mel);
@@ -424,8 +439,8 @@ pub fn combine_paths(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], merge_idx: us
         "inkscape-scientific-combined-by-color",
         joined.join(" "),
     );
-    for (i, &el) in els.iter().enumerate() {
-        if i != merge_idx {
+    for el in contributed {
+        if el != mel {
             delete_up(doc, ctx, el);
         }
     }

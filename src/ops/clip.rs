@@ -9,9 +9,9 @@ use crate::geom::path::{end_points, fmt_d, shape_path};
 use crate::geom::{inverse, is_identity};
 use crate::style::Style;
 
-use super::bbox::is_rectangle;
+use super::bbox::is_rectangle_with;
 use super::style::{compose_style, fix_css_clipmask};
-use super::{ClipKind, Ctx, MAX_NEST, clip_ref, label};
+use super::{ClipKind, Ctx, MAX_NEST, MAX_STEPS, clip_ref, label};
 
 pub const TEXT_TAGS: &[&str] = &["text", "flowRoot"];
 /// Children `ungroup` leaves inside the group (DH:285–288).
@@ -117,6 +117,9 @@ fn compose_clips(doc: &mut Doc, d: NodeId, k: NodeId, newrect: NodeId) -> bool {
 /// 3. No existing clip → point at the new one. Otherwise duplicate the existing clip, point the
 ///    node at the duplicate and compose child by child: rectangle ∩ rectangle becomes one box
 ///    (clips only, never masks), anything else is clipped recursively.
+/// 4. Besides the `MAX_NEST` depth bound, the whole call shares a `MAX_STEPS` work budget with the
+///    `is_rectangle` checks it runs: a clip tree that references itself from several children
+///    grows exponentially with depth, and a depth bound alone does not stop it.
 pub fn merge_clipmask(
     doc: &mut Doc,
     ctx: &mut Ctx,
@@ -125,11 +128,34 @@ pub fn merge_clipmask(
     kind: ClipKind,
     depth: usize,
 ) -> bool {
+    let mut steps = 0usize;
+    merge_rec(doc, ctx, node, newclip, kind, depth, &mut steps)
+}
+
+fn merge_rec(
+    doc: &mut Doc,
+    ctx: &mut Ctx,
+    node: NodeId,
+    newclip: NodeId,
+    kind: ClipKind,
+    depth: usize,
+    steps: &mut usize,
+) -> bool {
+    *steps += 1;
     if depth > MAX_NEST {
         ctx.warn.push(format!(
             "{}: clips nested deeper than {MAX_NEST} levels are not merged",
             label(doc, node)
         ));
+        return false;
+    }
+    if *steps > MAX_STEPS {
+        if *steps == MAX_STEPS + 1 {
+            ctx.warn.push(format!(
+                "{}: clip tree too large ({MAX_STEPS} steps), the rest is not merged",
+                label(doc, node)
+            ));
+        }
         return false;
     }
     let mut newclip = newclip;
@@ -168,13 +194,16 @@ pub fn merge_clipmask(
     let id = doc.ensure_id(d);
     doc.set_attr(node, kind.attr(), format!("url(#{id})"));
     let new_kids = element_children(doc, newclip);
-    let newclip_is_rect = new_kids.len() == 1 && is_rectangle(doc, new_kids[0], true);
+    let newclip_is_rect = new_kids.len() == 1 && is_rectangle_with(doc, new_kids[0], true, steps);
     let mut all_out = true; // `all([])` is true
     for k in element_children(doc, d).into_iter().rev() {
-        let cout = if newclip_is_rect && kind == ClipKind::Clip && is_rectangle(doc, k, true) {
+        let cout = if newclip_is_rect
+            && kind == ClipKind::Clip
+            && is_rectangle_with(doc, k, true, steps)
+        {
             compose_clips(doc, d, k, new_kids[0])
         } else {
-            merge_clipmask(doc, ctx, k, newclip, kind, depth + 1)
+            merge_rec(doc, ctx, k, newclip, kind, depth + 1, steps)
         };
         all_out &= cout;
     }
@@ -196,7 +225,7 @@ pub fn unlink(doc: &mut Doc, ctx: &mut Ctx, u: NodeId) -> Option<NodeId> {
     let mut steps = 0usize;
     while let Some(u) = work.pop() {
         steps += 1;
-        if steps > 10_000 {
+        if steps > MAX_STEPS {
             ctx.warn.push(
                 "clone chain too long (a symbol cloning itself?), unlinking stopped".to_string(),
             );
@@ -338,13 +367,21 @@ pub fn lang_matches(attr: &str, lang: &str) -> bool {
 /// The `language` of `<group id="ui">` in Inkscape's `preferences.xml` (U:396–443), if set.
 pub fn preferences_language(xml: &str) -> Option<String> {
     for tag in xml.split('<').skip(1) {
-        let tag = tag.split('>').next()?;
-        if !tag.trim_start().starts_with("group") || !tag.contains(r#"id="ui""#) {
+        let Some(tag) = tag.split('>').next() else {
+            continue;
+        };
+        let is_ui_group = tag.trim_start().starts_with("group")
+            && tag.split_whitespace().any(|a| a == r#"id="ui""#);
+        if !is_ui_group {
             continue;
         }
-        let rest = tag.split("language=\"").nth(1)?;
-        let lang = rest.split('"').next()?.trim();
-        return (!lang.is_empty()).then(|| lang.to_string());
+        let Some(rest) = tag.split("language=\"").nth(1) else {
+            continue;
+        };
+        let lang = rest.split('"').next().unwrap_or("").trim();
+        if !lang.is_empty() {
+            return Some(lang.to_string());
+        }
     }
     None
 }

@@ -19,6 +19,12 @@ use crate::text::table::CharTable;
 /// document, and a Rust stack overflow cannot be caught (`main` can only catch panics).
 pub const MAX_NEST: usize = 64;
 
+/// Work budget for the recursive helpers that cannot be memoised: `clip::merge_clipmask` clones as
+/// it descends and `bbox::is_rectangle` has no per-node cache, so a clip tree that references
+/// itself from several children grows exponentially with depth and a depth bound alone
+/// (`MAX_NEST`) does not stop it. Also `clip::unlink`'s clone-chain guard.
+pub const MAX_STEPS: usize = 10_000;
+
 /// The two url-referencing attributes the ops manage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ClipKind {
@@ -77,7 +83,9 @@ impl Ctx {
         Ctx::default()
     }
 
-    /// A context whose character table covers only the text under `roots`.
+    /// A context whose character table covers only the text under `roots`. Text outside `roots`
+    /// still measures (the table falls back to the font system) but without its kerning pairs and
+    /// without font warnings — measure only what is under `roots`.
     pub fn for_roots(roots: Vec<NodeId>) -> Ctx {
         Ctx {
             text_roots: Some(roots),

@@ -429,3 +429,40 @@ fn combine_paths_pins_released_clips_against_a_stylesheet() {
         "the sheet says nothing about masks → nothing pinned"
     );
 }
+
+#[test]
+fn combine_paths_leaves_elements_without_geometry_in_place() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><path id="a" d="M0 0 L1 0"/><line id="pct" x1="50%" y1="0" x2="1" y2="0"/><path id="b" d="M0 1 L1 1"/></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let (a, pct, b) = (id(&d, "a"), id(&d, "pct"), id(&d, "b"));
+    assert!(combine_paths(&mut d, &mut ctx, &[a, pct, b], 0));
+    assert_eq!(d.attr(a, "d"), Some("M 0,0 L 1,0 M 0,1 L 1,1"));
+    assert_eq!(
+        d.attr(a, "inkscape-scientific-combined-by-color"),
+        Some("0 2 4")
+    );
+    assert!(
+        d.by_id("pct").is_some(),
+        "unreadable geometry is never deleted"
+    );
+    assert_eq!(d.by_id("b"), None);
+    assert!(
+        ctx.warn
+            .0
+            .iter()
+            .any(|w| w.contains("pct") && w.contains("left in place")),
+        "{:?}",
+        ctx.warn.0
+    );
+    // a target without geometry refuses the merge; so does an out-of-range index
+    let mut d = doc(&format!(
+        r#"<svg {NS}><path id="a" d="M0 0 L1 0"/><line id="pct" x1="50%" y1="0" x2="1" y2="0"/></svg>"#
+    ));
+    let (a, pct) = (id(&d, "a"), id(&d, "pct"));
+    assert!(!combine_paths(&mut d, &mut ctx, &[a, pct], 1));
+    assert!(d.by_id("a").is_some() && d.attr(pct, "d").is_none());
+    assert!(!combine_paths(&mut d, &mut ctx, &[a], 3));
+    assert_eq!(d.attr(a, "inkscape-scientific-combined-by-color"), None);
+}

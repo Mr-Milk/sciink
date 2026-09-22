@@ -124,6 +124,9 @@ fn referenced_clip_ids(doc: &Doc) -> HashSet<String> {
 /// Deletes every created clip/mask nothing references any more, repeating until stable (a clip
 /// may be referenced only from another dead clip). Survivors stay in `created`.
 pub fn gc_created_clips(doc: &mut Doc, created: &mut Vec<NodeId>) {
+    if created.is_empty() {
+        return;
+    }
     loop {
         let referenced = referenced_clip_ids(doc);
         let before = created.len();

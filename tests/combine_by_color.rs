@@ -89,18 +89,19 @@ fn style_differences_and_url_paints_block_merging() {
         )
     };
     let svg = format!(
-        "<svg {NS}><g id=\"layer\">{}{}{}{}{}{}{}</g></svg>",
+        "<svg {NS}><g id=\"layer\">{}{}{}{}{}{}{}{}</g></svg>",
         base("ref", ""),
         base("width", ";stroke-width:1.01"),
         base("alpha", ";stroke-opacity:0.5"),
         base("dash", ";stroke-dasharray:1,2"),
         base("marker", ";marker-end:url(#m)"),
         base("grad", ";stroke:url(#g)"),
+        base("fillgrad", ";fill:url(#g)"),
         base("same", ";stroke-width:1.0005"),
     );
     let (s, _) = run(&svg, &["--id=layer"]);
     let d = roxmltree::Document::parse(&s).unwrap();
-    for i in ["width", "alpha", "dash", "marker", "grad"] {
+    for i in ["width", "alpha", "dash", "marker", "grad", "fillgrad"] {
         assert!(
             has(&d, i) && attr(&d, i, "inkscape-scientific-combined-by-color").is_none(),
             "{i} must stay separate"

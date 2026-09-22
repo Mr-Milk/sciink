@@ -8,6 +8,7 @@ use crate::style::Style;
 use crate::text::style::composed_width;
 
 use super::ClipKind;
+use super::cleanup::url_id;
 
 /// Pushes a group's own declarations under a child's (DH:359–366): the child's inline style
 /// becomes `group_style` overridden by `cascaded(child)`, and opacities multiply.
@@ -70,10 +71,26 @@ fn append_sheet_text(doc: &mut Doc, sty: NodeId, add: &str) {
     doc.set_text(t, &s);
 }
 
+/// `none` or `url(#name)` with an XML-name id — the only values worth pinning. Anything else is
+/// left unpinned: a crafted attribute value could otherwise inject rules into the document's
+/// stylesheet.
+fn pinnable(v: &str) -> bool {
+    if v == "none" {
+        return true;
+    }
+    url_id(v).is_some_and(|id| {
+        let mut cs = id.chars();
+        cs.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && cs.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+    })
+}
+
 /// DH:397–413: Inkscape lets a stylesheet `clip-path`/`mask` override the attribute, so when the
 /// sheet disagrees with the attribute we just wrote, pin the attribute's value with an id rule
 /// appended to the root `<style>` (`\n#id{clip-path:url(#x)}`; `none` when the attribute is
-/// absent — upstream writes Python's `None` there) and clear any inline-style copy.
+/// absent — upstream writes Python's `None` there) and clear any inline-style copy. The rule is
+/// appended only when the value is `pinnable`; an unpinnable value is left unpinned rather than
+/// copied verbatim into the stylesheet.
 pub fn fix_css_clipmask(doc: &mut Doc, n: NodeId, kind: ClipKind) {
     let att = kind.attr();
     if let Some(css) = doc.sheet_value(n, att) {
@@ -82,7 +99,7 @@ pub fn fix_css_clipmask(doc: &mut Doc, n: NodeId, kind: ClipKind) {
             .map(str::trim)
             .unwrap_or("none")
             .to_string();
-        if css.trim() != value {
+        if css.trim() != value && pinnable(&value) {
             let id = doc.ensure_id(n);
             let sty = root_style(doc);
             append_sheet_text(doc, sty, &format!("\n#{id}{{{att}:{value}}}"));

@@ -631,6 +631,7 @@ impl Doc {
     /// Renames an element, keeping its namespace prefix (`svg:line` → `svg:path`). Style caches
     /// are invalidated because tag selectors may now match differently.
     pub fn set_tag(&mut self, n: NodeId, local: &str) {
+        let was_style = self.tag(n) == "style";
         let Kind::Element { name, .. } = &mut self.nodes[n as usize].kind else {
             return;
         };
@@ -638,6 +639,9 @@ impl Doc {
             Some((prefix, _)) => format!("{prefix}:{local}"),
             None => local.to_string(),
         };
+        if was_style || local == "style" {
+            self.bump_sheet();
+        }
         self.bump_style();
         self.bump();
     }

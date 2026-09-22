@@ -397,6 +397,16 @@ fn deswitch_keeps_the_language_match_and_language_helpers_work() {
         preferences_language(r#"<inkscape><group id="ui"/></inkscape>"#),
         None
     );
+    assert_eq!(
+        preferences_language(
+            r#"<inkscape><group id="ui"/><group id="ui" language="fr"/></inkscape>"#
+        ),
+        Some("fr".to_string())
+    );
+    assert_eq!(
+        preferences_language(r#"<inkscape><group data-id="ui" language="de"/></inkscape>"#),
+        None
+    );
     let src = format!(
         r#"<svg {NS}><switch id="s" transform="translate(1,0)"><text id="de" systemLanguage="de">Hallo</text><text id="en" systemLanguage="en-US">Hello</text><text id="x">Fallback</text></switch></svg>"#
     );
@@ -421,4 +431,56 @@ fn deswitch_keeps_the_language_match_and_language_helpers_work() {
     let n_s = id(&d, "s");
     deswitch(&mut d, &mut ctx, n_s, "fr");
     assert!(d.by_id("de").is_some() && d.by_id("it").is_none());
+}
+
+#[test]
+fn merge_clipmask_survives_a_branching_self_referencing_clip() {
+    // two children of `loop` reference `loop` itself: without a work budget the rectangle test and
+    // the merge both branch twice per level for 64 levels
+    let mut d = doc(&format!(
+        r#"<svg {NS}><defs><clipPath id="loop"><rect clip-path="url(#loop)" width="1" height="1"/><rect clip-path="url(#loop)" width="1" height="1"/></clipPath><clipPath id="c"><rect width="5" height="5"/></clipPath></defs><rect id="r" width="3" height="3" clip-path="url(#loop)"/></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let (r, c) = (id(&d, "r"), id(&d, "c"));
+    let t0 = std::time::Instant::now();
+    merge_clipmask(&mut d, &mut ctx, r, c, ClipKind::Clip, 0);
+    assert!(
+        t0.elapsed().as_secs() < 10,
+        "must terminate, took {:?}",
+        t0.elapsed()
+    );
+    assert!(
+        ctx.warn
+            .0
+            .iter()
+            .any(|w| w.contains("steps") || w.contains("64 levels")),
+        "{:?}",
+        ctx.warn.0
+    );
+    let n_r = id(&d, "r");
+    assert!(
+        d.attr(n_r, "clip-path").is_some(),
+        "the element keeps a clip"
+    );
+}
+
+#[test]
+fn ungroup_with_remove_text_clip_strips_text_clips_and_masks() {
+    let mut d = doc(&format!(
+        r#"<svg {NS}><defs><clipPath id="c"><rect width="10" height="10"/></clipPath><mask id="m"><rect width="10" height="10"/></mask></defs><g id="g" clip-path="url(#c)" mask="url(#m)"><text id="t" clip-path="url(#c)">x</text><path id="p" d="M0 0h1"/></g></svg>"#
+    ));
+    let mut ctx = Ctx::new();
+    let g = id(&d, "g");
+    ungroup(&mut d, &mut ctx, g, true);
+    let (t, p) = (id(&d, "t"), id(&d, "p"));
+    assert_eq!(
+        (d.attr(t, "clip-path"), d.attr(t, "mask")),
+        (None, None),
+        "text loses its clips instead of merging the group's"
+    );
+    assert_eq!(
+        (d.attr(p, "clip-path"), d.attr(p, "mask")),
+        (Some("url(#c)"), Some("url(#m)"))
+    );
+    assert_eq!(d.by_id("g"), None);
 }

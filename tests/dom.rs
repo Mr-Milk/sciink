@@ -514,3 +514,17 @@ fn set_tag_keeps_the_prefix_and_invalidates_styles() {
         "{s}"
     );
 }
+
+#[test]
+fn set_tag_to_or_from_style_rebuilds_the_stylesheet() {
+    let mut d = Doc::parse(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><foo id="s">rect{fill:red}</foo><rect id="r"/></svg>"#,
+    )
+    .unwrap();
+    let (s, r) = (d.by_id("s").unwrap(), d.by_id("r").unwrap());
+    assert_eq!(d.specified(r, "fill"), None);
+    d.set_tag(s, "style");
+    assert_eq!(d.specified(r, "fill").as_deref(), Some("red"));
+    d.set_tag(s, "foo");
+    assert_eq!(d.specified(r, "fill"), None);
+}
