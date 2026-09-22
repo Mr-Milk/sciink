@@ -106,7 +106,7 @@ search, mostly for tests and for reproducing a figure built elsewhere:
 
 The upstream oracles need the installed fonts and the `tests/upstream` fixture symlink; run them with
 
-    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test scaler_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
+    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
 
 Set `SCIINK_LOG=/tmp/sciink.log` in Inkscape's environment to get timing lines.
 Releases: push a tag `vX.Y.Z` matching `Cargo.toml`'s version; the `release` workflow builds
