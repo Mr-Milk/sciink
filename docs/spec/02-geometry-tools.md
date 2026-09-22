@@ -182,8 +182,9 @@ justification (1 centre, 2 left, 3 right, 4 unchanged), markexc (1/2), tab`. Tex
      bb.w`; `dark && bb.h < bb.w/2.49` → `d="m x1,yc h w"`, `stroke-width = bb.h`; both: `fill:none`,
      `stroke-linecap:butt`, if alpha≠1: `stroke-opacity = alpha`, `opacity = 1`. Guard fill == None.
 7. Font replacement: for text/tspan delete `-inkscape-font-specification`; empty family → repl; family list
-   gets repl appended unless last entry equals it (case-insensitive). Then `deswitch` every `<switch>`, then
-   `remove_kerning` (Appendix A), then `removetextclips` drops clip-path/mask from text/flowRoot.
+   gets repl appended unless last entry equals it (case-insensitive). Then `deswitch` every `<switch>` using
+   `ui_language()`, then `remove_kerning` (Appendix A), then `removetextclips` drops clip-path/mask from
+   text/flowRoot.
 8. Bbox stage when `removerectw || removeduppaths`: `ngs2` = drawn elements in document order; `bbs =
    BB2(rough=true, parsed=true)`.
    - Duplicate removal: candidates path/rect/line with bbox, excluding shapes referenced by any text's
@@ -419,3 +420,15 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
   tree that references itself from several children grows exponentially with depth.
 - `combine_paths` leaves elements whose geometry cannot be read in place (warning) and refuses a target
   without geometry or an out-of-range merge index (upstream would raise or silently drop them).
+
+## Deliberate deviations (Plan 6)
+- `unlinked_clone` markers are stripped at the end of a run (upstream keeps them).
+- The `--testmode` duplicate carries no ids (upstream: random ids).
+- A reverted minus sign keeps a translucent fill's alpha as `fill-opacity`.
+- Thin-rectangle strokes are written as absolute `M … L …`.
+- Duplicate removal compares rgb only and checks alpha on the top element, as upstream's
+  `inkex.Color` equality does.
+- `remove_kerning` never edits flowed text or text on a path (Plan 4).
+- An empty selection is an `Err` with upstream's message (the document is echoed unchanged).
+- The character table for the bbox stage covers the whole document (`Ctx::new()`, as upstream's
+  `BB2(svg, ngs2)` covers all text of the selection's descendants).

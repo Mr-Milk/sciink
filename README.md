@@ -6,8 +6,14 @@ Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled bin
 works with Inkscape 1.2 and later.
 
 Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
-release ships six menu entries — two tools, three diagnostics and one debug editor:
+release ships seven menu entries — three tools, three diagnostics and one debug editor:
 
+- **Extensions ▸ Scientific ▸ Flattener** — makes an imported plot editable: deep ungroup (composing
+  transforms, clips and styles onto the leaves and unlinking clones), matplotlib minus-sign glyphs back
+  to text, thin dark rectangles back to strokes, the text pipeline (manual-kerning removal, merges,
+  splits, justification, optional font replacement, text clips removed), then overlapping duplicates
+  and white background rectangles removed. Objects marked on the Exclusions page are left alone.
+  Same options and defaults as the original.
 - **Extensions ▸ Scientific ▸ Combine by Color** — merges the selected paths that share stroke, fill,
   width, dashes and markers into one path each (lines darker than the lightness threshold, such as
   axes and ticks, are left alone), releasing their clips and masks. Fewer elements, smaller files, a
