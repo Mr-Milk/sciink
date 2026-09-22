@@ -184,8 +184,9 @@ pub fn merge_clipmask(
 /// DH:238–282 `unlink2`: replace a `<use>` by a copy of its target that takes the clone's place
 /// and id, composed with `translate(x, y)` first, then the clone's clip, mask, transform and
 /// cascaded style; nested clones inside the copy are unlinked too. A `<symbol>` copy becomes a
-/// `<g>` (Inkscape's Unlink Clone). Returns the replacement, or `None` for a clone of a missing
-/// target (the clone is then deleted). Non-`<use>` elements are returned unchanged.
+/// `<g>` (Inkscape's Unlink Clone) that still keeps the clone's id and `unlinked_clone` marker.
+/// Returns the replacement, or `None` for a clone of a missing target (the clone is then
+/// deleted). Non-`<use>` elements are returned unchanged.
 pub fn unlink(doc: &mut Doc, ctx: &mut Ctx, u: NodeId) -> Option<NodeId> {
     if doc.tag(u) != "use" {
         return Some(u);
@@ -226,16 +227,18 @@ pub fn unlink(doc: &mut Doc, ctx: &mut Ctx, u: NodeId) -> Option<NodeId> {
         compose_all(doc, ctx, d, clip, mask, t, Some(&st), false);
         let id = doc.attr(u, "id").map(str::to_string);
         doc.detach(u);
-        if let Some(id) = id {
-            doc.set_attr(d, "id", id);
-        }
-        doc.set_attr(d, "unlinked_clone", "True");
         let mut d = d;
         if doc.tag(d) == "symbol" {
             let g = group(doc, &element_children(doc, d));
             ungroup(doc, ctx, d, false);
             d = g;
         }
+        // after the symbol conversion, so the SURVIVING element carries them (Deviation: upstream
+        // sets both on the symbol copy and then dissolves it, losing the id and the marker)
+        if let Some(id) = id {
+            doc.set_attr(d, "id", id);
+        }
+        doc.set_attr(d, "unlinked_clone", "True");
         // nested clones inside the copy (the copy itself is never a <use>: its target was not)
         let nested: Vec<NodeId> = doc
             .descendants(d)

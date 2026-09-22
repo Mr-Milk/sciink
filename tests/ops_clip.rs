@@ -291,6 +291,11 @@ fn unlink_replaces_a_clone_with_a_composed_copy() {
     let n_us = id(&d, "us");
     let g = unlink(&mut d, &mut ctx, n_us).unwrap();
     assert_eq!(d.tag(g), "g");
+    assert_eq!(
+        (d.attr(g, "id"), d.attr(g, "unlinked_clone")),
+        (Some("us"), Some("True")),
+        "the group inherits the clone's id and marker"
+    );
     assert_eq!(d.attr(g, "transform"), Some("translate(1,1)"));
     assert_eq!(d.tag(kids(&d, g)[0]), "circle");
     assert_eq!(
