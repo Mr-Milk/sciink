@@ -3133,7 +3133,9 @@ fn homogenizer_fuse_transforms_keeps_clips_in_place_and_changes_only_anisotropic
     assert!(d <= 0.005, "{d}");
     let (before, after) = (clip_boxes(&input), clip_boxes(&out.svg));
     assert_eq!(before.len(), after.len(), "same clipped elements");
-    assert!(before.len() >= 11, "the fixture has clipped elements: {}", before.len());
+    // 11 clipped elements; `image270`'s clip is a `<use>` whose target `bbox` does not measure,
+    // so it drops out of both lists alike
+    assert!(before.len() >= 10, "the fixture has clipped elements: {}", before.len());
     for ((ida, ra), (idb, rb)) in before.iter().zip(&after) {
         assert_eq!(ida, idb);
         for (x, y) in [(ra.x0, rb.x0), (ra.y0, rb.y0), (ra.x1, rb.x1), (ra.y1, rb.y1)] {
