@@ -95,7 +95,7 @@ fn kids(d: &Doc, n: NodeId) -> Vec<NodeId> {
   - `Doc::sheet_value(&self, n: NodeId, prop: &str) -> Option<String>`
   - `Doc::set_transform(&mut self, n: NodeId, t: Affine)`, `Doc::viewbox(&self) -> Option<Rect>`
   - `ops::MAX_NEST: usize = 64`; `ops::ClipKind { Clip, Mask }` with `attr(self) -> &'static str`; `ops::clip_ref(doc, n, kind) -> Option<NodeId>`; `ops::label(doc, n) -> String`
-  - `ops::Ctx { pub created: Vec<NodeId>, pub deleted: HashSet<String>, pub warn: Warnings, text: Option<CharTable> }` with `new()`, `ensure_char_table(&mut self, doc: &Doc)`, `char_table(&mut self, doc: &Doc) -> &mut CharTable`, `finish(&mut self, doc: &mut Doc)`
+  - `ops::Ctx { pub created: Vec<NodeId>, pub deleted: HashSet<String>, pub warn: Warnings, text: Option<CharTable>, text_roots: Option<Vec<NodeId>> }` with `new()`, `for_roots(roots: Vec<NodeId>)` (character table scoped to the text under `roots`; controller ruling from Task 8), `ensure_char_table(&mut self, doc: &Doc)`, `char_table(&mut self, doc: &Doc) -> &mut CharTable`, `finish(&mut self, doc: &mut Doc)`
   - `ops::cleanup::{delete_up(doc, ctx, n), drop_dangling_refs(doc, deleted: &HashSet<String>), gc_created_clips(doc, created: &mut Vec<NodeId>), url_id(v: &str) -> Option<&str>}`
 
 - [ ] **Step 1: Write the failing tests**
@@ -439,9 +439,14 @@ pub struct Ctx {
     /// references that still point at them (`cleanup::drop_dangling_refs`).
     pub deleted: HashSet<String>,
     pub warn: Warnings,
-    /// Character table over every `<text>`/`<flowRoot>` of the document, built on first use so
-    /// fonts load only when a tool measures text.
+    /// Character table over the `<text>`/`<flowRoot>` elements under `text_roots` (the whole
+    /// document when `None`), built on first use so fonts load only when a tool measures text.
     text: Option<CharTable>,
+    /// Elements whose text descendants the character table covers; `None` = the whole document.
+    /// Tools that measure only their selection set it (upstream builds its table over the
+    /// selection's text: `BB2(svg, sel)` → `make_char_table(els=tels)`), so font warnings
+    /// concern only the text being measured and large documents cost nothing extra.
+    text_roots: Option<Vec<NodeId>>,
 }
 
 impl Ctx {
@@ -449,13 +454,33 @@ impl Ctx {
         Ctx::default()
     }
 
+    /// A context whose character table covers only the text under `roots`.
+    pub fn for_roots(roots: Vec<NodeId>) -> Ctx {
+        Ctx {
+            text_roots: Some(roots),
+            ..Ctx::default()
+        }
+    }
+
     /// Builds the character table if it does not exist yet.
     pub fn ensure_char_table(&mut self, doc: &Doc) {
         if self.text.is_none() {
-            let els: Vec<NodeId> = doc
-                .descendants(doc.svg())
-                .filter(|&n| doc.is_element(n) && matches!(doc.tag(n), "text" | "flowRoot"))
-                .collect();
+            let roots: Vec<NodeId> = match &self.text_roots {
+                Some(r) => r.clone(),
+                None => vec![doc.svg()],
+            };
+            let mut seen = HashSet::new();
+            let mut els: Vec<NodeId> = Vec::new();
+            for r in roots {
+                for n in doc.descendants(r) {
+                    if doc.is_element(n)
+                        && matches!(doc.tag(n), "text" | "flowRoot")
+                        && seen.insert(n)
+                    {
+                        els.push(n);
+                    }
+                }
+            }
             let ct = CharTable::build(doc, &els, FontSystem::load(), &mut self.warn);
             self.text = Some(ct);
         }
@@ -3437,7 +3462,9 @@ fn ghost_of(d: &roxmltree::Document, id: &str) -> (Vec<f64>, String, String, f64
     assert_eq!(g.tag_name().name(), "g", "{id} is wrapped in a group");
     let r = g
         .children()
-        .find(|n| n.has_tag_name("rect") && n.attribute("id").is_none())
+        .find(|n| {
+            n.has_tag_name("rect") && n.attribute("style").is_some_and(|s| s.contains("filter:url(#"))
+        })
         .expect("ghost rectangle");
     let vals: Vec<f64> = ["x", "y", "width", "height", "rx"].iter().map(|a| num(r, a)).collect();
     let style = r.attribute("style").unwrap().to_string();
@@ -3530,6 +3557,20 @@ fn singular_or_boxless_elements_are_wrapped_without_a_rectangle() {
     let (s, msgs) = run(&svg, &[]);
     assert_eq!(s, svg);
     assert_eq!(msgs, vec!["text-ghoster: nothing selected".to_string()]);
+}
+
+#[test]
+fn font_warnings_concern_only_the_selected_text() {
+    let svg = format!(
+        r#"<svg {NS}><text id="t" style="font-family:'DejaVu Sans';font-size:10px">a</text><text id="u" style="font-family:'No Such Font';font-size:10px">b</text></svg>"#
+    );
+    let (_, msgs) = run(&svg, &["--id=t"]);
+    assert!(msgs.is_empty(), "the unselected text's missing font is not this run's business: {msgs:?}");
+    let (_, msgs) = run(&svg, &["--id=u"]);
+    assert!(
+        msgs.iter().any(|m| m.starts_with("warning: ") && m.contains("No Such Font")),
+        "the selected text's missing font is: {msgs:?}"
+    );
 }
 
 /// Upstream's reference output for `text28136` (Tahoma). Run with the installed fonts only:
@@ -3663,8 +3704,9 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = TextGhosterCli::try_parse_from(argv).map_err(first_line)?;
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
     let mut messages = Vec::new();
-    let mut ctx = Ctx::new();
     let sel = doc.selection(&cli.common.ids);
+    // measure (and warn about fonts of) the selected text only, as upstream's BB2(svg, sel) does
+    let mut ctx = Ctx::for_roots(sel.clone());
     if sel.is_empty() {
         messages.push("text-ghoster: nothing selected".to_string());
     }
@@ -3714,9 +3756,9 @@ Create `inx/text_ghoster.inx`:
 
 - [ ] **Step 4: Run everything**
 
-`cargo test --test text_ghoster 2>&1 | grep -E "^test result|FAILED|panicked"` → 3 passed, 1 ignored; `SCIINK_SYSTEM_FONTS=1 cargo test --test text_ghoster -- --ignored --nocapture 2>&1 | grep -E "^test result|panicked|SKIP"` → passes on this Mac (Tahoma installed); then `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test 2>&1 | grep -E "^test result|FAILED"`.
+`cargo test --test text_ghoster 2>&1 | grep -E "^test result|FAILED|panicked"` → 4 passed, 1 ignored; `SCIINK_SYSTEM_FONTS=1 cargo test --test text_ghoster -- --ignored --nocapture 2>&1 | grep -E "^test result|panicked|SKIP"` → passes on this Mac (Tahoma installed); then `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test 2>&1 | grep -E "^test result|FAILED"`.
 
-Dev-machine check (this Mac only; not a test): `cargo build --release && target/release/sciink --tool=combine-by-color --tab=scaling --lightnessth=15 --id=layer1 tests/upstream/data/svg/Other_tests.svg | grep -c inkscape-scientific-combined-by-color` → `15`; `target/release/sciink --tool=text-ghoster --tab=scaling --id=text28136 tests/upstream/data/svg/Other_tests.svg | grep -c feGaussianBlur` → `2`. If `dist/dev-install.sh` has been run before, also: `/Applications/Inkscape.app/Contents/MacOS/inkscape --actions="select-by-id:text28136;org.sciink.text-ghoster.noprefs;export-type:svg;export-filename:/tmp/ghost.svg;export-do" tests/upstream/data/svg/Other_tests.svg` and confirm `/tmp/ghost.svg` contains `filter:url(#filter`.
+Dev-machine check (this Mac only; not a test): `cargo build --release && target/release/sciink --tool=combine-by-color --tab=scaling --lightnessth=15 --id=layer1 tests/upstream/data/svg/Other_tests.svg | grep -c inkscape-scientific-combined-by-color` → `15`; `target/release/sciink --tool=text-ghoster --tab=scaling --id=text28136 tests/upstream/data/svg/Other_tests.svg | grep -c feGaussianBlur` → one more than `grep -c feGaussianBlur tests/upstream/data/svg/Other_tests.svg` reports (the fixture already carries blurs). If `dist/dev-install.sh` has been run before, also: `/Applications/Inkscape.app/Contents/MacOS/inkscape --actions="select-by-id:text28136;org.sciink.text-ghoster.noprefs;export-type:svg;export-filename:/tmp/ghost.svg;export-do" tests/upstream/data/svg/Other_tests.svg` and confirm `/tmp/ghost.svg` contains `filter:url(#filter`.
 
 - [ ] **Step 5: Documentation**
 
