@@ -79,6 +79,13 @@ fn kids<'a, 'i>(n: roxmltree::Node<'a, 'i>) -> Vec<roxmltree::Node<'a, 'i>> {
 fn style_of(n: roxmltree::Node) -> sciink::style::Style {
     n.attribute("style").map(sciink::style::Style::parse).unwrap_or_default()
 }
+const INKSCAPE_NS: &str = "http://www.inkscape.org/namespaces/inkscape";
+const SODIPODI_NS: &str = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd";
+/// roxmltree resolves prefixes: a namespaced attribute is looked up by (namespace, local name),
+/// never by its prefixed spelling.
+fn nsattr<'a>(n: roxmltree::Node<'a, '_>, ns: &str, local: &str) -> Option<&'a str> {
+    n.attribute((ns, local))
+}
 ```
 
 ---
@@ -288,13 +295,13 @@ fn test_mode_duplicates_the_selected_layer_and_flattens_the_original() {
     let top = kids(root);
     assert_eq!(top.len(), 2, "a duplicate layer sits BEFORE the flattened original: {s}");
     let (dup, orig) = (top[0], top[1]);
-    assert_eq!(dup.attribute("inkscape:label"), Some("Layer 1 original"));
-    assert_eq!(dup.attribute("sodipodi:insensitive"), Some("true"));
+    assert_eq!(nsattr(dup, INKSCAPE_NS, "label"), Some("Layer 1 original"));
+    assert_eq!(nsattr(dup, SODIPODI_NS, "insensitive"), Some("true"));
     assert_eq!(dup.attribute("opacity"), Some("0.3"));
     assert_eq!(dup.attribute("id"), None, "the copy carries no ids");
     assert_eq!(kids(dup).len(), 2, "the copy is the untouched layer");
     assert_eq!(kids(kids(dup)[0]).len(), 1, "…with its nested group intact");
-    assert_eq!((orig.attribute("id"), orig.attribute("inkscape:label")), (Some("layer1"), Some("Layer 1 flat")));
+    assert_eq!((orig.attribute("id"), nsattr(orig, INKSCAPE_NS, "label")), (Some("layer1"), Some("Layer 1 flat")));
     let names: Vec<&str> = kids(orig).iter().map(|n| n.tag_name().name()).collect();
     assert_eq!(names, vec!["path", "rect"], "the original's children were flattened in place: {s}");
     assert!(!has(&d, "inner"));
@@ -1615,6 +1622,12 @@ fn layer_texts(d: &roxmltree::Document, id: &str) -> Vec<String> {
 fn minus_signs(texts: &[String]) -> usize {
     texts.iter().map(|t| t.matches('\u{2212}').count()).sum()
 }
+const INKSCAPE_NS: &str = "http://www.inkscape.org/namespaces/inkscape";
+const SODIPODI_NS: &str = "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd";
+/// roxmltree looks namespaced attributes up by (namespace, local name).
+fn nsattr<'a>(n: roxmltree::Node<'a, '_>, ns: &str, local: &str) -> Option<&'a str> {
+    n.attribute((ns, local))
+}
 
 fn flatten_fixture(name: &str) -> Option<(String, String)> {
     let dir = support::upstream_data_dir()?;
@@ -1653,10 +1666,10 @@ fn structural_oracle(name: &str) {
     assert_eq!(minus_signs(&layer_texts(&od, "layer1")), minus_signs(&layer_texts(&rd, "layer1")), "{name}: minus-sign reversions");
     assert_eq!(attr_count(&od, "layer1", "unlinked_clone"), 0, "{name}: markers are stripped");
     let flat = od.descendants().find(|n| n.attribute("id") == Some("layer1")).unwrap();
-    assert_eq!(flat.attribute("inkscape:label"), Some("Layer 1 flat"));
+    assert_eq!(nsattr(flat, INKSCAPE_NS, "label"), Some("Layer 1 flat"));
     let orig = flat.prev_siblings().find(|n| n.is_element()).expect("the duplicate precedes the flattened layer");
-    assert_eq!(orig.attribute("inkscape:label"), Some("Layer 1 original"));
-    assert_eq!((orig.attribute("sodipodi:insensitive"), orig.attribute("opacity")), (Some("true"), Some("0.3")));
+    assert_eq!(nsattr(orig, INKSCAPE_NS, "label"), Some("Layer 1 original"));
+    assert_eq!((nsattr(orig, SODIPODI_NS, "insensitive"), orig.attribute("opacity")), (Some("true"), Some("0.3")));
 }
 
 #[test]
