@@ -65,15 +65,17 @@ fn inkscape_font_specifications_become_css() {
     let css = |s: &str| inkscape_spec_to_css(s, &fams).map(|st| st.to_css());
     assert_eq!(
         css("DejaVu Sans"),
-        Some("font-family:DejaVu Sans;".to_string())
+        Some("font-family:DejaVu Sans".to_string())
     );
     assert_eq!(
         css("DejaVu Sans Bold"),
-        Some("font-family:DejaVu Sans;font-weight:bold;".to_string())
+        Some("font-family:DejaVu Sans;font-weight:bold".to_string())
     );
+    // punctuation and case are ignored (upstream strips punctuation without inserting spaces, so a
+    // hyphenated "dejavu-sans" can never match "DejaVu Sans" — upstream rejects it too)
     assert_eq!(
-        css("dejavu-sans, Bold Italic"),
-        Some("font-family:DejaVu Sans;font-weight:bold;font-style:italic;".to_string())
+        css("dejavu sans, Bold Italic"),
+        Some("font-family:DejaVu Sans;font-weight:bold;font-style:italic".to_string())
     );
     assert_eq!(
         css("Bold DejaVu Sans"),
@@ -82,27 +84,27 @@ fn inkscape_font_specifications_become_css() {
     );
     assert_eq!(
         css("Avenir Next Semi-Condensed"),
-        Some("font-family:Avenir Next;font-stretch:semi-condensed;".to_string())
+        Some("font-family:Avenir Next;font-stretch:semi-condensed".to_string())
     );
     assert_eq!(
         css("Roboto Weight500"),
-        Some("font-family:Roboto;font-weight:500;".to_string())
+        Some("font-family:Roboto;font-weight:500".to_string())
     );
     assert_eq!(
         css("Roboto Semi-Bold"),
-        Some("font-family:Roboto;font-weight:600;".to_string())
+        Some("font-family:Roboto;font-weight:600".to_string())
     );
     assert_eq!(
         css("Roboto Normal"),
         Some(
-            "font-family:Roboto;font-weight:normal;font-style:normal;font-stretch:normal;"
+            "font-family:Roboto;font-weight:normal;font-style:normal;font-stretch:normal"
                 .to_string()
         ),
         "Normal is a weight, a style and a stretch"
     );
     assert_eq!(
         css("Sans Light"),
-        Some("font-family:Sans;font-weight:300;".to_string()),
+        Some("font-family:Sans;font-weight:300".to_string()),
         "generic families are always known"
     );
     assert_eq!(css("Nope Sans"), None, "no family and an unknown word");
@@ -201,18 +203,19 @@ fn distorted_text_becomes_conformal_and_keeps_its_centre() {
     let (bt, bf) = (vbox(&svg, "t"), vbox(&svg, "f"));
     let (s, msgs) = ok(&svg, &["--fixtextdistortion=true", "--id=g"]);
     assert!(msgs.is_empty(), "{msgs:?}");
+    // coefficients are re-read from the serialised output (`num::fmt`, 8 significant digits)
     let c = composed(&s, "t");
     let q = 2.0_f64.sqrt();
     assert!(
-        close(c[0], q, 1e-9)
-            && close(c[1], 0.0, 1e-9)
-            && close(c[2], 0.0, 1e-9)
-            && close(c[3], q, 1e-9),
+        close(c[0], q, 1e-6)
+            && close(c[1], 0.0, 1e-6)
+            && close(c[2], 0.0, 1e-6)
+            && close(c[3], q, 1e-6),
         "uniform sqrt(det): {c:?}"
     );
     let c = composed(&s, "f");
     assert!(
-        close(c[0], q, 1e-9) && close(c[3], -q, 1e-9),
+        close(c[0], q, 1e-6) && close(c[3], -q, 1e-6),
         "a flip stays a flip: {c:?}"
     );
     let (at, af) = (vbox(&s, "t"), vbox(&s, "f"));
