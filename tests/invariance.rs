@@ -2,6 +2,8 @@ mod support;
 
 use std::ffi::OsString;
 
+use sciink::dom::{Doc, NodeId};
+use sciink::geom::{Rect, transform_rect, union};
 use support::{pixel_diff_fraction, render_png, with_vendored_fonts};
 
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\"";
@@ -158,8 +160,47 @@ fn scaler_correction_of_an_unscaled_plot_is_visually_invariant() {
     assert!(d <= 0.001, "{d}");
 }
 
+/// Root-coordinate box of every clipped element's clip region, sorted by the element's id: the
+/// union over the clip's element children of `composed(el) · child.transform · own-frame box`.
+fn clip_boxes(svg: &[u8]) -> Vec<(String, Rect)> {
+    use sciink::ops::bbox::{LOCAL, bbox};
+    use sciink::ops::{ClipKind, Ctx, clip_ref};
+    let mut doc = Doc::parse(svg).unwrap();
+    let mut ctx = Ctx::new();
+    let els: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .filter(|&n| doc.is_element(n))
+        .collect();
+    let mut out = Vec::new();
+    for el in els {
+        let Some(clip) = clip_ref(&doc, el, ClipKind::Clip) else {
+            continue;
+        };
+        let Some(id) = doc.attr(el, "id").map(str::to_string) else {
+            continue;
+        };
+        let ct = doc.composed_transform(el);
+        let kids: Vec<NodeId> = doc.children(clip).filter(|&k| doc.is_element(k)).collect();
+        let mut acc: Option<Rect> = None;
+        for k in kids {
+            if let Some(b) = bbox(&mut doc, &mut ctx, k, LOCAL) {
+                acc = union(acc, Some(transform_rect(ct * doc.transform(k), b)));
+            }
+        }
+        if let Some(r) = acc {
+            out.push((id, r));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Fusing transforms is a geometric no-op except where a stroke was anisotropic: Other_tests has
+/// non-uniformly scaled plots (`g5224` at 0.748 × 0.520, `rect3230`) whose strokes become
+/// uniform by design, so pixel identity is impossible there (measured 2026-09-23: 0.2303 %).
+/// The precise invariant is that every clip region stays where it was.
 #[test]
-fn homogenizer_fuse_transforms_is_visually_invariant() {
+fn homogenizer_fuse_transforms_keeps_clips_in_place_and_changes_only_anisotropic_strokes() {
     let Some(dir) = support::upstream_data_dir() else {
         return;
     };
@@ -184,5 +225,26 @@ fn homogenizer_fuse_transforms_is_visually_invariant() {
     let (a, b) = (render_png(&input, 1500), render_png(&out.svg, 1500));
     let d = pixel_diff_fraction(&a, &b, 32);
     eprintln!("homogenizer fuse: {:.4} % pixels differ", d * 100.0);
-    assert!(d <= 0.001, "{d}");
+    assert!(d <= 0.005, "{d}");
+    let (before, after) = (clip_boxes(&input), clip_boxes(&out.svg));
+    assert_eq!(before.len(), after.len(), "same clipped elements");
+    assert!(
+        before.len() >= 11,
+        "the fixture has clipped elements: {}",
+        before.len()
+    );
+    for ((ida, ra), (idb, rb)) in before.iter().zip(&after) {
+        assert_eq!(ida, idb);
+        for (x, y) in [
+            (ra.x0, rb.x0),
+            (ra.y0, rb.y0),
+            (ra.x1, rb.x1),
+            (ra.y1, rb.y1),
+        ] {
+            assert!(
+                (x - y).abs() <= 1e-3,
+                "{ida}: clip region moved: {ra:?} vs {rb:?}"
+            );
+        }
+    }
 }
