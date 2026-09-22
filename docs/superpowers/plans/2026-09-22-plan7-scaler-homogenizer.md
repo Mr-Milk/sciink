@@ -252,8 +252,8 @@ fn px_per_uu_follows_upstream_document_size() {
     assert!(close(d.px_per_uu(), 5.5290051 * 96.0 / 140.43673), "{}", d.px_per_uu());
     // Other_tests_nonuniform.svg: 81.709946mm × 63.921371mm over 40.904464 × 58.764816 → meet = min
     let d = doc(r#"width="81.709946mm" height="63.921371mm" viewBox="23 50 40.904464 58.764816""#);
-    let xfr = 81.709946 * 96.0 / 25.4 / 40.904464;
-    let yfr = 63.921371 * 96.0 / 25.4 / 58.764816;
+    let xfr: f64 = 81.709946 * 96.0 / 25.4 / 40.904464; // annotated: `.min()` on an inferred float is E0689
+    let yfr: f64 = 63.921371 * 96.0 / 25.4 / 58.764816;
     assert!(close(d.px_per_uu(), xfr.min(yfr)), "{} vs {}", d.px_per_uu(), xfr.min(yfr));
     // slice takes the larger factor; none with distinct factors takes the geometric mean
     let d = doc(r#"width="81.709946mm" height="63.921371mm" viewBox="23 50 40.904464 58.764816" preserveAspectRatio="xMinYMin slice""#);
