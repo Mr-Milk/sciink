@@ -22,7 +22,9 @@ fn out(d: &Doc) -> String {
 
 use std::collections::HashSet;
 
-use sciink::ops::cleanup::{delete_up, drop_dangling_refs, gc_created_clips, url_id};
+use sciink::ops::cleanup::{
+    delete_up, drop_dangling_refs, gc_created_clips, strip_attr, strip_whitespace, url_id,
+};
 
 #[test]
 fn url_id_parses_url_references() {
@@ -161,4 +163,45 @@ fn delete_up_never_touches_the_root() {
         Some("url(#r)"),
         "finish() has nothing to strip"
     );
+}
+
+#[test]
+fn strip_whitespace_keeps_text_only_where_inkscape_needs_it() {
+    let mut d = doc(&format!(
+        "<svg {NS}>\n  <style>rect{{fill:red}}</style>\n  <g id=\"g\">\n    <path id=\"p\"/>\n    <!-- c -->\n    tail of comment\n  </g>\n  <text id=\"c\">A<!--note-->B</text>\n  <text id=\"t\" xml:space=\"preserve\">a<tspan id=\"s\">b</tspan> c<textPath id=\"tp\">d</textPath> e</text>\n  <flowRoot id=\"f\">x<flowPara id=\"fp\">y</flowPara> z</flowRoot>\n</svg>"
+    ));
+    strip_whitespace(&mut d);
+    let s = out(&d);
+    assert!(
+        s.contains("<style>rect{fill:red}</style>"),
+        "a <style>'s text stays: {s}"
+    );
+    assert!(
+        s.contains("<g id=\"g\"><path id=\"p\"/><!-- c --></g>"),
+        "group whitespace and the comment's tail go: {s}"
+    );
+    assert!(
+        s.contains("<text id=\"c\">A<!--note-->B</text>"),
+        "text after a comment inside <text> stays: {s}"
+    );
+    assert!(s.contains("<text id=\"t\" xml:space=\"preserve\">a<tspan id=\"s\">b</tspan> c<textPath id=\"tp\">d</textPath> e</text>"), "text runs and tspan/textPath tails stay: {s}");
+    assert!(
+        s.contains("<flowRoot id=\"f\">x<flowPara id=\"fp\">y</flowPara> z</flowRoot>"),
+        "{s}"
+    );
+    assert!(
+        !s.contains("\n"),
+        "no stray whitespace between elements: {s}"
+    );
+}
+
+#[test]
+fn strip_attr_removes_an_attribute_everywhere() {
+    let mut d = doc(&format!(
+        r#"<svg {NS} unlinked_clone="True"><g unlinked_clone="True"><path id="p" unlinked_clone="True" d="M0 0"/></g><rect id="r"/></svg>"#
+    ));
+    assert_eq!(strip_attr(&mut d, "unlinked_clone"), 3);
+    assert!(!out(&d).contains("unlinked_clone"), "{}", out(&d));
+    assert_eq!(d.attr(id(&d, "p"), "d"), Some("M0 0"));
+    assert_eq!(strip_attr(&mut d, "unlinked_clone"), 0);
 }

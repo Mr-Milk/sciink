@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Flattener (sciink)</name>
+    <id>org.sciink.flattener</id>
+    <param name="tool" type="string" gui-hidden="true">flattener</param>
+    <param name="tab" type="notebook">
+        <page name="Options" gui-text="Main options">
+            <label appearance="header">Recommended options</label>
+            <param name="deepungroup" type="bool" gui-text="Deep ungroup?" gui-description="Remove all groupings, leaving individual objects on canvas">true</param>
+            <param name="fixtext" type="bool" gui-text="Apply text fixes?">true</param>
+            <param name="revertpaths" type="bool" gui-text="Revert simple paths to strokes?" gui-description="Reverts certain strokes that have been converted to paths back to strokes">true</param>
+            <param name="removeduppaths" type="bool" gui-text="Remove overlapping duplicates?" gui-description="When two identical elements overlap, removes the one on the bottom">true</param>
+            <label appearance="header">Other options</label>
+            <param name="removerectw" type="bool" gui-text="Remove white background rectangles?" gui-description="Removes white-filled rectangles that are behind other objects">true</param>
+            <label appearance="header">Note</label>
+            <label>For anyone using Inkscape to prepare figures, it is strongly recommended that you change the transformation preferences from Optimized to Preserved in Edit > Preferences > Behavior > Transforms. The Optimized setting can distort certain paths.</label>
+        </page>
+        <page name="Options2" gui-text="Text fix options">
+            <label appearance="header">Recommended options</label>
+            <param name="splitdistant" type="bool" gui-text="Split distant text and lines">true</param>
+            <param name="mergenearby" type="bool" gui-text="Merge nearby text">true</param>
+            <param name="removemanualkerning" type="bool" gui-text="Remove manual kerning">true</param>
+            <param name="mergesubsuper" type="bool" gui-text="Merge superscripts and subscripts">true</param>
+            <param name="reversions" type="bool" gui-text="Revert known paths to characters">true</param>
+            <param name="removetextclips" type="bool" gui-text="Remove text clips and masks">true</param>
+            <param name="justification" type="optiongroup" appearance="combo" gui-text="Final text justification">
+                <option value="1">Centered</option>
+                <option value="2">Left</option>
+                <option value="3">Right</option>
+                <option value="4">Unchanged</option>
+            </param>
+            <label appearance="header">Other options</label>
+            <param name="setreplacement" type="bool" gui-text="Replace missing fonts">false</param>
+            <param name="replacement" type="string" gui-text="Missing font replacement">Arial</param>
+        </page>
+        <page name="Exclusions" gui-text="Exclusions">
+            <label appearance="header">Exclusions</label>
+            <label>To mark objects to be excluded from flattening, select them and run the extension with this tab selected.</label>
+            <param name="markexc" type="optiongroup" appearance="combo" gui-text="Selected objects should be">
+                <option value="1">Not flattened</option>
+                <option value="2">Flattened</option>
+            </param>
+        </page>
+    </param>
+    <effect needs-live-preview="false">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific"/>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>
