@@ -6,7 +6,7 @@ Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled bin
 works with Inkscape 1.2 and later.
 
 Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
-release ships seven menu entries — three tools, three diagnostics and one debug editor:
+release ships eight menu entries — four tools, three diagnostics and one debug editor:
 
 - **Extensions ▸ Scientific ▸ Flattener** — makes an imported plot editable: deep ungroup (composing
   transforms, clips and styles onto the leaves and unlinking clones), matplotlib minus-sign glyphs back
@@ -15,6 +15,11 @@ release ships seven menu entries — three tools, three diagnostics and one debu
   and white background rectangles removed. Elements marked on the Exclusions page are not ungrouped
   themselves (as in the original, what is inside them is still processed). Same options and defaults
   as the original.
+- **Extensions ▸ Scientific ▸ Scaler** — resizes grouped plots without distorting them: Correction mode
+  undoes a manual scale on text, ticks and groups (the data keeps its new size); Matching mode gives
+  every selected plot the plot area (or bounding box) of the first selection, optionally aligned;
+  the Advanced tab marks objects as unscaled, aspect-locked, scaled or plot-area-determining. Same
+  options and defaults as the original (the original's hidden Fixed mode is gone upstream too).
 - **Extensions ▸ Scientific ▸ Combine by Color** — merges the selected paths that share stroke, fill,
   width, dashes and markers into one path each (lines darker than the lightness threshold, such as
   axes and ticks, are left alone), releasing their clips and masks. Fewer elements, smaller files, a

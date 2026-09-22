@@ -129,3 +129,31 @@ fn duplicate_removal_is_visually_invariant_on_text_tests() {
     );
     assert!(d <= 0.005, "{d}");
 }
+
+/// Correcting a plot that carries no scale (g4982: a pure translation) is geometrically a no-op:
+/// every child's transform is fused into its path, but nothing moves.
+#[test]
+fn scaler_correction_of_an_unscaled_plot_is_visually_invariant() {
+    let Some(dir) = support::upstream_data_dir() else {
+        return;
+    };
+    let input = std::fs::read(dir.join("svg/Other_tests.svg")).unwrap();
+    let out = with_vendored_fonts(|| {
+        sciink::run(
+            &args(&["--tool=scaler", "--tab=correction", "--id=g4982"]),
+            &input,
+        )
+    })
+    .unwrap();
+    eprintln!(
+        "scaler identity correction: {} messages (font warnings expected)",
+        out.messages.len()
+    );
+    let (a, b) = (render_png(&input, 1500), render_png(&out.svg, 1500));
+    let d = pixel_diff_fraction(&a, &b, 32);
+    eprintln!(
+        "scaler identity correction: {:.4} % pixels differ",
+        d * 100.0
+    );
+    assert!(d <= 0.001, "{d}");
+}
