@@ -528,3 +528,13 @@ fn set_tag_to_or_from_style_rebuilds_the_stylesheet() {
     d.set_tag(s, "foo");
     assert_eq!(d.specified(r, "fill"), None);
 }
+
+#[test]
+fn comment_returns_the_comment_text() {
+    let d =
+        Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg"><!-- Text --><g id="g"/></svg>"#)
+            .unwrap();
+    let c = d.children(d.svg()).find(|&n| d.is_comment(n)).unwrap();
+    assert_eq!(d.comment(c), Some(" Text "));
+    assert_eq!(d.comment(d.by_id("g").unwrap()), None);
+}

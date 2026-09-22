@@ -146,3 +146,52 @@ pub fn gc_created_clips(doc: &mut Doc, created: &mut Vec<NodeId>) {
         }
     }
 }
+
+/// Elements whose tail text (the text node right after them) Inkscape needs (F:529).
+const TAIL_KEEP: &[&str] = &["tspan", "textPath", "flowPara", "flowRegion", "flowSpan"];
+/// Elements whose leading text (the text node before their first child) Inkscape needs (F:530–541).
+const TEXT_KEEP: &[&str] = &[
+    "style",
+    "text",
+    "tspan",
+    "textPath",
+    "flowRoot",
+    "flowPara",
+    "flowRegion",
+    "flowSpan",
+];
+
+/// F:542–548 `strip_whitespace`: removes every text node that is not the leading text of a
+/// text-bearing element or the tail of a text-run element — the indentation whitespace a deep
+/// ungroup leaves behind — so the written document has no stray whitespace between elements.
+pub fn strip_whitespace(doc: &mut Doc) {
+    let texts: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .filter(|&n| doc.is_text(n))
+        .collect();
+    for t in texts {
+        let keep = match doc.prev_sibling(t) {
+            Some(prev) if doc.is_element(prev) => TAIL_KEEP.contains(&doc.tag(prev)),
+            Some(_) => false, // a comment's tail
+            None => doc
+                .parent(t)
+                .is_some_and(|p| doc.is_element(p) && TEXT_KEEP.contains(&doc.tag(p))),
+        };
+        if !keep {
+            doc.detach(t);
+        }
+    }
+}
+
+/// Removes `name` from every element; returns how many attributes went (the Flattener drops the
+/// `unlinked_clone` markers it used, spec §B.3 step 9 — a deviation from upstream, which keeps them).
+pub fn strip_attr(doc: &mut Doc, name: &str) -> usize {
+    let nodes: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .filter(|&n| doc.is_element(n) && doc.attr(n, name).is_some())
+        .collect();
+    for &n in &nodes {
+        doc.remove_attr(n, name);
+    }
+    nodes.len()
+}

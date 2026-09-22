@@ -488,6 +488,14 @@ impl Doc {
         }
     }
 
+    /// Content of a Comment node (without the `<!--`/`-->`).
+    pub fn comment(&self, n: NodeId) -> Option<&str> {
+        match self.kind(n) {
+            Kind::Comment(t) => Some(t),
+            _ => None,
+        }
+    }
+
     /// Concatenated text of all Text/CData descendants (used for `<style>` sheets).
     pub fn text_content(&self, n: NodeId) -> String {
         let mut s = String::new();
