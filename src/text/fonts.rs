@@ -6,6 +6,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -48,35 +50,73 @@ pub struct FontSystem {
     char_memo: HashMap<(FontSpec, char), Option<FaceKey>>,
 }
 
+/// One filesystem scan per environment: the scan (`load_system_fonts`/`load_fonts_dir`) and the
+/// face pass (`FaceInfo` per face, which re-reads every font file for its metrics) are the whole
+/// cost of `load()`, and a tool run may build two font systems (`remove_kerning` and the bbox
+/// stage's `Ctx`); later loads clone the first result (`Database` and `FaceInfo` are `Clone`).
+type ScanKey = (bool, Vec<PathBuf>);
+type Scan = (fontdb::Database, Vec<(fontdb::ID, FaceInfo)>);
+static SCANS: OnceLock<Mutex<HashMap<ScanKey, Arc<Scan>>>> = OnceLock::new();
+static SCAN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// How many filesystem font scans this process has run (tests; About prints it).
+pub fn scan_count() -> usize {
+    SCAN_COUNT.load(Ordering::SeqCst)
+}
+
+fn scan_key() -> ScanKey {
+    let system = std::env::var_os("SCIINK_NO_SYSTEM_FONTS").is_none_or(|v| v != "1");
+    let dirs = std::env::var_os("SCIINK_FONT_DIRS")
+        .map(|d| std::env::split_paths(&d).collect())
+        .unwrap_or_default();
+    (system, dirs)
+}
+
+/// The scan for the current environment, from the cache or freshly made (and then cached).
+fn scanned() -> Arc<Scan> {
+    let key = scan_key();
+    let cache = SCANS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(s) = guard.get(&key) {
+        return s.clone();
+    }
+    SCAN_COUNT.fetch_add(1, Ordering::SeqCst);
+    let mut db = fontdb::Database::new();
+    if key.0 {
+        db.load_system_fonts();
+    }
+    for d in &key.1 {
+        db.load_fonts_dir(d);
+    }
+    let entries = FontSystem::scan_entries(&db);
+    let scan = Arc::new((db, entries));
+    guard.insert(key, scan.clone());
+    scan
+}
+
 impl FontSystem {
     /// System fonts (unless `SCIINK_NO_SYSTEM_FONTS=1`) plus every dir in `SCIINK_FONT_DIRS`.
+    /// The filesystem is scanned once per process and environment (`scan_count`).
     pub fn load() -> FontSystem {
-        // `load_ms` is the whole cost of having a usable font system, so the clock starts
-        // before the filesystem scan — on macOS/Windows the scan dominates the face pass.
         let t0 = Instant::now();
-        let mut db = fontdb::Database::new();
-        if std::env::var_os("SCIINK_NO_SYSTEM_FONTS").is_none_or(|v| v != "1") {
-            db.load_system_fonts();
-        }
-        if let Some(dirs) = std::env::var_os("SCIINK_FONT_DIRS") {
-            for d in std::env::split_paths(&dirs) {
-                db.load_fonts_dir(d);
-            }
-        }
-        Self::from_db(db, t0)
+        let scan = scanned();
+        Self::from_entries(scan.0.clone(), scan.1.clone(), t0)
     }
 
-    /// Only the given directories (tests).
+    /// Only the given directories (tests); never cached.
     pub fn from_dirs(dirs: &[PathBuf]) -> FontSystem {
         let t0 = Instant::now();
         let mut db = fontdb::Database::new();
         for d in dirs {
             db.load_fonts_dir(d);
         }
-        Self::from_db(db, t0)
+        let entries = Self::scan_entries(&db);
+        Self::from_entries(db, entries, t0)
     }
 
-    fn from_db(db: fontdb::Database, t0: Instant) -> FontSystem {
+    /// The face pass: one `FaceInfo` per parsable face, sorted by (family, weight, style, width,
+    /// path, index). This is the part of `from_db` up to and including `entries.sort_by(...)`.
+    fn scan_entries(db: &fontdb::Database) -> Vec<(fontdb::ID, FaceInfo)> {
         let mut entries: Vec<(fontdb::ID, FaceInfo)> = Vec::new();
         for f in db.faces() {
             let family = f
@@ -138,6 +178,15 @@ impl FontSystem {
             );
             ka.cmp(&kb)
         });
+        entries
+    }
+
+    /// The rest of the old `from_db`: `by_family` index and the struct literal.
+    fn from_entries(
+        db: fontdb::Database,
+        entries: Vec<(fontdb::ID, FaceInfo)>,
+        t0: Instant,
+    ) -> FontSystem {
         let mut by_family: HashMap<String, Vec<FaceKey>> = HashMap::new();
         for (i, (id, _)) in entries.iter().enumerate() {
             if let Some(f) = db.face(*id) {
@@ -169,6 +218,18 @@ impl FontSystem {
 
     pub fn face_count(&self) -> usize {
         self.infos.len()
+    }
+
+    /// Every family name once, in its original spelling, sorted case-insensitively.
+    pub fn families(&self) -> Vec<String> {
+        let mut v: Vec<String> = Vec::new();
+        for info in &self.infos {
+            if !v.iter().any(|f| f.eq_ignore_ascii_case(&info.family)) {
+                v.push(info.family.clone());
+            }
+        }
+        v.sort_by_key(|f| f.to_lowercase());
+        v
     }
 
     pub fn load_ms(&self) -> f64 {
