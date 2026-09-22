@@ -36,7 +36,11 @@ fn ghost_of(d: &roxmltree::Document, id: &str) -> (Vec<f64>, String, String, f64
     assert_eq!(g.tag_name().name(), "g", "{id} is wrapped in a group");
     let r = g
         .children()
-        .find(|n| n.has_tag_name("rect") && n.attribute("id").is_none())
+        .find(|n| {
+            n.has_tag_name("rect")
+                && n.attribute("style")
+                    .is_some_and(|s| s.contains("filter:url(#"))
+        })
         .expect("ghost rectangle");
     let vals: Vec<f64> = ["x", "y", "width", "height", "rx"]
         .iter()
@@ -201,6 +205,24 @@ fn singular_or_boxless_elements_are_wrapped_without_a_rectangle() {
     let (s, msgs) = run(&svg, &[]);
     assert_eq!(s, svg);
     assert_eq!(msgs, vec!["text-ghoster: nothing selected".to_string()]);
+}
+
+#[test]
+fn font_warnings_concern_only_the_selected_text() {
+    let svg = format!(
+        r#"<svg {NS}><text id="t" style="font-family:'DejaVu Sans';font-size:10px">a</text><text id="u" style="font-family:'No Such Font';font-size:10px">b</text></svg>"#
+    );
+    let (_, msgs) = run(&svg, &["--id=t"]);
+    assert!(
+        msgs.is_empty(),
+        "the unselected text's missing font is not this run's business: {msgs:?}"
+    );
+    let (_, msgs) = run(&svg, &["--id=u"]);
+    assert!(
+        msgs.iter()
+            .any(|m| m.starts_with("warning: ") && m.contains("No Such Font")),
+        "the selected text's missing font is: {msgs:?}"
+    );
 }
 
 /// Upstream's reference output for `text28136` (Tahoma). Run with the installed fonts only:

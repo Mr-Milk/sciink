@@ -93,8 +93,9 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = TextGhosterCli::try_parse_from(argv).map_err(first_line)?;
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
     let mut messages = Vec::new();
-    let mut ctx = Ctx::new();
     let sel = doc.selection(&cli.common.ids);
+    // measure (and warn about fonts of) the selected text only, as upstream's BB2(svg, sel) does
+    let mut ctx = Ctx::for_roots(sel.clone());
     if sel.is_empty() {
         messages.push("text-ghoster: nothing selected".to_string());
     }

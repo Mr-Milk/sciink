@@ -62,9 +62,14 @@ pub struct Ctx {
     /// references that still point at them (`cleanup::drop_dangling_refs`).
     pub deleted: HashSet<String>,
     pub warn: Warnings,
-    /// Character table over every `<text>`/`<flowRoot>` of the document, built on first use so
-    /// fonts load only when a tool measures text.
+    /// Character table over the `<text>`/`<flowRoot>` elements under `text_roots` (the whole
+    /// document when `None`), built on first use so fonts load only when a tool measures text.
     text: Option<CharTable>,
+    /// Elements whose text descendants the character table covers; `None` = the whole document.
+    /// Tools that measure only their selection set it (upstream builds its table over the
+    /// selection's text: `BB2(svg, sel)` → `make_char_table(els=tels)`), so font warnings
+    /// concern only the text being measured and large documents cost nothing extra.
+    text_roots: Option<Vec<NodeId>>,
 }
 
 impl Ctx {
@@ -72,13 +77,33 @@ impl Ctx {
         Ctx::default()
     }
 
+    /// A context whose character table covers only the text under `roots`.
+    pub fn for_roots(roots: Vec<NodeId>) -> Ctx {
+        Ctx {
+            text_roots: Some(roots),
+            ..Ctx::default()
+        }
+    }
+
     /// Builds the character table if it does not exist yet.
     pub fn ensure_char_table(&mut self, doc: &Doc) {
         if self.text.is_none() {
-            let els: Vec<NodeId> = doc
-                .descendants(doc.svg())
-                .filter(|&n| doc.is_element(n) && matches!(doc.tag(n), "text" | "flowRoot"))
-                .collect();
+            let roots: Vec<NodeId> = match &self.text_roots {
+                Some(r) => r.clone(),
+                None => vec![doc.svg()],
+            };
+            let mut seen = HashSet::new();
+            let mut els: Vec<NodeId> = Vec::new();
+            for r in roots {
+                for n in doc.descendants(r) {
+                    if doc.is_element(n)
+                        && matches!(doc.tag(n), "text" | "flowRoot")
+                        && seen.insert(n)
+                    {
+                        els.push(n);
+                    }
+                }
+            }
             let ct = CharTable::build(doc, &els, FontSystem::load(), &mut self.warn);
             self.text = Some(ct);
         }
