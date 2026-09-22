@@ -11,6 +11,7 @@ use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
 use crate::ops::Ctx;
 use crate::ops::cleanup::{strip_attr, strip_whitespace};
+use crate::ops::clip::{ungroup, unlink};
 
 use super::first_line;
 
@@ -214,7 +215,7 @@ pub fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = FlattenerCli::try_parse_from(argv).map_err(first_line)?;
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
-    let ctx = Ctx::new();
+    let mut ctx = Ctx::new();
     let mut sel = doc.selection(&cli.common.ids);
     if cli.tab == "Exclusions" {
         mark_exclusions(&mut doc, &sel, cli.markexc == 1);
@@ -227,13 +228,18 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         Options::from_cli(&cli)
     };
     let mut seld = working_set(&doc, &sel);
-    // (Task 3 inserts: defs/clips to root when deepungroup)
+    if opts.deepungroup {
+        move_defs_and_clips_to_root(&mut doc, &mut seld);
+    }
     if groups(&doc, &seld).is_empty() && non_containers(&doc, &seld).is_empty() {
         return Err("No objects selected!".to_string());
     }
-    // (Task 3 inserts: unlink clones, deep ungroup)
+    if opts.deepungroup {
+        unlink_clones(&mut doc, &mut ctx, &mut seld);
+        deep_ungroup(&mut doc, &mut ctx, &seld, opts.removetextclips);
+    }
     let mut ngs = non_containers(&doc, &seld);
-    let _ = (&mut seld, &mut ngs, &opts); // consumed by the phases of Tasks 3–6
+    let _ = (&mut ngs, &opts); // consumed by the phases of Tasks 4–6
     finish(doc, ctx, true)
 }
 
@@ -249,4 +255,110 @@ fn finish(mut doc: Doc, mut ctx: Ctx, flattened: bool) -> Result<Output, String>
     let mut svg = Vec::new();
     doc.write(&mut svg);
     Ok(Output { svg, messages })
+}
+
+/// Attribute holding the joined comments of a matplotlib text group (spec §B.4).
+pub const MPL_COMMENT: &str = "mpl_comment";
+
+/// F:203–218: every selected `<defs>`, `<clipPath>` and `<mask>` is appended to the root `<defs>`
+/// (a `<defs>` moves whole, nested); it and its descendants leave the working set. The root
+/// `<defs>` itself (and anything containing it) is never moved.
+pub fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
+    for pass in [&["defs"][..], &["clipPath", "mask"][..]] {
+        let movers: Vec<NodeId> = seld
+            .iter()
+            .copied()
+            .filter(|&n| doc.parent(n).is_some() && pass.contains(&doc.tag(n)))
+            .collect();
+        if movers.is_empty() {
+            continue;
+        }
+        let root = doc.defs(); // created on demand — only when something has to move
+        for m in movers {
+            if m == root || doc.ancestors(root).any(|a| a == m) {
+                continue;
+            }
+            doc.append_child(root, m);
+            let gone: HashSet<NodeId> = doc.descendants(m).collect();
+            seld.retain(|n| !gone.contains(n));
+        }
+    }
+}
+
+/// F:229–246: every `<use>` of the working set whose target exists and is not a `<symbol>` is
+/// unlinked; the clone leaves the set and the copy's subtree joins it.
+pub fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
+    let uses: Vec<NodeId> = seld
+        .iter()
+        .copied()
+        .filter(|&n| doc.parent(n).is_some() && doc.tag(n) == "use")
+        .collect();
+    for u in uses {
+        let Some(target) = doc.resolve_href(u) else {
+            continue; // a clone of nothing stays (upstream skips it too)
+        };
+        if doc.tag(target) == "symbol" {
+            continue;
+        }
+        if let Some(copy) = unlink(doc, ctx, u) {
+            seld.retain(|&n| n != u);
+            seld.extend(doc.descendants(copy).filter(|&n| doc.is_element(n)));
+        }
+    }
+}
+
+/// F:248–274: groups in ascending order of their child count (comments count, text does not;
+/// counted before any ungroup; ties in document order). A group with a comment child whose
+/// children are all comments, `<defs>` or unlinked clones is a matplotlib text group: it keeps
+/// its glyphs grouped, gets `mpl_comment` = its comments joined by `;`, and loses the comments.
+/// A group already carrying `mpl_comment` is kept. Everything else is dissolved with `ungroup`.
+pub fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
+    let mut gs: Vec<(usize, NodeId)> = groups(doc, seld)
+        .into_iter()
+        .map(|g| {
+            let n = doc
+                .children(g)
+                .filter(|&k| doc.is_element(k) || doc.is_comment(k))
+                .count();
+            (n, g)
+        })
+        .collect();
+    gs.sort_by_key(|&(n, _)| n); // stable: ties keep document order
+    for (_, g) in gs {
+        if doc.parent(g).is_none() {
+            continue; // dissolved or clipped out by an earlier ungroup
+        }
+        let kids: Vec<NodeId> = doc
+            .children(g)
+            .filter(|&k| doc.is_element(k) || doc.is_comment(k))
+            .collect();
+        let has_comment = kids.iter().any(|&k| doc.is_comment(k));
+        let glyphish = kids.iter().all(|&k| {
+            doc.is_comment(k)
+                || doc.tag(k) == "defs"
+                || doc.attr(k, "unlinked_clone") == Some("True")
+        });
+        if has_comment && glyphish {
+            let cmnt: Vec<String> = kids
+                .iter()
+                .filter(|&&k| doc.is_comment(k))
+                .map(|&k| {
+                    doc.comment(k)
+                        .unwrap_or("")
+                        .trim_matches(|c| matches!(c, '<' | '!' | '-' | ' ' | '>'))
+                        .to_string()
+                })
+                .collect();
+            doc.set_attr(g, MPL_COMMENT, cmnt.join(";"));
+            for &k in &kids {
+                if doc.is_comment(k) {
+                    doc.detach(k);
+                }
+            }
+        } else if doc.attr(g, MPL_COMMENT).is_some() {
+            // leave grouped
+        } else {
+            ungroup(doc, ctx, g, remove_text_clip);
+        }
+    }
 }
