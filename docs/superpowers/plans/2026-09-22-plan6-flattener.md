@@ -1855,7 +1855,7 @@ fn diff(before: &[u8], after: &[u8]) -> f64 {
 
 #[test]
 fn the_metric_sees_a_moved_rectangle_and_nothing_in_an_identical_render() {
-    let a = format!(r#"<svg {NS} width="100" height="100" viewBox="0 0 100 100"><rect x="10" y="10" width="30" height="30" fill="#000"/></svg>"#);
+    let a = format!(r##"<svg {NS} width="100" height="100" viewBox="0 0 100 100"><rect x="10" y="10" width="30" height="30" fill="#000"/></svg>"##);
     let b = a.replace(r#"x="10""#, r#"x="50""#);
     assert_eq!(diff(a.as_bytes(), a.as_bytes()), 0.0);
     let d = diff(a.as_bytes(), b.as_bytes());
