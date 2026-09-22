@@ -406,3 +406,16 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
   routine status.
 - An unlinked `<symbol>` clone's surviving `<g>` carries the clone's id and `unlinked_clone` marker —
   upstream sets them on the symbol copy it then dissolves, losing both.
+- Combine by Color deduplicates the selection's descendants (upstream double-counts an element selected both
+  directly and through an ancestor).
+- Combine by Color compares dash arrays with ±0.001 per entry (upstream: exact list equality).
+- A single-integer `inkscape-scientific-combined-by-color` contributes one start index (upstream: none).
+- `rgba()` paints multiply the colour's own alpha into the effective alpha.
+- `drop_dangling_refs` sweeps only `clip-path`/`mask`, like upstream; `href`/`url()` paint references to
+  deleted elements stay dangling.
+- `fix_css_clipmask` pins only `none`/`url(#name)` values; a crafted value is left unpinned (stylesheet
+  injection hardening).
+- `merge_clipmask` and `is_rectangle` carry a `MAX_STEPS = 10 000` work budget besides `MAX_NEST`: a clip
+  tree that references itself from several children grows exponentially with depth.
+- `combine_paths` leaves elements whose geometry cannot be read in place (warning) and refuses a target
+  without geometry or an out-of-range merge index (upstream would raise or silently drop them).

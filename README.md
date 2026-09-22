@@ -87,6 +87,10 @@ search, mostly for tests and for reproducing a figure built elsewhere:
     cargo test
     dist/dev-install.sh      # symlink into Inkscape's user extensions dir, then restart Inkscape
 
+The upstream oracles need the installed fonts and the `tests/upstream` fixture symlink; run them with
+
+    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster -- --ignored
+
 Set `SCIINK_LOG=/tmp/sciink.log` in Inkscape's environment to get timing lines.
 Releases: push a tag `vX.Y.Z` matching `Cargo.toml`'s version; the `release` workflow builds
 macOS (universal), Windows (x64) and Linux (x64, static) zips and publishes them.
