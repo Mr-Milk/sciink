@@ -507,7 +507,12 @@ pub(crate) fn fuse_all(doc: &mut Doc, ctx: &mut Ctx, sela: &[NodeId]) {
             ));
             continue;
         };
-        fuse(doc, ctx, el, parent_ct, None, true);
+        // upstream (HG:367–369) puts the COMPOSED transform on the element, fuses, then leaves the
+        // parent's inverse: `fuse` adjusts clips and masks by the element's own transform only
+        // (its `extra` reaches geometry, strokes and gradients but not `transform_clipmask`), so
+        // the whole composed transform must sit on the element when it runs
+        doc.set_transform(el, parent_ct * doc.transform(el));
+        fuse(doc, ctx, el, Affine::IDENTITY, None, true);
         doc.set_transform(el, inv);
     }
 }
