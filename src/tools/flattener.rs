@@ -10,8 +10,8 @@ use kurbo::{Affine, BezPath, Rect};
 use crate::Output;
 use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
+use crate::geom::inverse;
 use crate::geom::path::{parse_d, path_eq, reverse, shape_path};
-use crate::geom::{intersects, inverse};
 use crate::num;
 use crate::ops::Ctx;
 use crate::ops::bbox::{BboxOpts, bb2, bbox, is_drawn, is_rectangle};
@@ -704,69 +704,52 @@ pub fn remove_duplicates(
         .collect();
     let boxes: Vec<Rect> = els.iter().map(|n| bbs[n]).collect();
     let size = |r: &Rect| r.width().max(r.height());
-    let equal = |i: usize, j: usize| -> bool {
-        let (a, b) = (&boxes[i], &boxes[j]);
-        if a.width() == 0.0 || a.height() == 0.0 || b.width() == 0.0 || b.height() == 0.0 {
-            return false;
-        }
-        let tol = 1e-6 * size(a).max(size(b));
-        (a.x0 - b.x0).abs() <= tol
-            && (a.y0 - b.y0).abs() <= tol
-            && (a.x1 - b.x1).abs() <= tol
-            && (a.y1 - b.y1).abs() <= tol
-    };
     let mut sfs: Vec<Option<crate::ops::style::StrokeFill>> = vec![None; els.len()];
     let mut paths: Vec<Option<kurbo::BezPath>> = vec![None; els.len()];
-    let mut removed: HashSet<usize> = HashSet::new();
-    for jj in (0..els.len()).rev() {
-        for ii in 0..jj {
-            if removed.contains(&ii) || !equal(ii, jj) {
-                continue;
-            }
-            if sfs[jj].is_none() {
-                sfs[jj] = Some(strokefill(doc, els[jj]));
-            }
-            if sfs[ii].is_none() {
-                sfs[ii] = Some(strokefill(doc, els[ii]));
-            }
-            let (my, oth) = (sfs[jj].as_ref().unwrap(), sfs[ii].as_ref().unwrap());
-            if my.stroke_is_url || my.fill_is_url || (my.stroke.is_none() && my.fill.is_none()) {
-                continue;
-            }
-            if let Some(s) = &my.stroke {
-                if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgba(s, o)) {
-                    continue;
-                }
-            }
-            if let Some(f) = &my.fill {
-                if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgba(f, o)) {
-                    continue;
-                }
-            }
-            if !style_eq(&doc.specified_style(els[jj]), &doc.specified_style(els[ii])) {
-                continue;
-            }
-            if paths[jj].is_none() {
-                if let Some(pp) = shape_path(doc, els[jj]) {
-                    paths[jj] = Some(doc.composed_transform(els[jj]) * pp.path);
-                }
-            }
-            if paths[ii].is_none() {
-                if let Some(pp) = shape_path(doc, els[ii]) {
-                    paths[ii] = Some(doc.composed_transform(els[ii]) * pp.path);
-                }
-            }
-            let (Some(gj), Some(gi)) = (&paths[jj], &paths[ii]) else {
-                continue;
-            };
-            let tol = 1e-6 * size(&boxes[ii]).max(size(&boxes[jj]));
-            if !(path_eq(gj, gi, tol) || path_eq(gj, &reverse(gi), tol)) {
-                continue;
-            }
-            delete_up(doc, ctx, els[ii]);
-            removed.insert(ii);
+    let removed = crate::geom::grid::duplicate_scan(&boxes, &mut |ii, jj| {
+        if sfs[jj].is_none() {
+            sfs[jj] = Some(strokefill(doc, els[jj]));
         }
-    }
+        if sfs[ii].is_none() {
+            sfs[ii] = Some(strokefill(doc, els[ii]));
+        }
+        let (my, oth) = (sfs[jj].as_ref().unwrap(), sfs[ii].as_ref().unwrap());
+        if my.stroke_is_url || my.fill_is_url || (my.stroke.is_none() && my.fill.is_none()) {
+            return false;
+        }
+        if let Some(s) = &my.stroke {
+            if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgba(s, o)) {
+                return false;
+            }
+        }
+        if let Some(f) = &my.fill {
+            if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgba(f, o)) {
+                return false;
+            }
+        }
+        if !style_eq(&doc.specified_style(els[jj]), &doc.specified_style(els[ii])) {
+            return false;
+        }
+        if paths[jj].is_none() {
+            if let Some(pp) = shape_path(doc, els[jj]) {
+                paths[jj] = Some(doc.composed_transform(els[jj]) * pp.path);
+            }
+        }
+        if paths[ii].is_none() {
+            if let Some(pp) = shape_path(doc, els[ii]) {
+                paths[ii] = Some(doc.composed_transform(els[ii]) * pp.path);
+            }
+        }
+        let (Some(gj), Some(gi)) = (&paths[jj], &paths[ii]) else {
+            return false;
+        };
+        let tol = 1e-6 * size(&boxes[ii]).max(size(&boxes[jj]));
+        if !(path_eq(gj, gi, tol) || path_eq(gj, &reverse(gi), tol)) {
+            return false;
+        }
+        delete_up(doc, ctx, els[ii]);
+        true
+    });
     let gone: HashSet<NodeId> = removed.iter().map(|&i| els[i]).collect();
     ngs2.retain(|n| !gone.contains(n));
     removed.len()
@@ -788,17 +771,12 @@ pub fn remove_white_rects(
         .filter(|n| doc.parent(*n).is_some() && bbs.contains_key(n))
         .collect();
     let white: HashSet<NodeId> = wrects.iter().copied().collect();
-    let mut deleted: HashSet<usize> = HashSet::new();
-    for ii in 0..ngs3.len() {
-        if !white.contains(&ngs3[ii]) {
-            continue;
-        }
-        let wb = bbs[&ngs3[ii]];
-        let behind = (0..ii).any(|k| !deleted.contains(&k) && intersects(bbs[&ngs3[k]], wb));
-        if !behind {
-            delete_up(doc, ctx, ngs3[ii]);
-            deleted.insert(ii);
-        }
+    let boxes: Vec<Rect> = ngs3.iter().map(|n| bbs[n]).collect();
+    let flags: Vec<bool> = ngs3.iter().map(|n| white.contains(n)).collect();
+    // the test reads only `bbs`, never the document, so deleting after the scan is equivalent
+    let deleted = crate::geom::grid::background_scan(&boxes, &flags);
+    for &ii in &deleted {
+        delete_up(doc, ctx, ngs3[ii]);
     }
     deleted.len()
 }

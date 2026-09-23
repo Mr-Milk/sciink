@@ -2,6 +2,7 @@
 //! `Affine::new([a,b,c,d,e,f])` has exactly the SVG `matrix(a b c d e f)` meaning;
 //! upstream's `A @ B` is kurbo's `A * B` (apply `B` first) and `-A` is `inverse(A)`.
 
+pub mod grid;
 pub mod path;
 
 use std::str::FromStr;
