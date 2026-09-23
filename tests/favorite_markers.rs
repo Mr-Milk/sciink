@@ -532,3 +532,126 @@ fn add_remove_and_list_round_trip_through_the_store() {
     );
     std::fs::remove_file(&store).unwrap();
 }
+
+#[test]
+fn prefixed_attributes_travel_with_their_namespace_or_are_dropped() {
+    let store = tmp_store("prefixes");
+    let _ = std::fs::remove_file(&store);
+    // the source declares sodipodi and an unknown prefix; the marker's path uses both
+    let svg = format!(
+        r##"<svg {NS} xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:foo="urn:foo"><defs><marker id="m" orient="auto"><path d="M0,0 L1,1" sodipodi:nodetypes="cc" foo:bar="1"/></marker></defs><path id="p" d="M0,0 L10,0" style="stroke:#000;marker-start:url(#m)"/></svg>"##
+    );
+    ok(
+        &svg,
+        &store,
+        &[
+            "--tab=addremove",
+            "--addt=true",
+            "--template_name=Pfx",
+            "--id=p",
+        ],
+    );
+    let text = std::fs::read_to_string(&store).unwrap();
+    let d = roxmltree::Document::parse(&text).expect("the store declares every prefix it uses");
+    let path = d
+        .descendants()
+        .find(|n| {
+            n.has_tag_name("path")
+                && n.attribute((
+                    "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd",
+                    "nodetypes",
+                ))
+                .is_some()
+        })
+        .expect("sodipodi:nodetypes kept, its namespace declared on the store root");
+    assert!(
+        path.attributes().all(|a| a.name() != "bar"),
+        "the unknown prefix's attribute is dropped"
+    );
+    // applying into a document that declares neither prefix declares sodipodi there
+    let target = format!(r#"<svg {NS}><path id="q" d="M0,0 L5,5" style="stroke:#000"/></svg>"#);
+    let (s, _) = ok(
+        &target,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=3",
+            "--custom_name=Pfx",
+            "--smarker=true",
+            "--id=q",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s).expect("the output declares every prefix it uses");
+    assert!(
+        d.root_element()
+            .namespaces()
+            .any(|ns| ns.name() == Some("sodipodi")
+                && ns.uri() == "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"),
+        "the root declares sodipodi"
+    );
+    assert!(d.descendants().any(|n| n.has_tag_name("path")
+        && n.attribute((
+            "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd",
+            "nodetypes"
+        )) == Some("cc")));
+    std::fs::remove_file(&store).unwrap();
+}
+
+#[test]
+fn add_stores_the_first_selected_shape_not_the_first_in_document_order() {
+    let store = tmp_store("order");
+    let _ = std::fs::remove_file(&store);
+    let svg = format!(
+        r##"<svg {NS}><defs><marker id="m1"><path d="M0,0 h1"/></marker><marker id="m2"><path d="M0,0 v1"/></marker></defs><path id="a" d="M0,0 L1,0" style="marker-start:url(#m1)"/><path id="b" d="M0,1 L1,1" style="marker-start:url(#m2)"/></svg>"##
+    );
+    ok(
+        &svg,
+        &store,
+        &[
+            "--tab=addremove",
+            "--addt=true",
+            "--template_name=Second",
+            "--id=b",
+            "--id=a",
+        ],
+    );
+    let t = Store::load(&store).unwrap().get("Second").unwrap();
+    assert_eq!(
+        t[0].as_ref().unwrap().paths,
+        vec![kv(&[("d", "M0,0 v1")])],
+        "b was selected first"
+    );
+    std::fs::remove_file(&store).unwrap();
+}
+
+#[test]
+fn apply_removes_an_unchecked_positions_presentation_attribute_too() {
+    // `marker-mid` here is a presentation attribute, not inline style: `remove_inline` would
+    // leave it in place, unlike `Doc::remove_style`.
+    let store = tmp_store("presentation-attr");
+    let _ = std::fs::remove_file(&store);
+    let svg = format!(r#"<svg {NS}><path id="r" d="M0,0 L1,0" marker-mid="url(#x)"/></svg>"#);
+    let (s, msgs) = ok(
+        &svg,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=0",
+            "--smarker=false",
+            "--mmarker=false",
+            "--emarker=false",
+            "--id=r",
+        ],
+    );
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let r = by_id(&d, "r");
+    assert_eq!(
+        r.attribute("marker-mid"),
+        None,
+        "an unchecked position removes the presentation attribute too"
+    );
+    assert_eq!(style_of(r).get("marker-mid"), None);
+    // the Markers page never writes the store: nothing was ever created here
+    let _ = std::fs::remove_file(&store);
+}
