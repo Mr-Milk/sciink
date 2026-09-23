@@ -62,6 +62,7 @@ use std::path::PathBuf;
 
 use sciink::tools::favorite_markers::{MarkerData, Store, Template, store_path};
 
+#[allow(dead_code)] // used by Task 2's tests
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\"";
 
 #[allow(dead_code)]
