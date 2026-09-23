@@ -158,9 +158,12 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         messages.push("combine-by-color: nothing selected".to_string());
     } else {
         let els = candidates_from(&doc, &sel);
-        combine_by_color(&mut doc, &mut ctx, &els, cli.lightnessth / 100.0);
-        t.phase("combine", || format!("candidates={}", els.len()));
+        let removed = combine_by_color(&mut doc, &mut ctx, &els, cli.lightnessth / 100.0);
+        t.phase("combine", || {
+            format!("candidates={} removed={removed}", els.len())
+        });
         ctx.finish(&mut doc);
+        t.phase("cleanup", String::new);
     }
     messages.extend(ctx.warn.0.iter().map(|w| format!("warning: {w}")));
     let mut svg = Vec::new();
