@@ -1,120 +1,97 @@
 # sciink
 
-Fast, dependency-free Inkscape extensions for scientific figures — a Rust rewrite of
-[Scientific-Inkscape](https://github.com/burghoff/Scientific-Inkscape) (Flattener, Scaler,
-Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled binary, no Python,
-works with Inkscape 1.2 and later.
+[![ci](https://img.shields.io/github/actions/workflow/status/Mr-Milk/sciink/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/Mr-Milk/sciink/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Mr-Milk/sciink?style=flat-square&label=Release)](https://github.com/Mr-Milk/sciink/releases/latest)
+[![license](https://img.shields.io/badge/license-GPL--2.0--or--later-blue?style=flat-square&label=License)](LICENSE)
 
-Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
-release ships ten menu entries — six tools, three diagnostics and one debug editor:
-
-- **Extensions ▸ Scientific ▸ Flattener** — makes an imported plot editable: deep ungroup (composing
-  transforms, clips and styles onto the leaves and unlinking clones), matplotlib minus-sign glyphs back
-  to text, thin dark rectangles back to strokes, the text pipeline (manual-kerning removal, merges,
-  splits, justification, optional font replacement, text clips removed), then overlapping duplicates
-  and white background rectangles removed. Elements marked on the Exclusions page are not ungrouped
-  themselves (as in the original, what is inside them is still processed). Same options and defaults
-  as the original.
-- **Extensions ▸ Scientific ▸ Scaler** — resizes grouped plots without distorting them: Correction mode
-  undoes a manual scale on text, ticks and groups (the data keeps its new size); Matching mode gives
-  every selected plot the plot area (or bounding box) of the first selection, optionally aligned;
-  the Advanced tab marks objects as unscaled, aspect-locked, scaled or plot-area-determining. Same
-  options and defaults as the original (the original's hidden Fixed mode is gone upstream too).
-- **Extensions ▸ Scientific ▸ Homogenizer** — makes a selection uniform without moving anything's
-  centre: one font size (fixed, scaled, or the selection's mean/median/min/max), one font (an
-  Inkscape font specification such as `Avenir Next Bold`), distorted text made conformal, one
-  stroke width (the same modes), transforms fused into paths, clips and masks removed. Plot-aware
-  mode keeps labels at their distance from the plot area. Same options and defaults as the original.
-- **Extensions ▸ Scientific ▸ Combine by Color** — merges the selected paths that share stroke, fill,
-  width, dashes and markers into one path each (lines darker than the lightness threshold, such as
-  axes and ticks, are left alone), releasing their clips and masks. Fewer elements, smaller files, a
-  more responsive Inkscape. Same options and defaults as the original.
-- **Extensions ▸ Scientific ▸ Text Ghoster** — puts a blurred, semi-transparent white rectangle behind
-  each selected object, sized from its text, so labels stay readable on top of data. Group several
-  texts first to treat them as one.
-- **Extensions ▸ Scientific ▸ Favorite Markers** — puts a stored marker template (start, mid, end)
-  on the selected paths at the size you choose; store the markers of a selected path as a new
-  template and remove templates on the second page, no restart needed. Arrow, Triangle and
-  Distance come built in.
-- **Extensions ▸ Scientific ▸ Diagnostics** — version, platform, the document's size and element counts,
-  and how many font faces were found (and how long that took). Proves the installation works.
-- **Extensions ▸ Scientific ▸ Debug ▸ Font Probe** — for every `font-family` the document asks for (and
-  for the generic families), the face the text engine actually measures with and the file it came from.
-  Use it when text is laid out as if a different font were installed.
-- **Extensions ▸ Scientific ▸ Debug ▸ Text Highlight** — draws the text engine's measurements as
-  rectangles over the document: per character (advance box or ink box), per chunk, per line, or one box
-  for the whole element. Use it to see exactly what the parser thinks your text is.
-- **Extensions ▸ Scientific ▸ Debug ▸ Text Fix** — **rewrites the selected text**: it runs the
-  Flattener's text pipeline — manual-kerning removal, merges, splits, justification — and replaces every
-  selected `<text>` element with a regenerated one. Preview of what the Flattener will do to text once it
-  ships; undo (Ctrl+Z) puts the document back. It runs that pipeline *alone*, without the Flattener's
-  `setreplacement` pre-pass (which strips `-inkscape-font-specification` first), so on Inkscape-authored
-  multi-line text the two can disagree: Text Fix leaves such text joined where the Flattener will split
-  it into lines.
+Fast Inkscape extensions for scientific figures: a Rust rewrite of
+[Scientific-Inkscape](https://github.com/burghoff/Scientific-Inkscape). One native binary, no Python,
+and the same tools, options and defaults as the original. Inkscape 1.2 or later on macOS, Windows and
+Linux.
 
 ## Install
 
 macOS / Linux:
 
-    curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | sh
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | sh
+```
 
 Windows (PowerShell):
 
-    irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1 | iex
+```powershell
+irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1 | iex
+```
 
-Then restart Inkscape. The tools appear under **Extensions ▸ Scientific**.
+Restart Inkscape. The tools appear under **Extensions ▸ Scientific**.
 
-Until the first stable release ships, GitHub's `latest` release excludes pre-releases, so both
-installers automatically fall back to the newest release including pre-releases. Pin a specific
-version instead with `SCIINK_VERSION=v0.1.0` (sh) or `-Version v0.1.0`
-(PowerShell):
+<details>
+<summary>Pin a version, custom extensions directory, uninstall</summary>
 
-    curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | SCIINK_VERSION=v0.1.0 sh
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Version v0.1.0
+```sh
+curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | SCIINK_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | SCIINK_EXT_DIR=<dir> sh
+curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | sh -s -- --uninstall
+```
 
-Manual install: download `sciink-<os>.zip` from the
-[latest release](https://github.com/Mr-Milk/sciink/releases/latest) and unzip it into Inkscape's
-user extensions directory (Edit ▸ Preferences ▸ System ▸ User extensions) so that it contains
-`sciink/`. If Inkscape's user extensions directory isn't in the default location (e.g. under a
-Snap or Flatpak install), point the installer at it with `SCIINK_EXT_DIR=<dir>`.
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Version v0.1.0
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Dest <dir>
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Uninstall
+```
 
-Uninstall:
+Set the extensions directory explicitly for Snap, Flatpak or other non-default Inkscape layouts.
+</details>
 
-    curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | sh -s -- --uninstall
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Uninstall
+<details>
+<summary>Manual install</summary>
 
-or, from a downloaded copy of the script: `sh install.sh --uninstall` / `.\install.ps1 -Uninstall`.
-The `& ([scriptblock]::Create(...)))` form is needed for any parameterized PowerShell invocation
-(`-Uninstall`, `-Version`, `-Dest`) piped straight from `irm`, since a plain `irm ... | iex`
-one-liner cannot take parameters.
+Download `sciink-<os>.zip` from the [latest release](https://github.com/Mr-Milk/sciink/releases/latest)
+and unzip it into Inkscape's user extensions directory (Edit ▸ Preferences ▸ System ▸ User extensions),
+so that the directory contains `sciink/`:
 
-macOS note: a zip downloaded by a browser is quarantined and Gatekeeper silently blocks the
-binary. The `curl` installer never sets that flag; after a manual download run
-`xattr -dr com.apple.quarantine "$HOME/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions/sciink"`.
+| OS | User extensions directory |
+|---|---|
+| macOS | `~/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions` |
+| Linux | `~/.config/inkscape/extensions` (Flatpak: `~/.var/app/org.inkscape.Inkscape/config/inkscape/extensions`) |
+| Windows | `%APPDATA%\inkscape\extensions` |
+
+macOS quarantines a zip downloaded by a browser and then blocks the binary silently. Clear the flag
+once (the `curl` installer never sets it):
+
+```sh
+xattr -dr com.apple.quarantine "$HOME/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions/sciink"
+```
+</details>
+
+## Tools
+
+| Tool | What it does |
+|---|---|
+| **Flattener** | Makes an imported plot editable: ungroups everything, unlinks clones, restores matplotlib minus signs and thin rectangles, cleans up text (kerning removal, merges, splits, justification, optional font replacement), removes duplicate paths and white background rectangles. |
+| **Scaler** | Resizes grouped plots without distorting text, ticks or markers. *Correction* undoes a manual scale; *Matching* gives every selected plot the plot area or bounding box of the first one. |
+| **Homogenizer** | One font size, one font and one stroke width across the selection; distorted text made conformal, transforms fused into paths, clips and masks removed. Nothing moves its centre. |
+| **Text Ghoster** | Puts a blurred, semi-transparent white box behind each selected object so labels stay readable over data. |
+| **Combine by Color** | Merges paths that share stroke, fill, width, dashes and markers into one path each. Fewer elements, smaller files. |
+| **Favorite Markers** | Puts stored start/mid/end marker templates on the selected paths at any size. Arrow, Triangle and Distance are built in; store your own from a selected path. |
+| **Diagnostics**, **Debug** | Version, platform and font report; Font Probe, Text Highlight and Text Fix show what the text engine measures and does. |
+
+Options and defaults match the original. Known differences are listed under "Deliberate deviations" in
+[docs/spec/02-geometry-tools.md](docs/spec/02-geometry-tools.md) and
+[docs/spec/01-text-engine.md](docs/spec/01-text-engine.md). Scientific-Inkscape's Autoexporter and
+Gallery Viewer are not part of sciink.
 
 ## Fonts
 
-Text measurement uses the fonts installed on the machine, so a document measures differently where a
-family is missing (the tools say which substitute was used). Two environment variables override the
-search, mostly for tests and for reproducing a figure built elsewhere:
-
-- `SCIINK_FONT_DIRS` — extra directories to load fonts from, separated by the platform's path-list
-  separator (`:` on macOS/Linux, `;` on Windows). Loaded in addition to the system fonts.
-- `SCIINK_NO_SYSTEM_FONTS=1` — skip the system font scan entirely, so only `SCIINK_FONT_DIRS` is used.
-  With neither set and no system fonts, nothing can be measured.
+Text is measured with the fonts installed on your machine. A missing family is substituted and the tool
+reports which one (Diagnostics and Debug ▸ Font Probe show every resolution). `SCIINK_FONT_DIRS` adds
+font directories; `SCIINK_NO_SYSTEM_FONTS=1` skips the system fonts.
 
 ## Developing
 
-    cargo test
-    dist/dev-install.sh      # symlink into Inkscape's user extensions dir, then restart Inkscape
+See [docs/DEVELOPING.md](docs/DEVELOPING.md) for building, tests, the upstream oracles, the Inkscape
+dev loop, packaging and releases. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
-The upstream oracles need the installed fonts and the `tests/upstream` fixture symlink; run them with
+## License
 
-    SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
-
-The non-ignored fixture tests (`cargo test --test '*_fixtures'`) run whenever `tests/upstream/data`
-is present and are skipped otherwise.
-
-Set `SCIINK_LOG=/tmp/sciink.log` in Inkscape's environment to get timing lines.
-Releases: push a tag `vX.Y.Z` matching `Cargo.toml`'s version; the `release` workflow builds
-macOS (universal), Windows (x64) and Linux (x64, static) zips and publishes them.
+[GPL-2.0-or-later](LICENSE), like Scientific-Inkscape.
