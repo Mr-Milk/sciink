@@ -208,16 +208,18 @@ fn an_unwritable_cache_location_does_not_fail_the_scan() {
 #[test]
 fn the_cache_path_honours_the_environment_switches() {
     let _g = SERIAL.lock().unwrap();
+    let k = key(&vendored());
     // SAFETY: tests in this binary are serialised by SERIAL and restore the variables.
     unsafe {
         std::env::set_var("SCIINK_NO_FONT_CACHE", "1");
-        assert_eq!(cache_path(), None);
+        assert_eq!(cache_path(&k), None);
         std::env::remove_var("SCIINK_NO_FONT_CACHE");
         std::env::set_var("SCIINK_FONT_CACHE", "/tmp/x.tsv");
-        assert_eq!(cache_path(), Some(PathBuf::from("/tmp/x.tsv")));
+        assert_eq!(cache_path(&k), Some(PathBuf::from("/tmp/x.tsv")));
         std::env::remove_var("SCIINK_FONT_CACHE");
     }
-    assert!(
-        cache_path().is_some_and(|p| p.ends_with(format!("fontcache-{FONT_CACHE_FORMAT}.tsv")))
-    );
+    assert!(cache_path(&k).is_some_and(|p| {
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        name.starts_with(&format!("fontcache-{FONT_CACHE_FORMAT}-")) && name.ends_with(".tsv")
+    }));
 }

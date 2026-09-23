@@ -220,7 +220,7 @@ fn scanned() -> Arc<Scan> {
     if let Some(s) = guard.get(&key) {
         return s.clone();
     }
-    let path = super::fontcache::cache_path();
+    let path = super::fontcache::cache_path(&key);
     let scan = Arc::new(scan_with_cache_raw(&key, path.as_deref()));
     guard.insert(key, scan.clone());
     scan

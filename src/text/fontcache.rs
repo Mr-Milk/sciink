@@ -30,15 +30,44 @@ pub struct CachedFace {
 }
 
 /// `SCIINK_NO_FONT_CACHE=1` → none; `SCIINK_FONT_CACHE=<path>` → that file; else
-/// `<cache dir>/fontcache-<format>.tsv`.
-pub fn cache_path() -> Option<PathBuf> {
+/// `<cache dir>/fontcache-<format>-<key hash>.tsv` — the hash names one file per distinct scan
+/// key, so two environments (e.g. with and without `SCIINK_FONT_DIRS`) each keep their own cache
+/// instead of invalidating each other's on every alternating run.
+pub fn cache_path(key: &ScanKey) -> Option<PathBuf> {
     if std::env::var_os("SCIINK_NO_FONT_CACHE").is_some_and(|v| v == "1") {
         return None;
     }
     if let Some(p) = std::env::var_os("SCIINK_FONT_CACHE") {
         return Some(PathBuf::from(p));
     }
-    crate::paths::cache_dir().map(|d| d.join(format!("fontcache-{FONT_CACHE_FORMAT}.tsv")))
+    crate::paths::cache_dir().map(|d| {
+        d.join(format!(
+            "fontcache-{FONT_CACHE_FORMAT}-{:016x}.tsv",
+            key_hash(key)
+        ))
+    })
+}
+
+/// FNV-1a over the parts of `key` that distinguish one cache file from another: whether system
+/// fonts are scanned, each configured directory (each followed by a `0` separator, so
+/// `["ab", "c"]` cannot hash the same as `["a", "bc"]`), and the bundled directory.
+fn key_hash(key: &ScanKey) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a offset basis
+    let mut mix = |bytes: &[u8]| {
+        for &b in bytes {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV-1a prime
+        }
+    };
+    mix(&[key.system as u8]);
+    for d in &key.dirs {
+        mix(d.to_string_lossy().as_bytes());
+        mix(&[0]);
+    }
+    if let Some(b) = &key.bundled {
+        mix(b.to_string_lossy().as_bytes());
+    }
+    h
 }
 
 fn esc(s: &str) -> String {
@@ -205,7 +234,17 @@ pub fn read(path: &Path, key: &ScanKey) -> Option<Vec<CachedFace>> {
 /// cache must never fail a tool run. Faces without a file path (in-memory sources) disable the
 /// write, because a partial cache would change which faces exist.
 pub fn write(path: &Path, key: &ScanKey, faces: &[CachedFace]) {
-    if faces.iter().any(|f| f.info.path.is_none()) {
+    // A face without a path can't be cached at all; a path (a face's, a configured directory's,
+    // or the bundled directory's) that is not valid UTF-8 would come back mangled through
+    // `path_field`'s lossy conversion and could never validate again — bail on either up front,
+    // the same way, instead of writing a cache file that can never be read back as valid.
+    let not_utf8 = |p: &Path| p.to_str().is_none();
+    if faces
+        .iter()
+        .any(|f| f.info.path.as_deref().is_none_or(not_utf8))
+        || key.dirs.iter().any(|d| not_utf8(d))
+        || key.bundled.as_deref().is_some_and(not_utf8)
+    {
         return;
     }
     let mut out = String::new();
