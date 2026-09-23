@@ -225,3 +225,21 @@ fn ops_cleanup_still_drops_an_inline_clip_path_reference_to_a_deleted_id() {
         "untouched style is not re-serialised"
     );
 }
+
+#[test]
+fn an_upper_case_inline_clip_path_reference_is_still_dropped() {
+    let mut d = sciink::dom::Doc::parse(
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><rect id="a" style="fill:red;CLIP-PATH:url(#c)"/><rect id="b" style="fill:blue"/></svg>"#
+            .as_bytes(),
+    )
+    .unwrap();
+    let mut deleted = std::collections::HashSet::new();
+    deleted.insert("c".to_string());
+    sciink::ops::cleanup::drop_dangling_refs(&mut d, &deleted);
+    let a = d.by_id("a").unwrap();
+    assert_eq!(
+        d.attr(a, "style"),
+        Some("fill:red"),
+        "an upper-case CLIP-PATH in the inline style must still be found and dropped"
+    );
+}
