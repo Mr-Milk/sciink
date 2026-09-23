@@ -804,3 +804,37 @@ fn a_duplicate_id_keeps_pointing_at_the_first_node_after_a_move() {
         "moving the indexed node keeps it indexed"
     );
 }
+
+#[test]
+fn selection_ordered_keeps_inkscape_order_and_drops_repeats() {
+    let mut body = String::new();
+    for i in 0..5000 {
+        body.push_str(&format!("<rect id=\"r{i}\"/>"));
+    }
+    let doc =
+        Doc::parse(format!("<svg xmlns=\"http://www.w3.org/2000/svg\">{body}</svg>").as_bytes())
+            .unwrap();
+    let mut ids: Vec<String> = (0..5000).rev().map(|i| format!("r{i}")).collect();
+    ids.push("r4999".to_string()); // repeat
+    ids.push("missing".to_string());
+    let t0 = std::time::Instant::now();
+    let sel = doc.selection_ordered(&ids);
+    assert!(t0.elapsed().as_secs() < 5, "quadratic selection_ordered");
+    assert_eq!(sel.len(), 5000);
+    assert_eq!(sel[0], doc.by_id("r4999").unwrap());
+    assert_eq!(sel[4999], doc.by_id("r0").unwrap());
+}
+
+#[test]
+fn selection_of_one_id_matches_the_general_path() {
+    let doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let one = doc.selection(&["c".to_string()]);
+    let two = doc.selection(&["d".to_string(), "c".to_string()]);
+    assert_eq!(one, vec![doc.by_id("c").unwrap()]);
+    assert_eq!(
+        two,
+        vec![doc.by_id("c").unwrap(), doc.by_id("d").unwrap()],
+        "document order"
+    );
+    assert!(doc.selection(&["nope".to_string()]).is_empty());
+}

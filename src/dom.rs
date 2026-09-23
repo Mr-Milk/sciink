@@ -897,8 +897,13 @@ impl Doc {
         d
     }
 
-    /// Nodes for the given ids in document order; unknown ids are dropped.
+    /// Nodes for the given ids in document order; unknown ids are dropped. One pre-order walk of
+    /// the document (1–2 ms for 60 000 nodes); a rank index maintained across every attach and
+    /// detach would cost more than it saves — deliberately not done (Plan 9).
     pub fn selection(&self, ids: &[String]) -> Vec<NodeId> {
+        if let [one] = ids {
+            return self.by_id(one).into_iter().collect();
+        }
         let wanted: std::collections::HashSet<NodeId> =
             ids.iter().filter_map(|i| self.by_id(i)).collect();
         self.descendants(self.svg)
@@ -909,10 +914,11 @@ impl Doc {
     /// Nodes for the given ids in the order given (Inkscape's selection order), each once;
     /// unknown ids are dropped. The Scaler's match target is the FIRST selected object.
     pub fn selection_ordered(&self, ids: &[String]) -> Vec<NodeId> {
+        let mut seen: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
         let mut out: Vec<NodeId> = Vec::new();
         for id in ids {
             if let Some(n) = self.by_id(id) {
-                if !out.contains(&n) {
+                if seen.insert(n) {
                     out.push(n);
                 }
             }
