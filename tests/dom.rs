@@ -714,3 +714,93 @@ fn a_duplicate_id_keeps_pointing_at_the_first_node() {
     assert_eq!(doc.by_id("dup"), Some(first));
     assert_eq!(doc.generation(), g0);
 }
+
+const MOVE_DOC: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"a\"><g id=\"b\"><rect id=\"c\"/><rect id=\"d\"/></g></g><g id=\"z\"/></svg>";
+
+#[test]
+fn moving_a_subtree_keeps_every_id_resolvable() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    let before: Vec<_> = ["a", "b", "c", "d", "z"]
+        .iter()
+        .map(|i| doc.by_id(i).unwrap())
+        .collect();
+    doc.append_child(z, b);
+    let after: Vec<_> = ["a", "b", "c", "d", "z"]
+        .iter()
+        .map(|i| doc.by_id(i).unwrap())
+        .collect();
+    assert_eq!(before, after);
+    assert_eq!(doc.parent(b), Some(z));
+    doc.insert_before(b, doc.by_id("a").unwrap());
+    let again: Vec<_> = ["a", "b", "c", "d", "z"]
+        .iter()
+        .map(|i| doc.by_id(i).unwrap())
+        .collect();
+    assert_eq!(before, again);
+}
+
+#[test]
+fn moving_a_subtree_bumps_each_generation_exactly_once() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    let (g, s, sh) = (
+        doc.generation(),
+        doc.style_generation(),
+        doc.sheet_generation(),
+    );
+    doc.append_child(z, b);
+    assert_eq!(doc.generation(), g + 1);
+    assert_eq!(doc.style_generation(), s + 1);
+    assert_eq!(doc.sheet_generation(), sh, "no <style> moved");
+    let mut with_style = Doc::parse(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"a\"><style id=\"s\">*{fill:red}</style></g><g id=\"z\"/></svg>".as_bytes(),
+    )
+    .unwrap();
+    let (a, z) = (
+        with_style.by_id("a").unwrap(),
+        with_style.by_id("z").unwrap(),
+    );
+    let sh = with_style.sheet_generation();
+    with_style.append_child(z, a);
+    assert!(
+        with_style.sheet_generation() > sh,
+        "a moved <style> re-orders the sheet"
+    );
+}
+
+#[test]
+fn detaching_then_reattaching_a_subtree_restores_the_id_index() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    doc.detach(b);
+    assert_eq!(doc.by_id("b"), None);
+    assert_eq!(doc.by_id("c"), None);
+    doc.append_child(z, b);
+    assert_eq!(doc.by_id("b"), Some(b));
+    assert_eq!(doc.by_id("c").map(|c| doc.parent(c)), Some(Some(b)));
+}
+
+#[test]
+fn a_duplicate_id_keeps_pointing_at_the_first_node_after_a_move() {
+    let mut doc = Doc::parse(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"first\"><rect id=\"dup\" width=\"1\"/></g><g id=\"second\"><rect id=\"dup\" width=\"2\"/></g><g id=\"z\"/></svg>".as_bytes(),
+    )
+    .unwrap();
+    let first_dup = doc.by_id("dup").unwrap();
+    assert_eq!(doc.attr(first_dup, "width"), Some("1"));
+    let (second, z) = (doc.by_id("second").unwrap(), doc.by_id("z").unwrap());
+    doc.append_child(z, second);
+    assert_eq!(
+        doc.by_id("dup"),
+        Some(first_dup),
+        "moving the shadowed node changes nothing"
+    );
+    let first = doc.by_id("first").unwrap();
+    doc.append_child(z, first);
+    assert_eq!(
+        doc.by_id("dup"),
+        Some(first_dup),
+        "moving the indexed node keeps it indexed"
+    );
+}
