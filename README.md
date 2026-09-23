@@ -89,6 +89,13 @@ font directories; `SCIINK_NO_SYSTEM_FONTS=1` skips the system fonts. DejaVu Sans
 bundled, so matplotlib's default font measures correctly even where it is not installed; an installed
 copy takes precedence.
 
+## Large documents
+
+Inkscape writes the whole document to a temporary file, runs the extension, reads the result back and
+re-renders it, so most of the wait on a large file is that round trip, not the tool itself. Link raster
+images instead of embedding them, since base64 image data inflates both the file and the round trip.
+Run a tool on one figure's selection rather than on a whole layer or the whole document.
+
 ## Developing
 
 See [docs/DEVELOPING.md](docs/DEVELOPING.md) for building, tests, the upstream oracles, the Inkscape

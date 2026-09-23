@@ -273,3 +273,17 @@ fn text_highlight_runs_through_the_binary_with_vendored_fonts() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn no_inx_file_enables_live_preview() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("inx");
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let text = std::fs::read_to_string(e.path()).unwrap();
+        assert!(
+            text.contains(r#"needs-live-preview="false""#)
+                && !text.contains(r#"needs-live-preview="true""#),
+            "{}: live preview must be off (upstream has it off everywhere; each preview re-runs the tool and reloads the document)",
+            e.path().display()
+        );
+    }
+}

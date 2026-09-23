@@ -9,7 +9,7 @@
             <label>Useful when text has to sit on top of data. To treat several text objects as one, group them first.</label>
         </page>
     </param>
-    <effect needs-live-preview="true">
+    <effect needs-live-preview="false">
         <object-type>all</object-type>
         <effects-menu>
             <submenu name="Scientific"/>

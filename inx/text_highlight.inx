@@ -11,7 +11,7 @@
         <option value="full">Whole element</option>
         <option value="fullink">Whole element ink</option>
     </param>
-    <effect needs-live-preview="true">
+    <effect needs-live-preview="false">
         <object-type>all</object-type>
         <effects-menu>
             <submenu name="Scientific">

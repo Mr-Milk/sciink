@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- Live preview turned off on every tool (`needs-live-preview="false"`, matching upstream); a live
+  preview re-ran the tool and reloaded the document on every keystroke, which is what froze Inkscape
+  on large files.
+- CI and release runners pinned to `ubuntu-24.04` instead of the rolling `ubuntu-latest`, so a GitHub
+  Actions image change can no longer break a build or silently drop the Linux release asset.
+- Corrected the `<use>`-inside-`clipPath` known gap: the missing box was a dangling `href` (upstream
+  behaves the same), not a bug — now pinned by tests instead of listed as a limitation.
+
 ## 0.1.0 — 2026-09-23
 
 First release with all six tools of Scientific-Inkscape's core, as one native binary per platform

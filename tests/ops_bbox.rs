@@ -421,3 +421,32 @@ fn ctx_parse_text_reads_the_characters() {
     assert_eq!(pt.chars.len(), 2);
     assert!(ctx.parse_text(&mut doc, r).is_none(), "not a text element");
 }
+
+#[test]
+fn a_use_inside_a_clip_path_measures_its_target_under_defs() {
+    with_vendored_fonts(|| {
+        let mut d = doc(&format!(
+            r##"<svg {NS}><defs><rect id="t" x="2" y="2" width="4" height="4"/><clipPath id="c"><use href="#t"/></clipPath></defs><rect id="r" x="0" y="0" width="10" height="10" clip-path="url(#c)"/></svg>"##
+        ));
+        let mut ctx = Ctx::new();
+        let n_r = id(&d, "r");
+        let b = bbox(&mut d, &mut ctx, n_r, VISUAL).expect("clipped box");
+        assert!(rect_close(b, 2.0, 2.0, 6.0, 6.0), "{b:?}");
+    });
+}
+
+#[test]
+fn a_use_whose_href_does_not_resolve_has_no_box() {
+    with_vendored_fonts(|| {
+        // dhelpers.py:1505-1521: a dangling clone contributes nothing, so a clipPath made of one
+        // clips everything away (Other_tests.svg's image270 is such a case)
+        let mut d = doc(&format!(
+            r##"<svg {NS}><defs><clipPath id="c"><use href="#missing"/></clipPath></defs><rect id="r" x="0" y="0" width="10" height="10" clip-path="url(#c)"/><use id="u" href="#missing"/></svg>"##
+        ));
+        let mut ctx = Ctx::new();
+        let n_u = id(&d, "u");
+        assert_eq!(bbox(&mut d, &mut ctx, n_u, VISUAL), None);
+        let n_r = id(&d, "r");
+        assert_eq!(bbox(&mut d, &mut ctx, n_r, VISUAL), None);
+    });
+}

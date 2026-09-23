@@ -101,6 +101,17 @@ Flattener's text pipeline alone on the selection.
 | `SCIINK_SYSTEM_FONTS=1` | Tests: run the `#[ignore]`d oracles against the installed fonts. |
 | `SCIINK_GIT_SHA`, `SCIINK_TARGET` | Build time, set by `release.yml`; shown by `--version` and Diagnostics. |
 
+## Performance on large documents
+
+Inkscape writes the whole document to a temporary file, runs the extension, reads the result back
+and re-renders it. On a 50 MB SVG that round trip takes seconds before and after our binary runs,
+and we do not control it; time Extensions ▸ Scientific ▸ Diagnostics on the file to see your own
+floor (Diagnostics itself does ~0.3 s of work). Two things keep it small: link raster images instead
+of embedding them (one manuscript we measured carried 27 MB of base64 in 93 `<image>` elements), and
+run the tools per figure rather than on a whole layer. Our own share is logged per phase with
+`SCIINK_LOG`; on a 62 000-element document the Flattener takes ≈ <Task 16 number> s on one figure and
+≈ <Task 16 number> s on the whole layer.
+
 ## Repository layout
 
 ```
@@ -170,15 +181,11 @@ The installers download `releases/latest`; `SCIINK_VERSION=vX.Y.Z` / `-Version v
 
 ## Known gaps
 
-- `ops::bbox` yields no box for a `<use>` inside a `clipPath` whose target sits under `<defs>`.
-- The Flattener and Combine by Color build character tables for the whole document, not just the
-  selection.
+- A `<use>` whose `href` does not resolve has no bounding box, so a `clipPath` made of one clips its
+  element away entirely (upstream behaves the same; `Other_tests.svg`'s `image270` is such a case,
+  which is why the clip-region oracle counts 10 of 11 clipped elements).
 - Favorite Markers re-saves a template among the store's direct children only; a store re-saved by
   Inkscape can reorder the template list.
-- The first run after boot scans every installed font file (about 3 s for 1000 faces on macOS);
-  later runs take a few hundred milliseconds. A persistent scan cache is the planned fix.
-- DejaVu Sans is not bundled, so matplotlib's default font is measured with a substitute where it is
-  not installed.
 - Inkscape 1.4's headless `--actions` route runs the tools with an empty selection (`select-by-id`
   and `select-all` do not reach the extension), so script the binary directly instead.
 - Scientific-Inkscape's Autoexporter and Gallery Viewer are not ported.
