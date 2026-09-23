@@ -92,6 +92,7 @@ Flattener's text pipeline alone on the selection.
 |---|---|
 | `SCIINK_FONT_DIRS` | Extra font directories, separated by the platform's path-list separator (`:` / `;`). |
 | `SCIINK_NO_SYSTEM_FONTS=1` | Skip the system font scan; only `SCIINK_FONT_DIRS` is used. |
+| `SCIINK_NO_BUNDLED_FONTS=1` | Skip the bundled font directory (the DejaVu Sans fallback shipped next to the `.inx` files). |
 | `SCIINK_NO_FONT_CACHE=1` | Skip the persistent font-scan cache; always scan the filesystem. |
 | `SCIINK_FONT_CACHE=<path>` | Use `<path>` as the font-scan cache file instead of the default location under the data/cache dir. |
 | `SCIINK_LOG=<file>` | Append-only log: one line per phase of every run (`tool=<tool> phase=<name> dt=<ms>`), the Diagnostics summary and the source location of any internal error. stderr is the user's dialog, so nothing else is written there. |
@@ -138,8 +139,10 @@ dist/test-package.sh dist/out/sciink-macos-universal.zip     # layout, exec bit,
 dist/test-install.sh dist/out/sciink-macos-universal.zip     # install.sh offline: install, upgrade, uninstall
 ```
 
-A zip contains `sciink/{*.inx, bin/sciink[.exe], README.txt, LICENSE}` and is unzipped straight into
-the extensions directory. Each OS zips its own binary in CI so the exec bit survives.
+A zip contains `sciink/{*.inx, bin/sciink[.exe], fonts/, README.txt, LICENSE}` and is unzipped straight
+into the extensions directory. `fonts/` carries the bundled DejaVu Sans faces and their licence, copied
+from `tests/fonts` (not moved — that directory is also what tests load). Each OS zips its own binary in
+CI so the exec bit survives.
 
 ## CI
 

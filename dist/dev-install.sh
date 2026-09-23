@@ -13,5 +13,7 @@ cargo build --release
 mkdir -p "$EXT/bin"
 ln -sfn "$PWD/target/release/sciink" "$EXT/bin/sciink"
 for f in inx/*.inx; do ln -sfn "$PWD/$f" "$EXT/$(basename "$f")"; done
+mkdir -p "$EXT/fonts"
+for f in DejaVuSans.ttf DejaVuSans-Bold.ttf LICENSE-DejaVu.txt; do ln -sfn "$PWD/tests/fonts/$f" "$EXT/fonts/$f"; done
 echo "installed into: $EXT"
 echo "restart Inkscape, then use Extensions > Scientific"

@@ -245,3 +245,66 @@ fn families_lists_each_family_once_in_original_spelling() {
         vec!["DejaVu Sans".to_string(), "Roboto".to_string()]
     );
 }
+
+use sciink::text::fonts::ScanKey;
+
+fn bundled_copy(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sciink-bundled-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts/DejaVuSans.ttf");
+    std::fs::copy(src, dir.join("DejaVuSans.ttf")).unwrap();
+    dir
+}
+
+#[test]
+fn an_installed_face_wins_a_tie_against_a_bundled_face_of_the_same_metadata() {
+    let bundled = bundled_copy("tie");
+    let mut fs = FontSystem::scan_with_cache(
+        &ScanKey {
+            system: false,
+            dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts")],
+            bundled: Some(bundled.clone()),
+        },
+        None,
+    );
+    assert_eq!(
+        fs.face_count(),
+        5,
+        "4 vendored + 1 bundled copy of DejaVu Sans Book"
+    );
+    let spec = sciink::text::fonts::FontSpec::from_style(&sciink::style::Style::parse(
+        "font-family:'DejaVu Sans'",
+    ));
+    let k = fs.resolve(&spec).expect("DejaVu Sans resolves");
+    assert!(!fs.is_bundled(k), "the non-bundled face wins the tie");
+    assert!(
+        fs.face_info(k)
+            .path
+            .as_ref()
+            .unwrap()
+            .starts_with(env!("CARGO_MANIFEST_DIR"))
+    );
+}
+
+#[test]
+fn is_bundled_reports_the_source_directory() {
+    let bundled = bundled_copy("flag");
+    let fs = FontSystem::scan_with_cache(
+        &ScanKey {
+            system: false,
+            dirs: vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts")],
+            bundled: Some(bundled.clone()),
+        },
+        None,
+    );
+    let flagged: Vec<_> = fs.faces().filter(|&k| fs.is_bundled(k)).collect();
+    assert_eq!(flagged.len(), 1);
+    assert!(
+        fs.face_info(flagged[0])
+            .path
+            .as_ref()
+            .unwrap()
+            .starts_with(&bundled)
+    );
+}

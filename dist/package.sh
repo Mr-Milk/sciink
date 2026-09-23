@@ -33,6 +33,9 @@ done
 sed -e "s/@VERSION@/$version/g" "$here/dist/README-dist.txt" > "$stage/sciink/README.txt"
 cp "$here/LICENSE" "$stage/sciink/LICENSE"
 
+mkdir -p "$stage/sciink/fonts"
+cp "$here/tests/fonts/DejaVuSans.ttf" "$here/tests/fonts/DejaVuSans-Bold.ttf" "$here/tests/fonts/LICENSE-DejaVu.txt" "$stage/sciink/fonts/"
+
 mkdir -p "$here/dist/out"
 zip_path="$here/dist/out/sciink-$asset.zip"
 rm -f "$zip_path"

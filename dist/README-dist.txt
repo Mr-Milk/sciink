@@ -18,4 +18,7 @@ quarantine flag once:
   xattr -dr com.apple.quarantine "$HOME/Library/Application Support/org.inkscape.Inkscape/config/inkscape/extensions/sciink"
 (The curl installer never sets that flag.)
 
+DejaVu Sans is redistributed under the Bitstream Vera and DejaVu licences
+(fonts/LICENSE-DejaVu.txt).
+
 VERSION  @VERSION@

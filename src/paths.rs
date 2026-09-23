@@ -16,6 +16,12 @@ pub fn inx_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// `<inx dir>/fonts` when it exists — the release zips ship DejaVu Sans there.
+pub fn bundled_font_dir() -> Option<PathBuf> {
+    let d = inx_dir().join("fonts");
+    d.is_dir().then_some(d)
+}
+
 pub fn target_triple() -> String {
     option_env!("SCIINK_TARGET")
         .map(str::to_string)

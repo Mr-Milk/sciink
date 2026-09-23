@@ -36,7 +36,11 @@ pub fn describe_face(fs: &FontSystem, k: Option<crate::text::fonts::FaceKey>) ->
                 .and_then(|p| p.file_name())
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "memory".into());
-            format!("{} ({file})", i.family)
+            let mut s = format!("{} ({file})", i.family);
+            if fs.is_bundled(k) {
+                s.push_str(" [bundled]");
+            }
+            s
         }
     }
 }

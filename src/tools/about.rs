@@ -66,6 +66,15 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         fs.face_count(),
         fs.load_ms()
     );
+    match crate::paths::bundled_font_dir() {
+        Some(d) => {
+            let n = fs.faces().filter(|&k| fs.is_bundled(k)).count();
+            let _ = writeln!(r, "bundled fonts: {} ({n} faces)", d.display());
+        }
+        None => {
+            let _ = writeln!(r, "bundled fonts: not found");
+        }
+    }
     for fam in ["Arial", "DejaVu Sans", "sans-serif"] {
         let _ = writeln!(
             r,

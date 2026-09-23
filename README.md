@@ -85,7 +85,9 @@ Gallery Viewer are not part of sciink.
 
 Text is measured with the fonts installed on your machine. A missing family is substituted and the tool
 reports which one (Diagnostics and Debug ▸ Font Probe show every resolution). `SCIINK_FONT_DIRS` adds
-font directories; `SCIINK_NO_SYSTEM_FONTS=1` skips the system fonts.
+font directories; `SCIINK_NO_SYSTEM_FONTS=1` skips the system fonts. DejaVu Sans (Book and Bold) is
+bundled, so matplotlib's default font measures correctly even where it is not installed; an installed
+copy takes precedence.
 
 ## Developing
 
@@ -94,4 +96,5 @@ dev loop, packaging and releases. Changes are listed in [CHANGELOG.md](CHANGELOG
 
 ## License
 
-[GPL-2.0-or-later](LICENSE), like Scientific-Inkscape.
+[GPL-2.0-or-later](LICENSE), like Scientific-Inkscape. DejaVu Sans is redistributed under the
+Bitstream Vera and DejaVu licences (`fonts/LICENSE-DejaVu.txt` in the release).

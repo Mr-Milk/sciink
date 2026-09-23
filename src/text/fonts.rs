@@ -57,7 +57,8 @@ pub struct FontSystem {
 /// stage's `Ctx`); later loads clone the first result (`Database` and `FaceInfo` are `Clone`).
 ///
 /// What a scan covers: the system fonts (unless `SCIINK_NO_SYSTEM_FONTS=1`), the `SCIINK_FONT_DIRS`
-/// directories in order, and the bundled font directory (Task 13; `None` until then).
+/// directories in order, and the bundled font directory (`paths::bundled_font_dir`, present only
+/// when the system fonts are scanned and `SCIINK_NO_BUNDLED_FONTS` is not `1`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ScanKey {
     pub system: bool,
@@ -97,10 +98,16 @@ fn scan_key() -> ScanKey {
     let dirs = std::env::var_os("SCIINK_FONT_DIRS")
         .map(|d| std::env::split_paths(&d).collect())
         .unwrap_or_default();
+    let bundled = if system && std::env::var_os("SCIINK_NO_BUNDLED_FONTS").is_none_or(|v| v != "1")
+    {
+        crate::paths::bundled_font_dir()
+    } else {
+        None
+    };
     ScanKey {
         system,
         dirs,
-        bundled: None,
+        bundled,
     }
 }
 
@@ -391,6 +398,11 @@ impl FontSystem {
 
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
         (0..self.infos.len() as u32).map(FaceKey)
+    }
+
+    /// True when the face comes from the bundled font directory shipped next to the `.inx` files.
+    pub fn is_bundled(&self, k: FaceKey) -> bool {
+        self.infos[k.0 as usize].bundled
     }
 
     /// Faces whose font reports `family` (case-insensitive); empty when unknown.
