@@ -138,18 +138,32 @@ pub fn combine_by_color(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], threshold:
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = CombineByColorCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("combine-by-color");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut messages = Vec::new();
     let mut ctx = Ctx::new();
-    if doc.selection(&cli.common.ids).is_empty() {
+    let sel = doc.selection(&cli.common.ids);
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
+    if sel.is_empty() {
         messages.push("combine-by-color: nothing selected".to_string());
     } else {
         let els = candidates(&doc, &cli.common.ids);
-        combine_by_color(&mut doc, &mut ctx, &els, cli.lightnessth / 100.0);
+        let removed = combine_by_color(&mut doc, &mut ctx, &els, cli.lightnessth / 100.0);
+        t.phase("combine", || {
+            format!("candidates={} removed={removed}", els.len())
+        });
         ctx.finish(&mut doc);
+        t.phase("cleanup", String::new);
     }
     messages.extend(ctx.warn.0.iter().map(|w| format!("warning: {w}")));
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

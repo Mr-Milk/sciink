@@ -719,13 +719,20 @@ pub(crate) fn scale_plot(
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = ScalerCli::try_parse_from(argv).map_err(first_line)?;
     let o = Options::from_cli(&cli);
+    let mut t = crate::log::Timer::new("scaler");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     // SP:231–232: selection order matters (the first selection is the Matching target)
     let sel: Vec<NodeId> = doc
         .selection_ordered(&cli.common.ids)
         .into_iter()
         .filter(|&n| !EXCLUDE_TAGS.contains(&doc.tag(n)))
         .collect();
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
     let mut ctx = Ctx::for_roots(sel.clone());
     if let Mode::Advanced { mark } = o.mode {
         // SP:250–260
@@ -737,7 +744,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
                 }
             }
         }
-        return finish(doc, ctx);
+        return finish(doc, ctx, t);
     }
     // Deviation: upstream shows IMAGE_ERR for an EMPTY selection too (`all([])` is true)
     if sel.is_empty() {
@@ -757,9 +764,13 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         return Err("Non-Group objects detected in selection. Objects in a plot should be grouped prior to scaling.".to_string());
     }
     let mut boxes = Boxes::compute(&mut doc, &mut ctx, &sel);
+    t.phase("boxes", || {
+        format!("f={} g={}", boxes.f.len(), boxes.g.len())
+    });
     for (i, &plot) in plots.iter().enumerate() {
         scale_plot(&mut doc, &mut ctx, &o, &mut boxes, first, plot, i, cmode);
     }
+    t.phase("scale", || format!("plots={}", plots.len()));
     if let Mode::Matching {
         deletematch: true, ..
     } = o.mode
@@ -770,13 +781,16 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         }
         doc.detach(first);
     }
-    finish(doc, ctx)
+    finish(doc, ctx, t)
 }
 
-fn finish(mut doc: Doc, mut ctx: Ctx) -> Result<Output, String> {
+fn finish(mut doc: Doc, mut ctx: Ctx, mut t: crate::log::Timer) -> Result<Output, String> {
     ctx.finish(&mut doc);
+    t.phase("cleanup", String::new);
     let messages = ctx.warn.0.iter().map(|w| format!("warning: {w}")).collect();
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

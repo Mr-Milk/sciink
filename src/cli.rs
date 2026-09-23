@@ -107,6 +107,7 @@ Inkscape launches this binary through the .inx files in the same folder. For man
            [--<param>=<value>...] [--id=<object-id>...] [--output <file>] [input.svg]
 
 The modified SVG is written to stdout (or --output); messages go to stderr.
-Set SCIINK_LOG=<file> to append timing information.
+Set SCIINK_LOG=<file> (or pass --log <file>) to append one line per phase of a run with its
+duration in milliseconds. Nothing is written to stderr, which Inkscape shows as a dialog.
 
 Debug tools (Scientific ▸ Debug): font-probe, text-highlight, text-fix.";

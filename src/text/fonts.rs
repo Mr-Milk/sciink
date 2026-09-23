@@ -100,7 +100,14 @@ impl FontSystem {
     pub fn load() -> FontSystem {
         let t0 = Instant::now();
         let scan = scanned();
-        Self::from_entries(scan.0.clone(), scan.1.clone(), t0)
+        let fs = Self::from_entries(scan.0.clone(), scan.1.clone(), t0);
+        crate::log::line(&format!(
+            "phase=fonts ms={:.1} faces={} scans={}",
+            fs.load_ms,
+            fs.infos.len(),
+            scan_count()
+        ));
+        fs
     }
 
     /// Only the given directories (tests); never cached.

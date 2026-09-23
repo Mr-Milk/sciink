@@ -92,7 +92,7 @@ Flattener's text pipeline alone on the selection.
 |---|---|
 | `SCIINK_FONT_DIRS` | Extra font directories, separated by the platform's path-list separator (`:` / `;`). |
 | `SCIINK_NO_SYSTEM_FONTS=1` | Skip the system font scan; only `SCIINK_FONT_DIRS` is used. |
-| `SCIINK_LOG=<file>` | Append-only log: a summary line from Diagnostics and the message and source location of any internal error. stderr is the user's dialog, so nothing else is written there. |
+| `SCIINK_LOG=<file>` | Append-only log: one line per phase of every run (`tool=<tool> phase=<name> dt=<ms>`), the Diagnostics summary and the source location of any internal error. stderr is the user's dialog, so nothing else is written there. |
 | `INKSCAPE_PROFILE_DIR` | Set by Inkscape. Favorite Markers stores its templates in `$INKSCAPE_PROFILE_DIR/sciink/favorite_markers.svg`, falling back to the `.inx` directory. |
 | `SCIINK_UPSTREAM_TESTS` | Tests: the upstream `tests/data` directory (alternative to the `tests/upstream` symlink). |
 | `SCIINK_SYSTEM_FONTS=1` | Tests: run the `#[ignore]`d oracles against the installed fonts. |

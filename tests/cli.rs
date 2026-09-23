@@ -204,6 +204,51 @@ fn panic_in_tool_echoes_input_and_reports() {
 }
 
 #[test]
+fn flattener_logs_one_line_per_phase_with_durations() {
+    let p = tmp("phases.svg", SIMPLE);
+    let l = std::env::temp_dir().join(format!("sciink-test-{}-phases.log", std::process::id()));
+    let _ = std::fs::remove_file(&l);
+    let out = bin()
+        .args(["--tool=flattener", "--id=p"])
+        .arg("--log")
+        .arg(&l)
+        .arg(&p)
+        .env("SCIINK_NO_SYSTEM_FONTS", "1")
+        .env(
+            "SCIINK_FONT_DIRS",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts"),
+        )
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let log = std::fs::read_to_string(&l).unwrap();
+    for phase in [
+        "parse",
+        "selection",
+        "workingset",
+        "cleanup",
+        "write",
+        "total",
+    ] {
+        assert!(
+            log.contains(&format!("tool=flattener phase={phase} dt=")),
+            "missing phase {phase} in:\n{log}"
+        );
+    }
+    for line in log.lines().filter(|l| l.contains("phase=")) {
+        let dt = line
+            .split_whitespace()
+            .find_map(|f| f.strip_prefix("dt="))
+            .unwrap_or_else(|| panic!("no dt= in {line}"));
+        let v: f64 = dt
+            .parse()
+            .unwrap_or_else(|_| panic!("dt not a number in {line}"));
+        assert!(v >= 0.0, "{line}");
+        assert!(line.contains(" ms="), "{line}");
+    }
+}
+
+#[test]
 fn text_highlight_runs_through_the_binary_with_vendored_fonts() {
     let p = tmp(
         "highlight.svg",

@@ -224,12 +224,19 @@ pub(crate) fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = FlattenerCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("flattener");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut ctx = Ctx::new();
     let mut sel = doc.selection(&cli.common.ids);
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
     if cli.tab == "Exclusions" {
         mark_exclusions(&mut doc, &sel, cli.markexc == 1);
-        return finish(doc, ctx, false);
+        return finish(doc, ctx, false, t);
     }
     let opts = if cli.testmode {
         sel = duplicate_for_testmode(&mut doc, &sel);
@@ -238,15 +245,24 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         Options::from_cli(&cli)
     };
     let mut seld = working_set(&doc, &sel);
+    t.phase("workingset", || format!("seld={}", seld.len()));
     if opts.deepungroup {
+        let before = seld.len();
         move_defs_and_clips_to_root(&mut doc, &mut seld);
+        t.phase("defsmove", || {
+            format!("moved={}", before.saturating_sub(seld.len()))
+        });
     }
     if groups(&doc, &seld).is_empty() && non_containers(&doc, &seld).is_empty() {
         return Err("No objects selected!".to_string());
     }
     if opts.deepungroup {
+        let clones = seld.iter().filter(|&&n| doc.tag(n) == "use").count();
         unlink_clones(&mut doc, &mut ctx, &mut seld);
+        t.phase("unlink", || format!("clones={clones}"));
+        let ngroups = groups(&doc, &seld).len();
         deep_ungroup(&mut doc, &mut ctx, &seld, opts.removetextclips);
+        t.phase("ungroup", || format!("groups={ngroups}"));
     }
     let mut ngs = non_containers(&doc, &seld);
     let wrects = if opts.removerectw || opts.reversions || opts.revertpaths {
@@ -254,26 +270,39 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     } else {
         Vec::new()
     };
+    t.phase("rects", || {
+        format!("ngs={} wrects={}", ngs.len(), wrects.len())
+    });
     if opts.fixtext {
+        let before = ngs.len();
         text_phase(&mut doc, &mut ctx, &mut ngs, &opts);
+        t.phase("text", || format!("ngs_in={before} ngs_out={}", ngs.len()));
     }
     if opts.removerectw || opts.removeduppaths {
-        bbox_stage(&mut doc, &mut ctx, &ngs, &wrects, &opts);
+        bbox_stage(&mut doc, &mut ctx, &ngs, &wrects, &opts, &mut t);
     }
-    finish(doc, ctx, true)
+    finish(doc, ctx, true, t)
 }
 
 /// End of every run: created-clip gc and dangling-reference sweep (`Ctx::finish`), whitespace and
 /// `unlinked_clone` markers when the document was flattened (F:513–548, spec §B.3 step 9).
-fn finish(mut doc: Doc, mut ctx: Ctx, flattened: bool) -> Result<Output, String> {
+fn finish(
+    mut doc: Doc,
+    mut ctx: Ctx,
+    flattened: bool,
+    mut t: crate::log::Timer,
+) -> Result<Output, String> {
     ctx.finish(&mut doc);
     if flattened {
         strip_whitespace(&mut doc);
         strip_attr(&mut doc, "unlinked_clone");
     }
+    t.phase("cleanup", String::new);
     let messages = ctx.warn.0.iter().map(|w| format!("warning: {w}")).collect();
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }
 
@@ -664,7 +693,7 @@ pub(crate) fn remove_duplicates(
     ctx: &mut Ctx,
     ngs2: &mut Vec<NodeId>,
     bbs: &HashMap<NodeId, Rect>,
-) {
+) -> usize {
     let inside = shape_inside_targets(doc);
     let els: Vec<NodeId> = ngs2
         .iter()
@@ -740,6 +769,7 @@ pub(crate) fn remove_duplicates(
     }
     let gone: HashSet<NodeId> = removed.iter().map(|&i| els[i]).collect();
     ngs2.retain(|n| !gone.contains(n));
+    removed.len()
 }
 
 /// F:499–509: a white-rectangle candidate with nothing behind it (no earlier element whose box
@@ -751,7 +781,7 @@ pub(crate) fn remove_white_rects(
     ngs2: &[NodeId],
     bbs: &HashMap<NodeId, Rect>,
     wrects: &[NodeId],
-) {
+) -> usize {
     let ngs3: Vec<NodeId> = ngs2
         .iter()
         .copied()
@@ -770,6 +800,7 @@ pub(crate) fn remove_white_rects(
             deleted.insert(ii);
         }
     }
+    deleted.len()
 }
 
 /// F:415–510: rough boxes of the drawn working set, then duplicates, then white rectangles.
@@ -779,6 +810,7 @@ pub(crate) fn bbox_stage(
     ngs: &[NodeId],
     wrects: &[NodeId],
     o: &Options,
+    t: &mut crate::log::Timer,
 ) {
     let ngset: HashSet<NodeId> = attached(doc, ngs).into_iter().collect();
     let mut ngs2: Vec<NodeId> = doc
@@ -786,10 +818,17 @@ pub(crate) fn bbox_stage(
         .filter(|n| ngset.contains(n) && is_drawn(doc, *n))
         .collect();
     let bbs = bb2(doc, ctx, &ngs2, true);
+    t.phase("bbox", || {
+        format!("ngs2={} boxes={}", ngs2.len(), bbs.len())
+    });
     if o.removeduppaths {
-        remove_duplicates(doc, ctx, &mut ngs2, &bbs);
+        let cands = ngs2.len();
+        let removed = remove_duplicates(doc, ctx, &mut ngs2, &bbs);
+        t.phase("dedup", || format!("cands={cands} removed={removed}"));
     }
     if o.removerectw {
-        remove_white_rects(doc, ctx, &ngs2, &bbs, wrects);
+        let cands = wrects.len();
+        let removed = remove_white_rects(doc, ctx, &ngs2, &bbs, wrects);
+        t.phase("whiterects", || format!("cands={cands} removed={removed}"));
     }
 }
