@@ -796,7 +796,10 @@ pub fn bbox_stage(
         .filter(|n| ngset.contains(n) && is_drawn(doc, *n))
         .collect();
     // upstream BB2(svg, ngs2) → make_char_table(els = tels): measure — and warn about the fonts
-    // of — exactly the elements whose boxes are requested
+    // of — exactly the elements whose boxes are requested. Reset first: set_text_roots is a
+    // no-op once a table already exists, so a table an earlier, abnormal path built over the
+    // wrong scope would otherwise survive instead of being rebuilt over ngs2.
+    ctx.reset_char_table();
     ctx.set_text_roots(ngs2.clone());
     let bbs = bb2(doc, ctx, &ngs2, true);
     t.phase("bbox", || {
