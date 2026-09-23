@@ -218,10 +218,8 @@ pub fn store_path(override_: Option<&Path>) -> PathBuf {
     if let Some(p) = override_ {
         return p.to_path_buf();
     }
-    if let Some(dir) = std::env::var_os("INKSCAPE_PROFILE_DIR") {
-        return PathBuf::from(dir)
-            .join("sciink")
-            .join("favorite_markers.svg");
+    if let Some(dir) = crate::paths::data_dir() {
+        return dir.join("favorite_markers.svg");
     }
     crate::paths::inx_dir().join("favorite_markers.svg")
 }

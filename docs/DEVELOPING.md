@@ -92,6 +92,8 @@ Flattener's text pipeline alone on the selection.
 |---|---|
 | `SCIINK_FONT_DIRS` | Extra font directories, separated by the platform's path-list separator (`:` / `;`). |
 | `SCIINK_NO_SYSTEM_FONTS=1` | Skip the system font scan; only `SCIINK_FONT_DIRS` is used. |
+| `SCIINK_NO_FONT_CACHE=1` | Skip the persistent font-scan cache; always scan the filesystem. |
+| `SCIINK_FONT_CACHE=<path>` | Use `<path>` as the font-scan cache file instead of the default location under the data/cache dir. |
 | `SCIINK_LOG=<file>` | Append-only log: one line per phase of every run (`tool=<tool> phase=<name> dt=<ms>`), the Diagnostics summary and the source location of any internal error. stderr is the user's dialog, so nothing else is written there. |
 | `INKSCAPE_PROFILE_DIR` | Set by Inkscape. Favorite Markers stores its templates in `$INKSCAPE_PROFILE_DIR/sciink/favorite_markers.svg`, falling back to the `.inx` directory. |
 | `SCIINK_UPSTREAM_TESTS` | Tests: the upstream `tests/data` directory (alternative to the `tests/upstream` symlink). |
@@ -125,6 +127,7 @@ docs/superpowers/plans/  one implementation plan per part, with the rulings made
   byte-stable across runs and platforms.
 - Tests never loosen a tolerance to pass; a mismatch with upstream is either a bug or a documented
   deviation with its own test.
+- Bump `FONT_CACHE_FORMAT` in `src/text/fontcache.rs` when `face_metrics` or the cached fields change.
 
 ## Packaging
 

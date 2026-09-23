@@ -25,6 +25,7 @@ pub fn with_vendored_fonts<T>(f: impl FnOnce() -> T) -> T {
         unsafe {
             std::env::set_var("SCIINK_NO_SYSTEM_FONTS", "1");
             std::env::set_var("SCIINK_FONT_DIRS", fontdir());
+            std::env::set_var("SCIINK_NO_FONT_CACHE", "1");
         }
     });
     f()
