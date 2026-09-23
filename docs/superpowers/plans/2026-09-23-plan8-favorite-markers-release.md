@@ -396,7 +396,7 @@ fn ok(svg: &str, store: &std::path::Path, extra: &[&str]) -> (String, Vec<String
 fn style_of(n: roxmltree::Node) -> sciink::style::Style {
     n.attribute("style").map(sciink::style::Style::parse).unwrap_or_default()
 }
-fn markers(d: &roxmltree::Document) -> Vec<roxmltree::Node<'_, '_>> {
+fn markers<'a, 'i>(d: &'a roxmltree::Document<'i>) -> Vec<roxmltree::Node<'a, 'i>> {
     d.descendants().filter(|n| n.has_tag_name("marker")).collect()
 }
 const SHAPES: &str = r##"<g id="g"><path id="p" d="M0,0 L10,0" style="fill:none;stroke:#000"/><rect id="r" x="0" y="5" width="4" height="4" style="stroke:#000;marker-mid:url(#old)"/><text id="t" style="font-size:4px">no markers</text></g><line id="l" x1="0" y1="20" x2="10" y2="20" style="stroke:#00f"/>"##;
@@ -527,7 +527,8 @@ pub struct FavoriteMarkersCli {
     /// 0 Arrow, 1 Triangle, 2 Distance, 3 the custom name below (upstream's argparse default is 1)
     #[arg(long, default_value_t = 1)]
     pub template: u8,
-    #[arg(long, default_value = "")]
+    /// clap kebab-cases multi-word flags by default; Inkscape sends the `.inx` name verbatim
+    #[arg(long = "custom_name", default_value = "")]
     pub custom_name: String,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
     pub smarker: bool,
@@ -540,12 +541,12 @@ pub struct FavoriteMarkersCli {
     pub size: f64,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
     pub addt: bool,
-    #[arg(long, default_value = "")]
+    #[arg(long = "template_name", default_value = "")]
     pub template_name: String,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
     pub remt: bool,
     /// The name to remove (upstream: an index into a self-rewritten dropdown)
-    #[arg(long, default_value = "")]
+    #[arg(long = "template_rem", default_value = "")]
     pub template_rem: String,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
     pub list: bool,
