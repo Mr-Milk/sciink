@@ -785,7 +785,7 @@ fn duplicate_and_nested_selections_neither_panic_nor_leave_orphans() {
 }
 
 #[test]
-fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
+fn a_thousand_sibling_texts_run_in_linear_time_and_the_nested_one_is_skipped() {
     use sciink::text::kerning::{KerningOptions, remove_kerning};
     let mut body = String::new();
     for i in 0..1000 {
@@ -825,10 +825,8 @@ fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
         "outer IS rewritten: new element replaces old"
     );
 
-    // Verify the mechanism: what are the 1002 returned elements?
-    // The original outer was rewritten (new outer exists with different NodeId).
-    // The original inner was not rewritten (skipped as nested).
-    // Parsing the 1000 siblings and outer into tels creates split-offs.
+    // The 1 000 siblings and `outer` are rewritten (new nodes); `inner` is skipped as nested and
+    // detached with the old `outer`; one sibling splits, giving 1 002 returned nodes.
 
     assert!(
         out.contains(&outer_after),
@@ -843,14 +841,7 @@ fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
         "old inner is not returned (nested, skipped, and parent detached)"
     );
 
-    // Count original input elements in output
     let returned_originals = els.iter().take(1002).filter(|e| out.contains(e)).count();
-
-    // The 1002 elements are:
-    // - 1 new outer (the rewritten version of the original outer)
-    // - ~1001 split-offs created during parsing/writing of the 1000 siblings
-    // The original outer is not returned (rewritten to a new NodeId).
-    // The original inner is not returned (nested, skipped, not attached).
     assert_eq!(
         returned_originals, 0,
         "none of the original input NodeIds are returned (outer rewritten, inner skipped)"
@@ -859,6 +850,10 @@ fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
         out.len(),
         1002,
         "new outer (1) + split-offs from parsing siblings and outer (~1001) = 1002"
+    );
+    assert!(
+        out.iter().all(|&n| d.parent(n).is_some()),
+        "every returned node is attached"
     );
 
     let nested: Vec<&String> =

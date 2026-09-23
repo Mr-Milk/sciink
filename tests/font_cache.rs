@@ -200,7 +200,13 @@ fn a_different_scan_key_does_not_reuse_the_cache() {
 fn an_unwritable_cache_location_does_not_fail_the_scan() {
     let _g = SERIAL.lock().unwrap();
     let (fonts, _) = sandbox("unwritable");
-    let bad = PathBuf::from("/nonexistent-sciink-dir/deeper/fontcache.tsv");
+    // A path under a nonexistent root may still be creatable by `create_dir_all` on some
+    // platforms; a regular FILE where a directory is wanted fails portably, since a directory
+    // entry can never be created underneath a file on any OS.
+    let root = fonts.parent().unwrap();
+    let blocker = root.join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let bad = blocker.join("deeper").join("cache.tsv");
     let fs = FontSystem::scan_with_cache(&key(&fonts), Some(&bad));
     assert_eq!(fs.face_count(), 4);
 }
@@ -218,7 +224,25 @@ fn the_cache_path_honours_the_environment_switches() {
         assert_eq!(cache_path(&k), Some(PathBuf::from("/tmp/x.tsv")));
         std::env::remove_var("SCIINK_FONT_CACHE");
     }
-    assert!(cache_path(&k).is_some_and(|p| {
+    // The default (no-override) path goes through `paths::cache_dir()`, which creates the
+    // directory it returns. Point `INKSCAPE_PROFILE_DIR` (which `cache_dir()` consults before
+    // falling back to a directory shared by every process for this user) at a sandbox for this
+    // one call, so the test stays hermetic instead of creating a real, shared directory on the
+    // machine running it.
+    let profile = std::env::temp_dir().join(format!(
+        "sciink-fc-{}-cache-path-profile",
+        std::process::id()
+    ));
+    // SAFETY: see above.
+    unsafe {
+        std::env::set_var("INKSCAPE_PROFILE_DIR", &profile);
+    }
+    let p = cache_path(&k);
+    // SAFETY: see above.
+    unsafe {
+        std::env::remove_var("INKSCAPE_PROFILE_DIR");
+    }
+    assert!(p.is_some_and(|p| {
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
         name.starts_with(&format!("fontcache-{FONT_CACHE_FORMAT}-")) && name.ends_with(".tsv")
     }));

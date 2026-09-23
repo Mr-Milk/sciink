@@ -206,3 +206,39 @@ fn box_grid_never_misses_an_overlap() {
         }
     }
 }
+
+#[test]
+fn box_grid_overflow_and_fallback_paths_still_find_every_overlap() {
+    let mut rng = Lcg(20260924);
+    // side = ceil(sqrt(5000)) = 71 cells/axis over a 100-unit extent, so a box wider than
+    // MAX_SPAN(32) * (100/71) ≈ 45 units spans more than MAX_SPAN cells and lands in `large`.
+    let mut grid = BoxGrid::new(Some(Rect::new(0.0, 0.0, 100.0, 100.0)), 5000);
+    let mut boxes: Vec<Rect> = (0..500).map(|_| rng.lattice_box()).collect();
+    let big = Rect::new(1.0, 1.0, 99.0, 99.0); // width 98 > 45: overflows into `large`
+    let infinite = Rect::new(f64::NEG_INFINITY, 0.0, 1.0, 1.0); // not finite: also `large`
+    boxes.push(big);
+    boxes.push(infinite);
+    for (i, r) in boxes.iter().enumerate() {
+        grid.insert(i as u32, *r);
+    }
+    let queries = [
+        rng.lattice_box(), // small: normal cells, plus `large` unconditionally
+        Rect::new(0.0, 0.0, 100.0, 100.0), // spans every cell on both axes: the `all` fallback
+        Rect::new(f64::NAN, 0.0, 1.0, 1.0), // not finite: also the `all` fallback
+    ];
+    for q in queries {
+        let mut seen = std::collections::HashSet::new();
+        grid.query(q, &mut |id| {
+            seen.insert(id);
+            true
+        });
+        for (i, r) in boxes.iter().enumerate() {
+            if intersects(*r, q) {
+                assert!(
+                    seen.contains(&(i as u32)),
+                    "grid missed box {i} for query {q:?}"
+                );
+            }
+        }
+    }
+}
