@@ -822,11 +822,12 @@ fn start_marker_matches_the_reference() {
     let count = |d: &roxmltree::Document| d.descendants().filter(|n| n.has_tag_name("marker")).count();
     assert_eq!(count(&d_ours), count(&d_in) + 1, "exactly one marker added");
     assert_eq!(count(&d_ref), count(&d_in) + 1);
-    let new_marker = |d: &roxmltree::Document<'_>| {
+    // a closure cannot name the returned node's lifetimes; a nested fn can
+    fn new_marker<'a, 'i>(d: &'a roxmltree::Document<'i>, d_in: &roxmltree::Document<'_>) -> roxmltree::Node<'a, 'i> {
         let ids: std::collections::HashSet<&str> = d_in.descendants().filter_map(|n| n.attribute("id")).collect();
         d.descendants().find(|n| n.has_tag_name("marker") && !ids.contains(n.attribute("id").unwrap_or(""))).unwrap()
-    };
-    let (mo, mr) = (new_marker(&d_ours), new_marker(&d_ref));
+    }
+    let (mo, mr) = (new_marker(&d_ours, &d_in), new_marker(&d_ref, &d_in));
     assert!(mo.attribute("id").unwrap().starts_with("FMTrianglestart"));
     assert_eq!(attrs_sans_id(mo), attrs_sans_id(mr), "marker attributes");
     let (go, gr) = (mo.first_element_child().unwrap(), mr.first_element_child().unwrap());
@@ -843,7 +844,7 @@ fn start_marker_matches_the_reference() {
         let rs = sciink::style::Style::parse(r.attribute("style").unwrap());
         assert!(rs.get("marker-start").is_some_and(|v| v.starts_with("url(#FMTrianglestart")), "{id}: the reference points at its marker too");
     }
-    std::fs::remove_file(&store).unwrap();
+    let _ = std::fs::remove_file(&store); // the Markers page never writes the store
 }
 ```
 
@@ -865,7 +866,7 @@ README: "nine menu entries — five tools" → "ten menu entries — six tools";
 README "Developing": list every oracle in the one command:
 
 ```
-SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test scaler_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
+SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
 ```
 
 and add one line after it: "The non-ignored fixture tests (`cargo test --test '*_fixtures'`) run whenever `tests/upstream/data` is present and are skipped otherwise."
