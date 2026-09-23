@@ -75,18 +75,6 @@ fn missing_tool_echoes_input() {
 }
 
 #[test]
-fn unimplemented_tool_echoes_input() {
-    let p = tmp("favorite-markers.svg", SIMPLE);
-    let out = bin()
-        .args(["--tool=favorite-markers", "--tab=correction"])
-        .arg(&p)
-        .output()
-        .unwrap();
-    assert_eq!(out.stdout, SIMPLE.as_bytes());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not implemented"));
-}
-
-#[test]
 fn output_flag_writes_file_and_keeps_stdout_empty() {
     let p = tmp("in.svg", SIMPLE);
     let o = std::env::temp_dir().join(format!("sciink-test-{}-out.svg", std::process::id()));

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Favorite Markers (sciink)</name>
+    <id>org.sciink.favorite-markers</id>
+    <param name="tool" type="string" gui-hidden="true">favorite-markers</param>
+    <param name="tab" type="notebook">
+        <page name="markers" gui-text="Markers">
+            <label>Stores your favorite markers for convenient access.</label>
+            <param name="template" type="optiongroup" appearance="combo" gui-text="Template">
+                <option value="0">Arrow</option>
+                <option value="1">Triangle</option>
+                <option value="2">Distance</option>
+                <option value="3">Custom (name below)</option>
+            </param>
+            <param name="custom_name" type="string" gui-text="Custom template name" gui-description="A template stored on the Add/remove page. Use 'List stored templates' there to see the names."></param>
+            <param name="smarker" type="bool" gui-text="Start marker?">false</param>
+            <param name="mmarker" type="bool" gui-text="Mid marker?">false</param>
+            <param name="emarker" type="bool" gui-text="End marker?">true</param>
+            <param name="size" type="float" precision="1" min="0" max="10000" gui-text="Size (%)">100</param>
+        </page>
+        <page name="addremove" gui-text="Add/remove templates">
+            <param name="addt" type="bool" gui-text="Add selected path's markers as a new template?">false</param>
+            <param name="template_name" type="string" gui-text="New template name"></param>
+            <param name="remt" type="bool" gui-text="Remove a template?">false</param>
+            <param name="template_rem" type="string" gui-text="Template to remove (name)"></param>
+            <param name="list" type="bool" gui-text="List stored templates?" gui-description="Shows the stored template names when you click Apply.">false</param>
+            <label>Templates are stored in sciink/favorite_markers.svg in Inkscape's profile folder; changes take effect at once.</label>
+        </page>
+    </param>
+    <effect needs-live-preview="false">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific"/>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>

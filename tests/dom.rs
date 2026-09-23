@@ -557,3 +557,27 @@ fn selection_ordered_keeps_argument_order_and_drops_unknown_and_repeated_ids() {
         vec![d.by_id("a").unwrap(), d.by_id("c").unwrap()]
     );
 }
+
+#[test]
+fn ensure_prefix_declares_known_prefixes_once_and_refuses_unknown_ones() {
+    let mut d =
+        sciink::dom::Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>"#)
+            .unwrap();
+    assert!(d.ensure_prefix("xml"));
+    assert!(d.ensure_prefix("sodipodi"));
+    let svg = d.svg();
+    assert_eq!(
+        d.attr(svg, "xmlns:sodipodi"),
+        Some("http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd")
+    );
+    assert!(d.ensure_prefix("sodipodi"), "already declared");
+    assert_eq!(
+        d.attrs(svg)
+            .iter()
+            .filter(|a| a.name == "xmlns:sodipodi")
+            .count(),
+        1
+    );
+    assert!(!d.ensure_prefix("foo"));
+    assert_eq!(d.attr(svg, "xmlns:foo"), None);
+}
