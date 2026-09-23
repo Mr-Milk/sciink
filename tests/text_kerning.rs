@@ -803,7 +803,8 @@ fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
     let mut els: Vec<_> = (0..1000)
         .map(|i| d.by_id(&format!("t{i}")).unwrap())
         .collect();
-    els.push(d.by_id("outer").unwrap());
+    let outer0 = d.by_id("outer").unwrap();
+    els.push(outer0);
     els.push(d.by_id("inner").unwrap());
     let mut w = Warnings::default();
     let t0 = std::time::Instant::now();
@@ -815,8 +816,51 @@ fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
         &mut w,
     );
     assert!(t0.elapsed().as_secs() < 20, "quadratic nested-text check");
-    // Current behavior: 1000 siblings + outer + inner all returned (inner still attached after rewrite)
-    assert_eq!(out.len(), 1002, "all elements returned");
+
+    let outer_after = d.by_id("outer").unwrap();
+    let inner0 = els[1001];
+
+    assert_ne!(
+        outer_after, outer0,
+        "outer IS rewritten: new element replaces old"
+    );
+
+    // Verify the mechanism: what are the 1002 returned elements?
+    // The original outer was rewritten (new outer exists with different NodeId).
+    // The original inner was not rewritten (skipped as nested).
+    // Parsing the 1000 siblings and outer into tels creates split-offs.
+
+    assert!(
+        out.contains(&outer_after),
+        "new outer (rewritten) is in the returned list"
+    );
+    assert!(
+        !out.contains(&outer0),
+        "old outer is not returned (was rewritten and detached)"
+    );
+    assert!(
+        !out.contains(&inner0),
+        "old inner is not returned (nested, skipped, and parent detached)"
+    );
+
+    // Count original input elements in output
+    let returned_originals = els.iter().take(1002).filter(|e| out.contains(e)).count();
+
+    // The 1002 elements are:
+    // - 1 new outer (the rewritten version of the original outer)
+    // - ~1001 split-offs created during parsing/writing of the 1000 siblings
+    // The original outer is not returned (rewritten to a new NodeId).
+    // The original inner is not returned (nested, skipped, not attached).
+    assert_eq!(
+        returned_originals, 0,
+        "none of the original input NodeIds are returned (outer rewritten, inner skipped)"
+    );
+    assert_eq!(
+        out.len(),
+        1002,
+        "new outer (1) + split-offs from parsing siblings and outer (~1001) = 1002"
+    );
+
     let nested: Vec<&String> =
         w.0.iter()
             .filter(|m| m.contains("nested in another selected text"))
