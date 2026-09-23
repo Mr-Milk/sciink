@@ -921,7 +921,13 @@ Also update §B.3 "Favorite markers" **Storage** paragraph's first sentence to n
 
 - [ ] **Step 4: Packaging check**
 
-Run `dist/test-package.sh 2>&1 | tail -15` (the local packaging test from Plan 2) and paste its last lines into the report; a failure here is a finding for the controller, not something to patch silently.
+Run the local packaging check from Plan 2 (a release build, the zip, then the zip's contract test — `dist/out/` is git-ignored):
+
+```bash
+cargo build --release 2>&1 | tail -2 && dist/package.sh macos-universal target/release/sciink && dist/test-package.sh dist/out/sciink-macos-universal.zip 2>&1 | tail -5
+```
+
+Expected: the last line is `PACKAGE-OK dist/out/sciink-macos-universal.zip` (the asset name is only a label here; the binary is this machine's). Paste the output into the report; a failure here is a finding for the controller, not something to patch silently. Do not commit anything under `dist/out/`.
 
 - [ ] **Step 5: Gate and commit**
 
