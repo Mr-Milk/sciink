@@ -822,12 +822,10 @@ fn start_marker_matches_the_reference() {
     let count = |d: &roxmltree::Document| d.descendants().filter(|n| n.has_tag_name("marker")).count();
     assert_eq!(count(&d_ours), count(&d_in) + 1, "exactly one marker added");
     assert_eq!(count(&d_ref), count(&d_in) + 1);
-    // a closure cannot name the returned node's lifetimes; a nested fn can
-    fn new_marker<'a, 'i>(d: &'a roxmltree::Document<'i>, d_in: &roxmltree::Document<'_>) -> roxmltree::Node<'a, 'i> {
-        let ids: std::collections::HashSet<&str> = d_in.descendants().filter_map(|n| n.attribute("id")).collect();
-        d.descendants().find(|n| n.has_tag_name("marker") && !ids.contains(n.attribute("id").unwrap_or(""))).unwrap()
-    }
-    let (mo, mr) = (new_marker(&d_ours, &d_in), new_marker(&d_ref, &d_in));
+    // (a closure cannot name the returned node's lifetimes; `new_marker` is a module-level fn —
+    // see below the test — taking the document and the input's id set, computed once here)
+    let ids: std::collections::HashSet<&str> = d_in.descendants().filter_map(|n| n.attribute("id")).collect();
+    let (mo, mr) = (new_marker(&d_ours, &ids), new_marker(&d_ref, &ids));
     assert!(mo.attribute("id").unwrap().starts_with("FMTrianglestart"));
     assert_eq!(attrs_sans_id(mo), attrs_sans_id(mr), "marker attributes");
     let (go, gr) = (mo.first_element_child().unwrap(), mr.first_element_child().unwrap());
@@ -845,6 +843,11 @@ fn start_marker_matches_the_reference() {
         assert!(rs.get("marker-start").is_some_and(|v| v.starts_with("url(#FMTrianglestart")), "{id}: the reference points at its marker too");
     }
     let _ = std::fs::remove_file(&store); // the Markers page never writes the store
+}
+
+/// The marker in `d` whose id is not among the input's ids (`ids`).
+fn new_marker<'d, 'i>(d: &'d roxmltree::Document<'i>, ids: &std::collections::HashSet<&str>) -> roxmltree::Node<'d, 'i> {
+    d.descendants().find(|n| n.has_tag_name("marker") && !ids.contains(n.attribute("id").unwrap_or(""))).unwrap()
 }
 ```
 
