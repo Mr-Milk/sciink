@@ -109,8 +109,8 @@ and we do not control it; time Extensions ▸ Scientific ▸ Diagnostics on the 
 floor (Diagnostics itself does ~0.3 s of work). Two things keep it small: link raster images instead
 of embedding them (one manuscript we measured carried 27 MB of base64 in 93 `<image>` elements), and
 run the tools per figure rather than on a whole layer. Our own share is logged per phase with
-`SCIINK_LOG`; on a 62 000-element document the Flattener takes ≈ <Task 16 number> s on one figure and
-≈ <Task 16 number> s on the whole layer.
+`SCIINK_LOG`; on a 62 000-element document the Flattener takes ≈ 0.2 s on one figure and
+≈ 1.0 s on the whole layer.
 
 ## Repository layout
 

@@ -2119,7 +2119,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
 ---
-### Task 10: `external_merges` candidate filter — only if Task 16's measurement needs it
+### Task 10: `external_merges` candidate filter — only if Task 16's measurement needs it (not executed: text phase was 223.3 ms)
 
 **Files:**
 - Modify: `src/text/kerning.rs:318-381` (`external_merges`, the `for (j, w2) in chks.iter().enumerate()` loop)
@@ -3844,5 +3844,285 @@ Apple M-series Mac, macOS, warm cache — 2026-09-23. About `phase=fonts`: ms=17
 
 ## Appendix B — after (Task 16)
 
-(filled by Task 16: before/after per selection and phase; the Task 10 decision; any follow-up rulings)
+Apple M-series Mac, macOS, release build (`cargo build --release`), same file
+(`/Users/yzheng/Documents/Manuscripts/MetPredict/metpredict_figures_clean.svg`, read-only) — 2026-09-24.
+Same methodology as Appendix A: `--log /tmp/sciink-l`, `rm -f` before each run, run twice, second run
+recorded. The persistent font-scan cache (Task 12) was already warm from earlier work in this worktree
+for every row below except the dedicated cold/warm measurement, which deletes it first.
+
+### Before/after per selection and phase
+
+| selection | tool | phase | before ms (Task 2) | after ms (Task 16) |
+|---|---|---|---|---|
+| figure_1-3 | flattener | parse | 60.5 | 47.6 |
+| figure_1-3 | flattener | selection | 1.8 | 0.4 |
+| figure_1-3 | flattener | workingset | 0.2 | 0.1 |
+| figure_1-3 | flattener | defsmove | 0.3 | 0.3 |
+| figure_1-3 | flattener | unlink | 97.4 | 11.7 |
+| figure_1-3 | flattener | ungroup | 181.0 | 17.6 |
+| figure_1-3 | flattener | rects | 6.6 | 4.6 |
+| figure_1-3 | flattener | fonts | 183.9 | 15.7 |
+| figure_1-3 | flattener | text | 214.7 | 25.8 |
+| figure_1-3 | flattener | fonts | 0.3 | 0.3 |
+| figure_1-3 | flattener | bbox | 392.5 | 18.1 |
+| figure_1-3 | flattener | dedup | 5.2 | 17.5 |
+| figure_1-3 | flattener | whiterects | 0.1 | 0.2 |
+| figure_1-3 | flattener | cleanup | 30.8 | 6.5 |
+| figure_1-3 | flattener | write | 81.1 | 61.9 |
+| figure_1-3 | flattener | total | 1072.2 | 212.4 |
+| g660 | flattener | parse | 61.9 | 48.4 |
+| g660 | flattener | selection | 2.1 | 0.5 |
+| g660 | flattener | workingset | 0.3 | 0.2 |
+| g660 | flattener | defsmove | 0.1 | 0.1 |
+| g660 | flattener | unlink | 0.1 | 0.1 |
+| g660 | flattener | ungroup | 108.7 | 11.6 |
+| g660 | flattener | rects | 13.0 | 11.4 |
+| g660 | flattener | fonts | 158.4 | 3.4 |
+| g660 | flattener | text | 170.2 | 9.1 |
+| g660 | flattener | fonts | 0.3 | 0.3 |
+| g660 | flattener | bbox | 438.0 | 23.7 |
+| g660 | flattener | dedup | 13.0 | 22.6 |
+| g660 | flattener | whiterects | 0.1 | 0.2 |
+| g660 | flattener | cleanup | 3.2 | 3.1 |
+| g660 | flattener | write | 80.0 | 61.2 |
+| g660 | flattener | total | 890.8 | 192.3 |
+| g9740 | flattener | parse | 60.4 | 49.1 |
+| g9740 | flattener | selection | 1.6 | 0.4 |
+| g9740 | flattener | workingset | 0.2 | 0.1 |
+| g9740 | flattener | defsmove | 0.1 | 0.1 |
+| g9740 | flattener | unlink | 0.1 | 0.1 |
+| g9740 | flattener | ungroup | 45.7 | 6.3 |
+| g9740 | flattener | rects | 21.0 | 3.3 |
+| g9740 | flattener | fonts | 177.0 | 3.5 |
+| g9740 | flattener | text | 320.8 | 32.0 |
+| g9740 | flattener | fonts | 0.3 | 0.4 |
+| g9740 | flattener | bbox | 356.8 | 18.3 |
+| g9740 | flattener | dedup | 2.4 | 13.1 |
+| g9740 | flattener | whiterects | 1.9 | 0.2 |
+| g9740 | flattener | cleanup | 28.3 | 5.5 |
+| g9740 | flattener | write | 80.1 | 61.1 |
+| g9740 | flattener | total | 919.4 | 189.6 |
+| layer1 | flattener | parse | 63.9 | 51.5 |
+| layer1 | flattener | selection | 1.6 | 0.6 |
+| layer1 | flattener | workingset | 2.2 | 1.8 |
+| layer1 | flattener | defsmove | 7.7 | 7.8 |
+| layer1 | flattener | unlink | 247.2 | 64.6 |
+| layer1 | flattener | ungroup | 2018.2 | 191.2 |
+| layer1 | flattener | rects | 244.1 | 128.8 |
+| layer1 | flattener | fonts | 167.3 | 3.4 |
+| layer1 | flattener | text | 1087.9 | 223.3 |
+| layer1 | flattener | fonts | 0.4 | 0.3 |
+| layer1 | flattener | bbox | 1170.2 | 226.7 |
+| layer1 | flattener | dedup | 532.8 | 37.7 |
+| layer1 | flattener | whiterects | 542.0 | 2.4 |
+| layer1 | flattener | cleanup | 96.3 | 13.3 |
+| layer1 | flattener | write | 115.0 | 84.5 |
+| layer1 | flattener | total | 6129.1 | 1034.2 |
+| figure_1-3 | homogenizer | parse | 58.0 | 51.3 |
+| figure_1-3 | homogenizer | selection | 1.3 | 0.5 |
+| figure_1-3 | homogenizer | fonts | 173.9 | 3.7 |
+| figure_1-3 | homogenizer | fontsize | 225.6 | 14.4 |
+| figure_1-3 | homogenizer | fonts | 0.4 | 0.3 |
+| figure_1-3 | homogenizer | recentre | 19.5 | 7.3 |
+| figure_1-3 | homogenizer | cleanup | 0.1 | 0.0 |
+| figure_1-3 | homogenizer | write | 80.9 | 61.0 |
+| figure_1-3 | homogenizer | total | 385.5 | 134.6 |
+| layer1 | homogenizer | parse | 58.1 | 52.8 |
+| layer1 | homogenizer | selection | 2.6 | 1.5 |
+| layer1 | homogenizer | fonts | 159.5 | 3.5 |
+| layer1 | homogenizer | fontsize | 1754.6 | 228.9 |
+| layer1 | homogenizer | fonts | 0.3 | 0.4 |
+| layer1 | homogenizer | recentre | 529.8 | 123.2 |
+| layer1 | homogenizer | cleanup | 0.1 | 0.0 |
+| layer1 | homogenizer | write | 81.6 | 64.7 |
+| layer1 | homogenizer | total | 2426.8 | 471.3 |
+| - | about | parse | 60.2 | 51.1 |
+| - | about | fonts | 172.9 | 3.5 |
+| - | about | fonts | 173.0 | 3.6 |
+| - | about | total | 234.8 | 56.3 |
+
+Notes on the table above: `bbox phase=…table_texts=` measured 156 (figure_1-3), 39 (g660), 735 (g9740),
+5078 (layer1) — the figure_1-3 and g660 figures match the Task 7 ruling exactly (156 and 39). Homogenizer
+`fontsize`/`recentre` measured `tels=154` (figure_1-3) and `tels=5039` (layer1). About `phase=fonts`:
+ms=3, faces=1022 (was ms=173, faces=1022 in Appendix A — same face count, cache warm).
+
+### Totals summary (speedup)
+
+| selection | tool | before total ms | after total ms | speedup |
+|---|---|---|---|---|
+| figure_1-3 | flattener | 1072.2 | 212.4 | ≈5.0× |
+| g660 | flattener | 890.8 | 192.3 | ≈4.6× |
+| g9740 | flattener | 919.4 | 189.6 | ≈4.8× |
+| layer1 | flattener | 6129.1 | 1034.2 | ≈5.9× |
+| figure_1-3 | homogenizer | 385.5 | 134.6 | ≈2.9× |
+| layer1 | homogenizer | 2426.8 | 471.3 | ≈5.2× |
+| - | about | 234.8 | 56.3 | ≈4.2× |
+
+### Font start (cold vs warm)
+
+Dedicated measurement, separate from the matrix above: removed
+`<TMPDIR>/sciink-<user>/fontcache-1.tsv` (on this machine,
+`/var/folders/6h/dzlbdtr909b4t0tk4ggwdznc0000gp/T/sciink-yzheng/fontcache-1.tsv`, since
+`INKSCAPE_PROFILE_DIR` is unset outside Inkscape), then ran
+`target/release/sciink --tool=about tests/data/edge/simple.svg 2>&1 >/dev/null | grep -E 'fonts:|bundled fonts:'`
+twice:
+
+```
+cold: fonts: 1022 faces in 287 ms      (scan + cache write)
+      bundled fonts: not found
+warm: fonts: 1022 faces in 18 ms       (cache read)
+      bundled fonts: not found
+```
+
+`bundled fonts: not found` is expected here: `target/release/sciink` run directly has no `fonts/`
+directory beside the executable (that only exists inside the packaged extension layout produced by
+`dist/package.sh`, verified separately in Step 4 below). Warm font start 18 ms ≤ the 30 ms budget.
+
+### Acceptance targets (plan Step 1)
+
+| target | budget | measured | result |
+|---|---|---|---|
+| `phase=total`, flattener, `--id=figure_1-3` | ≤ 400 ms | 212.4 ms | MET |
+| `phase=total`, flattener, `--id=g660` | ≤ 400 ms | 192.3 ms | MET |
+| `phase=total`, flattener, `--id=layer1` | ≤ 2 500 ms | 1034.2 ms | MET |
+| Homogenizer, `--id=figure_1-3` | ≤ 300 ms | 134.6 ms | MET |
+| warm font start (`fonts:` line of `--tool=about`) | ≤ 30 ms | 18 ms | MET |
+
+All five budgets are met. No phase named a budget miss, so none of the Step 1 follow-up candidates
+(memoising `Doc::transform`/`composed_transform`, `matches!` tag predicates in `ops::bbox`, a
+`shape_path` cache in `remove_duplicates`, Task 10) were implemented — consistent with the plan's
+"do none of these speculatively" instruction.
+
+### Task 10 decision
+
+Trigger: execute Task 10 only if `phase=text` on `--id=layer1` exceeds 1 100 ms after Task 9. The
+fresh measurement above (Before/after table, `layer1 | flattener | text`) is **223.3 ms**, well under
+the 1 100 ms trigger (it was 402 ms after Task 8, per the ledger; Task 9 does not touch the text phase
+and the number fell further, plausibly from cumulative effects of Tasks 3–6 and 11 on the shared DOM/
+selection/write paths). Task 10 is confirmed **not executed**; the plan's `### Task 10` heading is
+marked `(not executed: text phase was 223.3 ms)`.
+
+### Corrections carried from execution (not written into the Task bodies)
+
+Per the controller's ledger, four Task N briefs had defects discovered and fixed during
+implementation; the corrections are not retrofitted into those Task sections above (per Global
+Constraints) and are instead recorded here, alongside the fresh numbers that confirm them:
+
+- **Task 9** (non-finite-box window proof): the plan's window proof for the grid sweep was
+  incomplete for non-finite coordinates — see the Task 9 ruling below for the exact reasoning
+  (`1e-6·inf = inf`, `inf <= inf` holds). The implementer's fix (non-finite boxes stay candidates in
+  both roles) is unchanged by this task; `dedup`/`whiterects` numbers above (e.g. layer1: 532.8→37.7 ms
+  and 542.0→2.4 ms) reflect the corrected behaviour.
+- **Task 15** (`BigDoc` generator and assertion changes): three plan defects in the synthetic-document
+  generator and its invariant assertions were found and fixed (duplicate-path style reuse and the
+  100×80 cell containment; clip-rect coordinates and the single-outermost-group `clip-path`; the
+  "element count strictly drops" proxy replaced by specific structural assertions). See the three
+  Task 15 rulings below.
+- **Task 7** (`table_texts`): the plan's done-when line said `table_texts=154`; the measured value is
+  **156** for figure_1-3, confirmed again in the Before/after table above (`bbox` row, figure_1-3) and
+  by this run's g660 figure of 39 (also matching the Task 7 ruling).
+  The 154 vs. 156 gap is the plan's estimate versus the measured, verified value; 156 is correct.
+- **Task 8** (return-count of `write_clean_text`): the plan expected 1001; the verified count is
+  **1002** (1000 unmerged siblings + the rewritten `outer` + one split-off; the old `outer`/`inner`
+  NodeIds are not returned). See the two Task 8 rulings below for the full reasoning.
+
+### Rulings mirrored from execution
+
+One bullet per `Ruling:` line in `.superpowers/sdd/2026-09-23-plan9-big-documents/progress.md`
+(Task 1 through Task 15), verbatim, with the `Task N:` prefix trimmed into a label (the two
+pre-flight rulings predate Task 1 and carry no task number):
+
+- **Pre-flight:** Ruling: test-only verbatim copies of replaced implementations (`escape_*_ref`,
+  `duplicate_scan_ref`, `background_scan_ref`, the external_merges golden) are required by the plan's
+  Global Constraints as the comparison oracle — a reviewer flagging them as duplication is adjudicated
+  against this ruling, not fixed — costs nothing if wrong beyond ~150 lines of test code.
+- **Pre-flight:** Ruling: the plan's `<before>`/`<after>` placeholders in commit messages are to be
+  filled with the measured numbers by the implementer, not left literal — a commit with a literal
+  placeholder is a review finding — costs a reworded commit if wrong.
+- **Task 1:** Ruling: keep the debug-tool timers (parse/write/total) — the plan's File Structure row
+  says every tool emits phases and the dispatch asked for it explicitly; harmless log lines — costs
+  three trivial hunks to revert if wrong.
+- **Task 1:** second sonnet reviewer stalled the same way. Ruling: switch every task review in this
+  plan to the bounded checklist method (fixed YES/NO items with file:line evidence, no hand-tracing,
+  at most one focused test), haiku first — the Plan 5 lesson; a sonnet free-form review of a 40 KB
+  diff stalls — costs a coarser review per task, offset by the opus whole-branch review at the end.
+- **Task 1:** checklist review returned in 70 s: 14/14 YES, Spec compliance PASS, Task quality
+  Approved, no findings. Ruling: every review package is copied to `review-taskN.diff` (or
+  `review-taskN-fixR.diff`) before dispatch — three reviewers stalled on the `..`-named path and none
+  on the plain name — costs one `cp` per review.
+- **Task 2:** Ruling: implementer's `rm -f` between runs instead of `tail -n 14` accepted — each run
+  emits 16 phase lines (fonts + defsmove), so the brief's tail would have dropped parse/selection; the
+  plan's Step 1 command is documentation, the appendix is the deliverable — costs nothing.
+- **Task 3:** Ruling: the brief's "done when write ≤ 60 ms (from ≈ 250)" is not met because the
+  design's 250 ms estimate was wrong — the measured baseline was 81 ms; the change is correct and
+  byte-identical, a 15 % gain; accepted, no SWAR follow-up unless Task 16 shows write on the critical
+  path — costs ~10 ms per run on a 50 MB file if wrong.
+- **Task 3:** review 10/11 YES; one Important finding: commit trailer read "Claude Haiku 4.5"
+  (implementers substitute their own model name). Ruling: controller amends the trailer on unpushed
+  task commits (message-only, code untouched) instead of a fix round — costs nothing; every dispatch
+  now states the trailer verbatim with "do not substitute your model name", and the review checklist
+  keeps the trailer item.
+- **Task 5:** implemented — DONE, commit b93a4e1, 320 tests, trailer correct. ungroup layer1 2018 →
+  253 ms (8×), figure_1-3 181 → 22 ms; implementer byte-diffed (SHA-256) flattener+homogenizer output
+  on the 50 MB doc pre/post: identical. Ruling: the clippy-driven removal of a no-op `format!` in the
+  brief's cleanup test is accepted (assertions unchanged) — costs nothing.
+- **Task 6:** review 11/12 YES; the one NO (item 10, commit body not visible in the package) is a
+  false positive — the controller verified the full message (numbers 252.9 -> 202.3 ms, Fable
+  trailer) with /usr/bin/git log before the review. Ruling: closed as not-a-defect; the commit-message
+  item leaves the reviewer checklist (the controller checks it) — costs nothing.
+- **Task 7:** Ruling: 156 texts in figure_1-3's bbox set is the measured value; the plan's
+  "table_texts=154" done-when line is read as "the figure's own texts, not the document's 5 039" —
+  costs nothing.
+- **Task 8:** Ruling: the plan's 1001 assumed `outer` gets rewritten (detaching `inner`); 1002 means
+  neither is edited (a `<text>` nested in a `<text>` is presumably not parsed). The implementer must
+  verify and pin the reason in the test (outer unchanged, inner still its child) — the count follows
+  the verified facts, not the other way round; the missing guard run is accepted (the test is a
+  behaviour test, passing after the change) — costs one small commit.
+- **Task 8:** Ruling: the plan's 1001 expected the split-distant option not to split any of the test
+  texts; one does split, so 1002 is the true count; the test's factual assertions (inner not returned)
+  are what matters — costs nothing.
+- **Task 9:** Ruling: the implementer's overflow list for non-finite boxes is correct and the plan's
+  window proof was incomplete — an infinite coordinate makes the reference's tolerance `1e-6·inf = inf`
+  and `inf <= inf` holds, so such a box equals almost every other; non-finite boxes must stay
+  candidates in both roles (the degenerate-box property test caught it). Plan proof gets a correction
+  note at Task 16 — costs nothing.
+- **Task 9:** Ruling: the per-case `!a.is_empty()` sanity check in the random-box test was over-strict
+  (12/200 seed-42 cases legitimately remove nothing, by the reference's own behaviour); an aggregate
+  guard is right but `total_removed > 0` is too weak → pre-review fix: `cases_with_removals >= 150`
+  (188 observed). Equivalence assertions untouched — costs nothing.
+- **Task 10:** Ruling: not executed — its trigger (text phase on layer1 > 1 100 ms after Task 9) is
+  not met (402 ms after Task 8; Task 9 does not touch the text phase); Task 16 re-checks the number
+  and marks the plan section "(not executed: text phase was <n> ms)" — costs a later small task if the
+  final numbers disagree.
+- **Task 12:** implemented — DONE, commit 7350f70, 342 tests, trailer correct. fonts: cold 247 ms
+  (scan + cache write) → warm 8 ms. Ruling: the two literal deviations (kept `scan_count()`,
+  `path.clone()` in the fontdb literal) are accepted — the brief's snippet omitted a function tests
+  still need, and the clone is the compiling form — costs nothing.
+- **Task 13:** implemented — DONE, commit 155adc8, 344 tests, PACKAGE-OK, trailer correct; live check
+  on this Mac: `DejaVu Sans → DejaVu Sans (DejaVuSans.ttf) [bundled]`, opt-out falls back to Verdana.
+  Ruling: the brief's Step 2 command (two positional test filters) was invalid cargo syntax — the
+  implementer's compile check is the equivalent; the stale DEVELOPING Known-gaps bullet belongs to
+  Task 14 (the implementer's spawned follow-up chip task_fb3c1372 was dismissed as redundant) — costs
+  nothing.
+- **Task 14:** implemented — DONE, commit f4e02cb, 347 tests, trailer correct. Ruling: the brief's two
+  ops_bbox tests needed `&mut d` and `r##"…"##` to compile — accepted as transcription fixes
+  (assertions unchanged); CHANGELOG/doc wording where the brief gave topics is the implementer's —
+  costs nothing.
+- **Task 15:** Ruling: plan defects, fixed in the test design — (a) the fig7 `assert_ne!` is replaced
+  by "fig7's group was dissolved" (deep ungroup dissolves the selected group, as tests/flattener.rs:228
+  already pins); (b) `BigDoc::svg` must make the duplicate path reuse the previous style too (else no
+  duplicates), and keep shapes, clones and labels inside their 100 × 80 cell (else earlier figures'
+  spill keeps later backgrounds); the count-drops assertion stays and gains "no bg* remains" and "no
+  fig* group remains" — costs nothing; Task 16 mirrors this into the plan appendix.
+- **Task 15:** Ruling: another brief defect — clip rects go to local figure coordinates (0,0,fw,fh)
+  and `clip-path` is applied on the outermost nested group only; count assertion unchanged — costs
+  nothing; mirrored at Task 16.
+- **Task 15:** Ruling: the brief's "element count strictly drops" was a wrong proxy — replaced by the
+  specific effects: no fig* groups, no bg* rects, no <use>, paths_after == paths_before −
+  (shapes/5)·figures + clones·figures; total count not asserted (comment explains the clipPath
+  copies) — costs nothing; mirrored at Task 16.
+- **Task 15:** implemented — DONE after 3 pre-review rounds, commit cc93f04, 351 passed + 8 ignored
+  (bench), trailer correct. Path arithmetic 3001 − 600 + 500 = 2901 held exactly. Ruling: four tests in
+  big_document.rs (the fifth in the brief's list, the T7 character-table test, already lives in
+  tests/flattener.rs) — costs nothing.
 

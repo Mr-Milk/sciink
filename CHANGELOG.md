@@ -2,9 +2,26 @@
 
 ## 0.2.0 (unreleased)
 
+Large documents no longer freeze Inkscape for our part of the run. On a 52 MB, 62 000-element
+manuscript the Flattener went from 1.1 s to 212 ms on one figure and from 6.1 s to 1.0 s on the
+whole layer (Homogenizer: 386 ms → 135 ms); Inkscape's own save/reload of such a file is unchanged
+and documented in `docs/DEVELOPING.md`.
+
+- Flattener: the character table covers only the measured elements (upstream parity; it measured
+  every text in the document); duplicate and white-rectangle removal use index sweeps instead of
+  all-pairs tests; the nested-text check in kerning removal is linear.
+- Style cascade: universal `*{…}` rules are pre-merged per stylesheet; declarations are no longer
+  cloned per node; `clip-path`/`mask` sheet lookups short-circuit.
+- DOM: a move re-indexes nothing; identical attribute writes are skipped; the writer copies attribute
+  values in bulk and pre-sizes its buffer.
+- Fonts: the scan is cached on disk (`fontcache-1.tsv`; ≈ 3 s → tens of ms after boot); DejaVu Sans
+  (Book, Bold) is bundled as the matplotlib fallback, an installed copy takes precedence; Diagnostics
+  and Font Probe show `[bundled]`.
 - Live preview turned off on every tool (`needs-live-preview="false"`, matching upstream); a live
   preview re-ran the tool and reloaded the document on every keystroke, which is what froze Inkscape
   on large files.
+- `SCIINK_LOG` records one line per phase with its duration; new switches `SCIINK_NO_FONT_CACHE`,
+  `SCIINK_FONT_CACHE`, `SCIINK_NO_BUNDLED_FONTS`.
 - CI and release runners pinned to `ubuntu-24.04` instead of the rolling `ubuntu-latest`, so a GitHub
   Actions image change can no longer break a build or silently drop the Linux release asset.
 - Corrected the `<use>`-inside-`clipPath` known gap: the missing box was a dangling `href` (upstream

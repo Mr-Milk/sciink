@@ -9,7 +9,7 @@ fn version_flag_prints_name_and_version() {
     let out = bin().arg("--version").output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.starts_with("sciink 0.1.0"), "got: {stdout}");
+    assert!(stdout.starts_with("sciink 0.2.0"), "got: {stdout}");
 }
 
 use std::io::Write;
@@ -34,7 +34,7 @@ fn about_echoes_document_and_reports_on_stderr() {
     assert!(out.status.success());
     assert_eq!(out.stdout, SIMPLE.as_bytes());
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("sciink 0.1.0"), "{err}");
+    assert!(err.contains("sciink 0.2.0"), "{err}");
     assert!(
         err.contains("document: 3 elements (1 text, 1 path)"),
         "{err}"
