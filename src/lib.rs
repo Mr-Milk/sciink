@@ -45,7 +45,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         "flattener" => tools::flattener::run(argv, input),
         "scaler" => tools::scaler::run(argv, input),
         "homogenizer" => tools::homogenizer::run(argv, input),
-        "favorite-markers" => Err(format!("the {tool} tool is not implemented yet")),
+        "favorite-markers" => tools::favorite_markers::run(argv, input),
         other => Err(format!("unknown tool '{other}'")),
     }
 }

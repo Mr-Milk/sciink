@@ -5,17 +5,14 @@ use std::path::PathBuf;
 
 use sciink::tools::favorite_markers::{MarkerData, Store, Template, store_path};
 
-#[allow(dead_code)]
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\"";
 
-#[allow(dead_code)]
 fn args(v: &[&str]) -> Vec<OsString> {
     std::iter::once("sciink")
         .chain(v.iter().copied())
         .map(OsString::from)
         .collect()
 }
-#[allow(dead_code)]
 fn by_id<'a, 'i>(d: &'a roxmltree::Document<'i>, id: &str) -> roxmltree::Node<'a, 'i> {
     d.descendants()
         .find(|n| n.attribute("id") == Some(id))
@@ -207,4 +204,327 @@ fn store_path_prefers_the_override() {
     let p = PathBuf::from("/tmp/x/fm.svg");
     assert_eq!(store_path(Some(&p)), p);
     assert!(store_path(None).ends_with("favorite_markers.svg"));
+}
+
+fn fm(svg: &str, store: &std::path::Path, extra: &[&str]) -> Result<(String, Vec<String>), String> {
+    let store = format!("--store={}", store.display());
+    let mut a = vec!["--tool=favorite-markers", store.as_str()];
+    a.extend(extra);
+    let out = sciink::run(&args(&a), svg.as_bytes())?;
+    Ok((String::from_utf8(out.svg).unwrap(), out.messages))
+}
+fn ok(svg: &str, store: &std::path::Path, extra: &[&str]) -> (String, Vec<String>) {
+    fm(svg, store, extra).unwrap_or_else(|e| panic!("favorite-markers failed: {e}"))
+}
+fn style_of(n: roxmltree::Node) -> sciink::style::Style {
+    n.attribute("style")
+        .map(sciink::style::Style::parse)
+        .unwrap_or_default()
+}
+fn markers<'a, 'i>(d: &'a roxmltree::Document<'i>) -> Vec<roxmltree::Node<'a, 'i>> {
+    d.descendants()
+        .filter(|n| n.has_tag_name("marker"))
+        .collect()
+}
+const SHAPES: &str = r##"<g id="g"><path id="p" d="M0,0 L10,0" style="fill:none;stroke:#000"/><rect id="r" x="0" y="5" width="4" height="4" style="stroke:#000;marker-mid:url(#old)"/><text id="t" style="font-size:4px">no markers</text></g><line id="l" x1="0" y1="20" x2="10" y2="20" style="stroke:#00f"/>"##;
+
+#[test]
+fn apply_creates_one_marker_per_position_and_size_and_reuses_it() {
+    let store = tmp_store("apply");
+    let _ = std::fs::remove_file(&store);
+    let svg = format!(r#"<svg {NS}>{SHAPES}</svg>"#);
+    // Triangle (index 1), start + end, size 100
+    let (s, msgs) = ok(
+        &svg,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=1",
+            "--smarker=true",
+            "--emarker=true",
+            "--id=g",
+            "--id=l",
+        ],
+    );
+    assert!(msgs.is_empty(), "{msgs:?}");
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let mk = markers(&d);
+    assert_eq!(
+        mk.len(),
+        2,
+        "one start and one end marker, shared by the three shapes"
+    );
+    let start = mk
+        .iter()
+        .find(|m| m.attribute("id").unwrap().contains("FMTrianglestart"))
+        .unwrap();
+    let end = mk
+        .iter()
+        .find(|m| m.attribute("id").unwrap().contains("FMTriangleend"))
+        .unwrap();
+    assert_eq!(
+        start.attribute(("http://www.inkscape.org/namespaces/inkscape", "stockid")),
+        Some("TriangleInM")
+    );
+    assert_eq!(start.attribute("orient"), Some("auto"));
+    assert_eq!(
+        start.parent().unwrap().tag_name().name(),
+        "defs",
+        "markers live in the root defs"
+    );
+    let g = start.first_element_child().unwrap();
+    assert_eq!(g.tag_name().name(), "g");
+    assert_eq!(
+        g.attribute("transform"),
+        None,
+        "size 100 % is the identity: no attribute"
+    );
+    let p = g.first_element_child().unwrap();
+    assert_eq!(p.attribute("transform"), Some("scale(-0.4, -0.4)"));
+    assert_eq!(
+        p.attribute("d"),
+        Some("M 5.77,0.0 L -2.88,5.0 L -2.88,-5.0 L 5.77,0.0 z ")
+    );
+    for id in ["p", "r", "l"] {
+        let st = style_of(by_id(&d, id));
+        assert_eq!(
+            st.get("marker-start"),
+            Some(format!("url(#{})", start.attribute("id").unwrap()).as_str()),
+            "{id}"
+        );
+        assert_eq!(
+            st.get("marker-end"),
+            Some(format!("url(#{})", end.attribute("id").unwrap()).as_str()),
+            "{id}"
+        );
+        assert_eq!(
+            st.get("marker-mid"),
+            None,
+            "{id}: an unchecked position is removed"
+        );
+    }
+    assert_eq!(
+        style_of(by_id(&d, "t")).get("marker-start"),
+        None,
+        "text takes no markers"
+    );
+    // a second run at 50 % adds new markers with the scale; a third run at 50 % reuses them
+    let (s2, _) = ok(
+        &s,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=1",
+            "--smarker=true",
+            "--size=50",
+            "--id=p",
+        ],
+    );
+    let d2 = roxmltree::Document::parse(&s2).unwrap();
+    assert_eq!(markers(&d2).len(), 3);
+    let half = markers(&d2)
+        .into_iter()
+        .find(|m| {
+            m.first_element_child()
+                .unwrap()
+                .attribute("transform")
+                .is_some()
+        })
+        .unwrap();
+    assert_eq!(
+        half.first_element_child().unwrap().attribute("transform"),
+        Some("scale(0.5,0.5)")
+    );
+    assert_eq!(
+        style_of(by_id(&d2, "p")).get("marker-start"),
+        Some(format!("url(#{})", half.attribute("id").unwrap()).as_str())
+    );
+    assert_eq!(
+        style_of(by_id(&d2, "p")).get("marker-end"),
+        None,
+        "end unchecked this time: removed"
+    );
+    let (s3, _) = ok(
+        &s2,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=1",
+            "--smarker=true",
+            "--size=50",
+            "--id=r",
+        ],
+    );
+    assert_eq!(
+        markers(&roxmltree::Document::parse(&s3).unwrap()).len(),
+        3,
+        "reused"
+    );
+    // an empty selection is a message, not an error
+    let (_, msgs) = ok(&svg, &store, &["--tab=markers", "--template=0"]);
+    assert_eq!(msgs, vec!["favorite-markers: nothing selected".to_string()]);
+}
+
+#[test]
+fn template_selection_and_errors() {
+    let store = tmp_store("errors");
+    let _ = std::fs::remove_file(&store);
+    let svg = format!(r#"<svg {NS}>{SHAPES}</svg>"#);
+    let e = fm(
+        &svg,
+        &store,
+        &["--tab=markers", "--template=3", "--smarker=true", "--id=p"],
+    )
+    .unwrap_err();
+    assert!(e.contains("template name"), "custom without a name: {e}");
+    let e = fm(
+        &svg,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=3",
+            "--custom_name=Nope",
+            "--smarker=true",
+            "--id=p",
+        ],
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("'Nope'") && e.contains("Arrow, Triangle, Distance"),
+        "{e}"
+    );
+    let e = fm(
+        &svg,
+        &store,
+        &["--tab=markers", "--template=7", "--smarker=true", "--id=p"],
+    )
+    .unwrap_err();
+    assert!(e.contains("template"), "{e}");
+    // Arrow (0) and Distance (2) resolve to the built-ins; Distance start has three paths
+    let (s, _) = ok(
+        &svg,
+        &store,
+        &["--tab=markers", "--template=2", "--smarker=true", "--id=p"],
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let mk = &markers(&d)[0];
+    assert!(mk.attribute("id").unwrap().starts_with("FMDistancestart"));
+    assert_eq!(
+        mk.first_element_child()
+            .unwrap()
+            .children()
+            .filter(|c| c.has_tag_name("path"))
+            .count(),
+        3
+    );
+    let e = fm(
+        &svg,
+        &store,
+        &[
+            "--tab=addremove",
+            "--addt=true",
+            "--template_name=X",
+            "--id=t",
+        ],
+    )
+    .unwrap_err();
+    assert!(e.contains("Select a path"), "{e}");
+    let e = fm(&svg, &store, &["--tab=addremove", "--addt=true", "--id=p"]).unwrap_err();
+    assert!(e.contains("name"), "{e}");
+}
+
+#[test]
+fn add_remove_and_list_round_trip_through_the_store() {
+    let store = tmp_store("addremove");
+    let _ = std::fs::remove_file(&store);
+    let svg = format!(
+        r##"<svg {NS}><defs><marker id="m1" orient="auto" refX="1"><g transform="scale(2)"><path id="mp" d="M0,0 L1,1" style="fill:#f00"/></g></marker><marker id="m2"><path d="M0,0 h2"/><rect width="1" height="1"/></marker></defs><path id="p" d="M0,0 L10,0" style="stroke:#000;marker-start:url(#m1);marker-end:url(#m2)"/></svg>"##
+    );
+    let (s, msgs) = ok(
+        &svg,
+        &store,
+        &[
+            "--tab=addremove",
+            "--addt=true",
+            "--template_name= My Arrows ",
+            "--id=p",
+        ],
+    );
+    assert_eq!(msgs, vec!["Templates successfully updated!".to_string()]);
+    assert_eq!(s, svg, "the add/remove page never edits the document");
+    let st = Store::load(&store).unwrap();
+    assert_eq!(
+        st.templates().last().map(String::as_str),
+        Some("My Arrows"),
+        "trimmed"
+    );
+    let t = st.get("My Arrows").unwrap();
+    assert_eq!(
+        t[0].as_ref().unwrap().attrs,
+        kv(&[("orient", "auto"), ("refX", "1")])
+    );
+    assert_eq!(
+        t[0].as_ref().unwrap().paths,
+        vec![kv(&[("d", "M0,0 L1,1"), ("style", "fill:#f00")])],
+        "paths from the first-child group, ids dropped"
+    );
+    assert!(t[1].is_none(), "no mid marker on the source");
+    assert_eq!(
+        t[2].as_ref().unwrap().paths,
+        vec![kv(&[("d", "M0,0 h2")])],
+        "paths directly under the marker; the rect is not a path"
+    );
+    // apply the new template elsewhere: custom name, whitespace removed from the marker id
+    let target = format!(r#"<svg {NS}><path id="q" d="M0,0 L5,5" style="stroke:#000"/></svg>"#);
+    let (s2, _) = ok(
+        &target,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=3",
+            "--custom_name=My Arrows",
+            "--smarker=true",
+            "--size=200",
+            "--id=q",
+        ],
+    );
+    let d = roxmltree::Document::parse(&s2).unwrap();
+    let mk = &markers(&d)[0];
+    assert!(
+        mk.attribute("id").unwrap().starts_with("FMMyArrowsstart"),
+        "{}",
+        mk.attribute("id").unwrap()
+    );
+    assert_eq!(mk.attribute("refX"), Some("1"));
+    assert_eq!(
+        mk.first_element_child().unwrap().attribute("transform"),
+        Some("scale(2,2)")
+    );
+    // list, remove, remove again
+    let (_, msgs) = ok(&svg, &store, &["--tab=addremove", "--list=true"]);
+    assert_eq!(
+        msgs,
+        vec![
+            "favorite-markers: stored templates: Arrow, Triangle, Distance, My Arrows".to_string()
+        ]
+    );
+    let (_, msgs) = ok(
+        &svg,
+        &store,
+        &["--tab=addremove", "--remt=true", "--template_rem=My Arrows"],
+    );
+    assert_eq!(msgs, vec!["Templates successfully updated!".to_string()]);
+    assert!(Store::load(&store).unwrap().get("My Arrows").is_none());
+    let (_, msgs) = ok(
+        &svg,
+        &store,
+        &["--tab=addremove", "--remt=true", "--template_rem=My Arrows"],
+    );
+    assert_eq!(msgs.len(), 2, "{msgs:?}");
+    assert!(
+        msgs[0].starts_with("warning: ") && msgs[0].contains("My Arrows"),
+        "{}",
+        msgs[0]
+    );
+    std::fs::remove_file(&store).unwrap();
 }

@@ -2,9 +2,19 @@
 //! templates to the selected shapes, store the selection's markers as a template, remove one.
 //! The store is a small SVG document (see `BUILTINS`) — no JSON, no self-modifying `.inx`.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use clap::Parser;
+
+use crate::Output;
+use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
+use crate::geom::Affine;
+use crate::ops::cleanup::url_id;
+use crate::ops::style::remove_inline;
+
+use super::first_line;
 
 pub const TEMPLATE_ATTR: &str = "sciink:template";
 pub const POSITION_ATTR: &str = "sciink:position";
@@ -202,4 +212,230 @@ pub fn store_path(override_: Option<&Path>) -> PathBuf {
             .join("favorite_markers.svg");
     }
     crate::paths::inx_dir().join("favorite_markers.svg")
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "sciink", disable_help_flag = true, disable_version_flag = true)]
+pub struct FavoriteMarkersCli {
+    #[command(flatten)]
+    pub common: Common,
+    /// `markers` | `addremove`
+    #[arg(long, default_value = "markers")]
+    pub tab: String,
+    /// 0 Arrow, 1 Triangle, 2 Distance, 3 the custom name below (upstream's argparse default is 1)
+    #[arg(long, default_value_t = 1)]
+    pub template: u8,
+    #[arg(long = "custom_name", default_value = "")]
+    pub custom_name: String,
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub smarker: bool,
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub mmarker: bool,
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub emarker: bool,
+    /// Percent
+    #[arg(long, default_value_t = 100.0)]
+    pub size: f64,
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub addt: bool,
+    #[arg(long = "template_name", default_value = "")]
+    pub template_name: String,
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub remt: bool,
+    /// The name to remove (upstream: an index into a self-rewritten dropdown)
+    #[arg(long = "template_rem", default_value = "")]
+    pub template_rem: String,
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub list: bool,
+    /// Store file (tests; default `store_path(None)`).
+    #[arg(long, hide = true)]
+    pub store: Option<PathBuf>,
+}
+
+/// `FM:290–313`: the marker a `marker-*` value points at, as template data; `None` for `none`,
+/// an empty value, a missing marker or a marker without children.
+pub fn marker_props(doc: &Doc, murl: Option<&str>) -> Option<MarkerData> {
+    let id = url_id(murl?.trim())?;
+    let mk = doc.by_id(id)?;
+    let first = doc.children(mk).find(|&c| doc.is_element(c))?;
+    let parent = if doc.tag(first) == "g" { first } else { mk };
+    let paths = doc
+        .children(parent)
+        .filter(|&k| doc.is_element(k) && doc.tag(k) == "path")
+        .map(|k| attrs_of(doc, k, &["id"]))
+        .collect();
+    Some(MarkerData {
+        attrs: attrs_of(doc, mk, &["id"]),
+        paths,
+    })
+}
+
+/// `FM:317–350`: the id of a marker named `name` (whitespace removed) at scale `s` under the root
+/// `<defs>` — an existing one whose first child `<g>` has that scale, else a new one.
+pub fn ensure_marker(doc: &mut Doc, name: &str, m: &MarkerData, s: f64) -> String {
+    let name: String = name.chars().filter(|c| !c.is_whitespace()).collect();
+    let defs = doc.defs();
+    let candidates: Vec<NodeId> = doc
+        .descendants(defs)
+        .filter(|&n| {
+            doc.is_element(n)
+                && doc.tag(n) == "marker"
+                && doc.attr(n, "id").is_some_and(|i| i.contains(&name))
+        })
+        .collect();
+    for mk in candidates {
+        let Some(g) = doc.children(mk).find(|&c| doc.is_element(c)) else {
+            continue;
+        };
+        if doc.tag(g) != "g" {
+            continue;
+        }
+        let [a, _, _, d, _, _] = doc.transform(g).as_coeffs();
+        if (a - s).abs() < 0.01 && (d - s).abs() < 0.01 {
+            return doc.attr(mk, "id").unwrap_or_default().to_string();
+        }
+    }
+    let mk = doc.new_element("marker");
+    for (k, v) in &m.attrs {
+        if k != "id" {
+            doc.set_attr(mk, k, v.clone());
+        }
+    }
+    let g = doc.new_element("g");
+    doc.append_child(mk, g);
+    doc.set_transform(g, Affine::scale(s));
+    for p in &m.paths {
+        let pe = doc.new_element("path");
+        for (k, v) in p {
+            if k != "id" {
+                doc.set_attr(pe, k, v.clone());
+            }
+        }
+        doc.append_child(g, pe);
+    }
+    doc.append_child(defs, mk);
+    let id = doc.new_id(&name);
+    doc.set_attr(mk, "id", id.clone());
+    id
+}
+
+/// `FM:446–472` over `shapes`: checked positions get the template's marker, unchecked ones lose
+/// their inline `marker-*`.
+pub fn apply(
+    doc: &mut Doc,
+    store: &Store,
+    shapes: &[NodeId],
+    tname: &str,
+    flags: [bool; 3],
+    size: f64,
+) -> Result<(), String> {
+    let t = store.get(tname).ok_or_else(|| {
+        format!(
+            "Template '{tname}' is not stored. Stored templates: {}",
+            store.templates().join(", ")
+        )
+    })?;
+    let s = size / 100.0;
+    for &el in shapes {
+        for (i, pos) in POSITIONS.iter().enumerate() {
+            let prop = format!("marker-{pos}");
+            match (flags[i], &t[i]) {
+                (true, Some(m)) => {
+                    let id = ensure_marker(doc, &format!("FM{tname}{pos}"), m, s);
+                    doc.set_style(el, &prop, &format!("url(#{id})"));
+                }
+                _ => remove_inline(doc, el, &prop),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The template the Markers page selects: three fixed built-in names or the custom name.
+pub fn template_name(cli: &FavoriteMarkersCli) -> Result<String, String> {
+    match cli.template {
+        0 => Ok("Arrow".to_string()),
+        1 => Ok("Triangle".to_string()),
+        2 => Ok("Distance".to_string()),
+        3 => {
+            let n = cli.custom_name.trim();
+            if n.is_empty() {
+                Err("Custom template selected: type its template name in the box below the template list.".to_string())
+            } else {
+                Ok(n.to_string())
+            }
+        }
+        other => Err(format!("unknown template option {other} (0–3)")),
+    }
+}
+
+pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
+    let cli = FavoriteMarkersCli::try_parse_from(argv).map_err(first_line)?;
+    let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    let mut messages: Vec<String> = Vec::new();
+    let path = store_path(cli.store.as_deref());
+    let mut store = Store::load(&path)?;
+    // FM:368–370: the selection and its descendants, shapes only, each once
+    let mut shapes: Vec<NodeId> = Vec::new();
+    for r in doc.selection(&cli.common.ids) {
+        for n in doc
+            .descendants(r)
+            .filter(|&n| doc.is_element(n) && SHAPE_TAGS.contains(&doc.tag(n)))
+        {
+            if !shapes.contains(&n) {
+                shapes.push(n);
+            }
+        }
+    }
+    if cli.tab == "addremove" {
+        if cli.addt {
+            let name = cli.template_name.trim();
+            if name.is_empty() {
+                return Err("Give the new template a name.".to_string());
+            }
+            let Some(&first) = shapes.first() else {
+                return Err("Select a path whose markers should become the template.".to_string());
+            };
+            let sty = doc.specified_style(first);
+            let t: Template = [
+                marker_props(&doc, sty.get("marker-start")),
+                marker_props(&doc, sty.get("marker-mid")),
+                marker_props(&doc, sty.get("marker-end")),
+            ];
+            store.set(name, &t);
+        }
+        if cli.remt {
+            let name = cli.template_rem.trim();
+            if !store.remove(name) {
+                messages.push(format!(
+                    "warning: template '{name}' is not stored; nothing removed"
+                ));
+            }
+        }
+        if cli.addt || cli.remt {
+            store.save(&path)?;
+            messages.push("Templates successfully updated!".to_string());
+        }
+        if cli.list {
+            messages.push(format!(
+                "favorite-markers: stored templates: {}",
+                store.templates().join(", ")
+            ));
+        }
+    } else if shapes.is_empty() {
+        messages.push("favorite-markers: nothing selected".to_string());
+    } else {
+        let tname = template_name(&cli)?;
+        apply(
+            &mut doc,
+            &store,
+            &shapes,
+            &tname,
+            [cli.smarker, cli.mmarker, cli.emarker],
+            cli.size,
+        )?;
+    }
+    let mut svg = Vec::new();
+    doc.write(&mut svg);
+    Ok(Output { svg, messages })
 }
