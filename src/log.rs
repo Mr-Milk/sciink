@@ -45,7 +45,7 @@ pub fn line(msg: &str) {
 }
 
 /// Stopwatch that emits one `phase=` line per stage of a tool run. Costs one `Instant::now()`
-/// per phase when logging is off; `detail` is only evaluated when it is on.
+/// and one mutex probe per phase when logging is off; `detail` is only evaluated when it is on.
 pub struct Timer {
     tool: &'static str,
     t0: Instant,

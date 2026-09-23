@@ -234,7 +234,7 @@ impl FontSystem {
         let scan = scanned();
         let fs = Self::from_entries(scan.0.clone(), scan.1.clone(), t0);
         crate::log::line(&format!(
-            "phase=fonts ms={:.1} faces={} scans={} cache_hits={}",
+            "tool=fonts phase=scan dt={:.1} faces={} scans={} cache_hits={}",
             fs.load_ms,
             fs.infos.len(),
             scan_count(),
