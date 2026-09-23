@@ -783,3 +783,44 @@ fn duplicate_and_nested_selections_neither_panic_nor_leave_orphans() {
         "no glyph lost:\n{after}"
     );
 }
+
+#[test]
+fn a_thousand_sibling_texts_are_all_edited_and_a_nested_one_is_skipped() {
+    use sciink::text::kerning::{KerningOptions, remove_kerning};
+    let mut body = String::new();
+    for i in 0..1000 {
+        body.push_str(&format!(
+            r#"<text id="t{i}" x="{}" y="{}" style="{DV};font-size:4px">w{i} x</text>"#,
+            (i % 40) * 20,
+            (i / 40) * 8 + 5
+        ));
+    }
+    body.push_str(&format!(
+        r#"<text id="outer" x="0" y="300" style="{DV};font-size:4px">o<text id="inner" x="10" y="300">i</text></text>"#
+    ));
+    let svg = format!(r#"<svg {NS} width="900" height="400">{body}</svg>"#);
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let mut els: Vec<_> = (0..1000)
+        .map(|i| d.by_id(&format!("t{i}")).unwrap())
+        .collect();
+    els.push(d.by_id("outer").unwrap());
+    els.push(d.by_id("inner").unwrap());
+    let mut w = Warnings::default();
+    let t0 = std::time::Instant::now();
+    let out = remove_kerning(
+        &mut d,
+        &els,
+        &KerningOptions::from_inx(true, true, true, true, 1),
+        fonts(),
+        &mut w,
+    );
+    assert!(t0.elapsed().as_secs() < 20, "quadratic nested-text check");
+    // Current behavior: 1000 siblings + outer + inner all returned (inner still attached after rewrite)
+    assert_eq!(out.len(), 1002, "all elements returned");
+    let nested: Vec<&String> =
+        w.0.iter()
+            .filter(|m| m.contains("nested in another selected text"))
+            .collect();
+    assert_eq!(nested.len(), 1, "{:?}", w.0);
+    assert!(nested[0].contains("inner"), "{}", nested[0]);
+}
