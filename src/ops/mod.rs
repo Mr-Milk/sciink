@@ -94,6 +94,19 @@ impl Ctx {
         }
     }
 
+    /// Restricts the character table to the text under `roots`. Ignored once the table exists —
+    /// call it before the first measurement (the Flattener calls it with the bbox request set).
+    pub fn set_text_roots(&mut self, roots: Vec<NodeId>) {
+        if self.text.is_none() {
+            self.text_roots = Some(roots);
+        }
+    }
+
+    /// How many `<text>`/`<flowRoot>` elements the table covers; `None` before it is built.
+    pub fn char_table_els(&self) -> Option<usize> {
+        self.text.as_ref().map(|t| t.el_count())
+    }
+
     /// Builds the character table if it does not exist yet.
     pub fn ensure_char_table(&mut self, doc: &Doc) {
         if self.text.is_none() {

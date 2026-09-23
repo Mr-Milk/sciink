@@ -145,7 +145,7 @@ impl Options {
 }
 
 /// F:187–194: the Exclusions page sets (`True`) or removes the marker on the selection.
-pub(crate) fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
+pub fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
     for &el in sel {
         if exclude {
             doc.set_attr(el, EXCLUDE_ATTR, "True");
@@ -159,7 +159,7 @@ pub(crate) fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
 /// labelled `<label> original`, locked (`sodipodi:insensitive`), at opacity 0.3 — while the
 /// original is labelled `<label> flat` and its element children become the selection to flatten.
 /// **Deviation:** the copy carries no ids (`Doc::deep_clone` drops them; upstream assigns random ones).
-pub(crate) fn duplicate_for_testmode(doc: &mut Doc, sel: &[NodeId]) -> Vec<NodeId> {
+pub fn duplicate_for_testmode(doc: &mut Doc, sel: &[NodeId]) -> Vec<NodeId> {
     let mut out = Vec::new();
     for &el in sel {
         let d = doc.deep_clone(el);
@@ -182,7 +182,7 @@ fn excluded(doc: &Doc, n: NodeId) -> bool {
 
 /// F:195–201 `seld`: the selection (minus excluded elements) and every element under it, in
 /// document order, deduplicated, minus the elements that carry the exclusion marker themselves.
-pub(crate) fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
+pub fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for &root in sel {
@@ -199,7 +199,7 @@ pub(crate) fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// The members of `els` still in the document.
-pub(crate) fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
+pub fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
     els.iter()
         .copied()
         .filter(|&n| doc.parent(n).is_some())
@@ -207,7 +207,7 @@ pub(crate) fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// `ngs` (F:224): the attached members of `seld` that are neither containers nor unrendered.
-pub(crate) fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
+pub fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
     attached(doc, seld)
         .into_iter()
         .filter(|&n| !CONTAINER_TAGS.contains(&doc.tag(n)))
@@ -215,7 +215,7 @@ pub(crate) fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// `gs` (F:223): the attached groups of `seld`.
-pub(crate) fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
+pub fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
     attached(doc, seld)
         .into_iter()
         .filter(|&n| doc.tag(n) == "g")
@@ -229,8 +229,8 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     t.phase("parse", || {
         format!("bytes={} elements={}", input.len(), doc.element_count())
     });
-    let mut ctx = Ctx::new();
     let mut sel = doc.selection(&cli.common.ids);
+    let mut ctx = Ctx::for_roots(sel.clone());
     t.phase("selection", || {
         format!("ids={} sel={}", cli.common.ids.len(), sel.len())
     });
@@ -312,7 +312,7 @@ pub const MPL_COMMENT: &str = "mpl_comment";
 /// F:203–218: every selected `<defs>`, `<clipPath>` and `<mask>` is appended to the root `<defs>`
 /// (a `<defs>` moves whole, nested); it and its descendants leave the working set. The root
 /// `<defs>` itself (and anything containing it) is never moved.
-pub(crate) fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
+pub fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
     for pass in [&["defs"][..], &["clipPath", "mask"][..]] {
         let movers: Vec<NodeId> = seld
             .iter()
@@ -336,7 +336,7 @@ pub(crate) fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>)
 
 /// F:229–246: every `<use>` of the working set whose target exists and is not a `<symbol>` is
 /// unlinked; the clone leaves the set and the copy's subtree joins it.
-pub(crate) fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
+pub fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
     let uses: Vec<NodeId> = seld
         .iter()
         .copied()
@@ -361,7 +361,7 @@ pub(crate) fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>
 /// children are all comments, `<defs>` or unlinked clones is a matplotlib text group: it keeps
 /// its glyphs grouped, gets `mpl_comment` = its comments joined by `;`, and loses the comments.
 /// A group already carrying `mpl_comment` is kept. Everything else is dissolved with `ungroup`.
-pub(crate) fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
+pub fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
     let mut gs: Vec<(usize, NodeId)> = groups(doc, seld)
         .into_iter()
         .map(|g| {
@@ -539,7 +539,7 @@ fn revert_thin(doc: &mut Doc, el: NodeId, bb: kurbo::Rect, fill: (u8, u8, u8, f6
 /// `reversions` a matplotlib minus glyph becomes a `<text>`; with `revertpaths` a dark thin
 /// rectangle becomes a stroke. Returns the white-rectangle candidates; `ngs` gets the reverted
 /// texts in place of their glyph paths.
-pub(crate) fn rect_passes(
+pub fn rect_passes(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs: &mut Vec<NodeId>,
@@ -598,7 +598,7 @@ pub(crate) fn rect_passes(
 /// F:372–388 `setreplacement`: every `<text>`/`<tspan>` of the working set loses its inline
 /// `-inkscape-font-specification` and gets `replacement` appended to its family list (or as its
 /// family when it has none), unless the list already ends with it.
-pub(crate) fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
+pub fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
     for el in attached(doc, ngs) {
         if !matches!(doc.tag(el), "text" | "tspan") {
             continue;
@@ -631,7 +631,7 @@ pub(crate) fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
 
 /// F:370–413: font replacement, language switches, the kerning pipeline, text clips; fonts load
 /// only when there is text to process.
-pub(crate) fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
+pub fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
     if o.setreplacement {
         replace_fonts(doc, ngs, &o.replacement);
     }
@@ -688,7 +688,7 @@ fn same_rgba(a: &crate::ops::style::Rgba, b: &crate::ops::style::Rgba) -> bool {
 
 /// F:422–497: prune identical overlapping paths — of two rectangle-like elements with the same
 /// rough box, style, rgba paints and global geometry, the one underneath goes.
-pub(crate) fn remove_duplicates(
+pub fn remove_duplicates(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs2: &mut Vec<NodeId>,
@@ -775,7 +775,7 @@ pub(crate) fn remove_duplicates(
 /// F:499–509: a white-rectangle candidate with nothing behind it (no earlier element whose box
 /// strictly intersects its own) is a background and goes; a deleted one no longer counts as
 /// being behind the next.
-pub(crate) fn remove_white_rects(
+pub fn remove_white_rects(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs2: &[NodeId],
@@ -804,7 +804,7 @@ pub(crate) fn remove_white_rects(
 }
 
 /// F:415–510: rough boxes of the drawn working set, then duplicates, then white rectangles.
-pub(crate) fn bbox_stage(
+pub fn bbox_stage(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs: &[NodeId],
@@ -817,9 +817,17 @@ pub(crate) fn bbox_stage(
         .descendants(doc.svg())
         .filter(|n| ngset.contains(n) && is_drawn(doc, *n))
         .collect();
+    // upstream BB2(svg, ngs2) → make_char_table(els = tels): measure — and warn about the fonts
+    // of — exactly the elements whose boxes are requested
+    ctx.set_text_roots(ngs2.clone());
     let bbs = bb2(doc, ctx, &ngs2, true);
     t.phase("bbox", || {
-        format!("ngs2={} boxes={}", ngs2.len(), bbs.len())
+        format!(
+            "ngs2={} boxes={} table_texts={}",
+            ngs2.len(),
+            bbs.len(),
+            ctx.char_table_els().unwrap_or(0)
+        )
     });
     if o.removeduppaths {
         let cands = ngs2.len();

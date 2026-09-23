@@ -2,6 +2,9 @@ mod support;
 
 use std::ffi::OsString;
 
+use sciink::dom::Doc;
+use sciink::ops::Ctx;
+use sciink::tools::flattener::{Options, bbox_stage, deep_ungroup, non_containers, working_set};
 use support::with_vendored_fonts;
 
 const NS: &str = "xmlns=\"http://www.w3.org/2000/svg\" xmlns:sodipodi=\"http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\"";
@@ -874,5 +877,54 @@ fn an_excluded_group_inside_the_selection_is_not_dissolved_but_its_contents_are_
     assert_eq!(
         by_id(&d, "r1").parent().unwrap().attribute("id"),
         Some("keepme")
+    );
+}
+
+fn three_figures() -> String {
+    let mut figs = String::new();
+    for i in 0..3 {
+        let y = i * 10;
+        figs.push_str(&format!(
+            r#"<g id="fig{i}"><g id="fig{i}g"><rect id="fig{i}r" x="0" y="{y}" width="10" height="5" style="fill:#ffffff"/><text id="fig{i}t1" x="1" y="{}" style="{DV};font-size:4px">a{i}</text><text id="fig{i}t2" x="5" y="{}" style="{DV};font-size:4px">b{i}</text></g></g>"#,
+            y + 4,
+            y + 4
+        ));
+    }
+    format!(r#"<svg {NS} width="20" height="40"><g id="layer1">{figs}</g></svg>"#)
+}
+
+#[test]
+fn the_character_table_covers_only_the_selected_figures_text() {
+    with_vendored_fonts(|| {
+        let mut doc = Doc::parse(three_figures().as_bytes()).unwrap();
+        let sel = doc.selection(&["fig1".to_string()]);
+        let mut ctx = Ctx::for_roots(sel.clone());
+        let seld = working_set(&doc, &sel);
+        deep_ungroup(&mut doc, &mut ctx, &seld, true);
+        let ngs = non_containers(&doc, &seld);
+        let mut t = sciink::log::Timer::new("test");
+        bbox_stage(&mut doc, &mut ctx, &ngs, &[], &Options::testmode(), &mut t);
+        assert_eq!(
+            ctx.char_table_els(),
+            Some(2),
+            "fig1's two texts, not the document's six"
+        );
+    });
+}
+
+#[test]
+fn font_warnings_name_only_fonts_in_the_selection() {
+    let svg = format!(
+        r#"<svg {NS} width="20" height="20"><g id="fa"><text id="ta" x="1" y="5" style="font-family:'Nonexistent Family';font-size:4px">a</text></g><g id="fb"><text id="tb" x="1" y="15" style="{DV};font-size:4px">b</text></g></svg>"#
+    );
+    let (_, msgs) = flatten(&svg, &["--id=fb"]);
+    assert!(
+        !msgs.iter().any(|m| m.contains("Nonexistent Family")),
+        "a font outside the selection must not be measured: {msgs:?}"
+    );
+    let (_, msgs) = flatten(&svg, &["--id=fa"]);
+    assert!(
+        msgs.iter().any(|m| m.contains("Nonexistent Family")),
+        "{msgs:?}"
     );
 }
