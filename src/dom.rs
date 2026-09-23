@@ -853,6 +853,20 @@ impl Doc {
             .collect()
     }
 
+    /// Nodes for the given ids in the order given (Inkscape's selection order), each once;
+    /// unknown ids are dropped. The Scaler's match target is the FIRST selected object.
+    pub fn selection_ordered(&self, ids: &[String]) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = Vec::new();
+        for id in ids {
+            if let Some(n) = self.by_id(id) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+        out
+    }
+
     pub(crate) fn bump(&self) {
         self.generation.set(self.generation.get() + 1);
     }

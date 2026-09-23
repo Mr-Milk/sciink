@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use crate::dom::{Doc, NodeId};
 use crate::text::Warnings;
 use crate::text::fonts::FontSystem;
+use crate::text::parse::ParsedText;
 use crate::text::table::CharTable;
 
 /// Nesting depth past which the recursive helpers (`bbox`, `clip::merge_clipmask`,
@@ -120,6 +121,24 @@ impl Ctx {
     pub fn char_table(&mut self, doc: &Doc) -> &mut CharTable {
         self.ensure_char_table(doc);
         self.text.as_mut().expect("built by ensure_char_table")
+    }
+
+    /// Drops the character table so the next measurement rebuilds it — after a tool restyles
+    /// text (new families or sizes need new entries and their own kerning pairs and warnings).
+    pub fn reset_char_table(&mut self) {
+        self.text = None;
+    }
+
+    /// Parses one `<text>`/`<flowRoot>` against the character table (built on first use), the
+    /// way the bbox code does; `None` for other elements or unparsable text.
+    pub fn parse_text(&mut self, doc: &mut Doc, el: NodeId) -> Option<ParsedText> {
+        if !matches!(doc.tag(el), "text" | "flowRoot") {
+            return None;
+        }
+        self.ensure_char_table(doc);
+        let Ctx { text, warn, .. } = self;
+        let ct = text.as_mut().expect("built by ensure_char_table");
+        ParsedText::parse(doc, el, ct, warn)
     }
 
     /// End-of-run housekeeping; call once after all edits.

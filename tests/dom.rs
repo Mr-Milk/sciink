@@ -538,3 +538,22 @@ fn comment_returns_the_comment_text() {
     assert_eq!(d.comment(c), Some(" Text "));
     assert_eq!(d.comment(d.by_id("g").unwrap()), None);
 }
+
+#[test]
+fn selection_ordered_keeps_argument_order_and_drops_unknown_and_repeated_ids() {
+    let d = sciink::dom::Doc::parse(
+        br#"<svg xmlns="http://www.w3.org/2000/svg"><rect id="a"/><rect id="b"/><rect id="c"/></svg>"#,
+    )
+    .unwrap();
+    let ids: Vec<String> = ["c", "nope", "a", "c"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let sel = d.selection_ordered(&ids);
+    assert_eq!(sel, vec![d.by_id("c").unwrap(), d.by_id("a").unwrap()]);
+    // the document-order variant is unchanged
+    assert_eq!(
+        d.selection(&ids),
+        vec![d.by_id("a").unwrap(), d.by_id("c").unwrap()]
+    );
+}

@@ -442,3 +442,53 @@ fn viewbox_parses_or_falls_back_to_width_height() {
     let d = Doc::parse(br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#).unwrap();
     assert_eq!(d.viewbox(), None);
 }
+
+#[test]
+fn px_per_uu_follows_upstream_document_size() {
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-4;
+    let doc = |root_attrs: &str| {
+        sciink::dom::Doc::parse(
+            format!(r#"<svg xmlns="http://www.w3.org/2000/svg" {root_attrs}></svg>"#).as_bytes(),
+        )
+        .unwrap()
+    };
+    // Other_tests.svg: 5.5290051in × 5.3349633in over a 140.43673 × 135.50807 viewBox → 3.7795 (mm)
+    let d = doc(r#"width="5.5290051in" height="5.3349633in" viewBox="0 0 140.43673 135.50807""#);
+    assert!(
+        close(d.px_per_uu(), 5.5290051 * 96.0 / 140.43673),
+        "{}",
+        d.px_per_uu()
+    );
+    // Other_tests_nonuniform.svg: 81.709946mm × 63.921371mm over 40.904464 × 58.764816 → meet = min
+    let d = doc(r#"width="81.709946mm" height="63.921371mm" viewBox="23 50 40.904464 58.764816""#);
+    let xfr: f64 = 81.709946 * 96.0 / 25.4 / 40.904464;
+    let yfr: f64 = 63.921371 * 96.0 / 25.4 / 58.764816;
+    assert!(
+        close(d.px_per_uu(), xfr.min(yfr)),
+        "{} vs {}",
+        d.px_per_uu(),
+        xfr.min(yfr)
+    );
+    // slice takes the larger factor; none with distinct factors takes the geometric mean
+    let d = doc(
+        r#"width="81.709946mm" height="63.921371mm" viewBox="23 50 40.904464 58.764816" preserveAspectRatio="xMinYMin slice""#,
+    );
+    assert!(close(d.px_per_uu(), xfr.max(yfr)));
+    let d = doc(
+        r#"width="81.709946mm" height="63.921371mm" viewBox="23 50 40.904464 58.764816" preserveAspectRatio="none""#,
+    );
+    assert!(close(d.px_per_uu(), (xfr * yfr).sqrt()));
+    // no viewBox: the width/height ARE the viewBox → 1; no size at all → 1; percent width → value/100
+    assert!(close(
+        doc(r#"width="100mm" height="50mm""#).px_per_uu(),
+        1.0
+    ));
+    assert!(close(doc("").px_per_uu(), 1.0));
+    assert!(close(
+        doc(r#"width="200%" height="200%" viewBox="0 0 10 10""#).px_per_uu(),
+        2.0
+    ));
+    // matplotlib: pt sizes over a pt viewBox → 4/3
+    let d = doc(r#"width="460.8pt" height="345.6pt" viewBox="0 0 460.8 345.6""#);
+    assert!(close(d.px_per_uu(), 4.0 / 3.0));
+}

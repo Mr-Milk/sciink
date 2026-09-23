@@ -76,9 +76,9 @@ fn missing_tool_echoes_input() {
 
 #[test]
 fn unimplemented_tool_echoes_input() {
-    let p = tmp("scaler.svg", SIMPLE);
+    let p = tmp("favorite-markers.svg", SIMPLE);
     let out = bin()
-        .args(["--tool=scaler", "--tab=correction"])
+        .args(["--tool=favorite-markers", "--tab=correction"])
         .arg(&p)
         .output()
         .unwrap();

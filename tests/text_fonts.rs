@@ -214,3 +214,34 @@ fn resolution_ladder_with_vendored_fonts_only() {
     let mut empty = empty;
     assert_eq!(empty.resolve(&spec("font-family:Arial")), None);
 }
+
+#[test]
+fn load_scans_the_filesystem_once_per_environment() {
+    // `with_vendored_fonts` pins SCIINK_NO_SYSTEM_FONTS / SCIINK_FONT_DIRS for the whole binary
+    support::with_vendored_fonts(|| {
+        let a = FontSystem::load();
+        let scans = sciink::text::fonts::scan_count();
+        assert!(scans >= 1, "the first load scanned: {scans}");
+        let b = FontSystem::load();
+        assert_eq!(
+            sciink::text::fonts::scan_count(),
+            scans,
+            "a second load with the same environment reuses the scan"
+        );
+        assert_eq!(a.face_count(), b.face_count());
+        assert_eq!(a.face_count(), 4, "DejaVu Sans ×2 + Roboto ×2");
+        assert!(
+            b.load_ms() < a.load_ms() + 1e-9 || b.load_ms() < 50.0,
+            "cached load is cheap"
+        );
+    });
+}
+
+#[test]
+fn families_lists_each_family_once_in_original_spelling() {
+    let fs = fonts();
+    assert_eq!(
+        fs.families(),
+        vec!["DejaVu Sans".to_string(), "Roboto".to_string()]
+    );
+}

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Homogenizer (sciink)</name>
+    <id>org.sciink.homogenizer</id>
+    <param name="tool" type="string" gui-hidden="true">homogenizer</param>
+    <param name="tab" type="notebook">
+        <page name="scaling" gui-text="Options">
+            <label>Sets the properties of all selected objects without changing objects' center position. For best results, imported PDFs should be Flattened before running.</label>
+            <label appearance="header">Text options</label>
+            <param name="fixtextdistortion" type="bool" gui-text="Correct distorted text?">true</param>
+            <param name="setfontfamily" type="bool" gui-text="Set font?">true</param>
+            <param name="fontfamily" type="string" gui-text="New font" gui-description="Can be used to set Font Family and Font Style. If specifying both, separate them with a space."></param>
+            <param name="setfontsize" type="bool" gui-text="Set font size?">true</param>
+            <param name="fontmodes" type="optiongroup" appearance="combo" gui-text="Font size options:">
+                <option value="2">Fixed size (pt)</option>
+                <option value="3">Scale (%)</option>
+                <option value="5">Mean selected</option>
+                <option value="6">Median selected</option>
+                <option value="7">Min selected</option>
+                <option value="8">Max selected</option>
+                <option value="4">Scale max to (pt)</option>
+            </param>
+            <param name="fontsize" type="float" precision="1" min="0" max="10000" gui-text="Font size value (if applicable)">8</param>
+            <param name="plotaware" type="bool" gui-text="Plot-aware text adjustments?" gui-description="When adjusting text, maintain distance to a plot. Requires that each selected item be a grouped plot with a well-defined plot area.">false</param>
+            <label appearance="header">Stroke options</label>
+            <param name="fusetransforms" type="bool" gui-text="Correct distorted paths?" gui-description="Fuses transforms to paths, ensuring stroke width is constant">true</param>
+            <param name="setstroke" type="bool" gui-text="Set stroke width?">true</param>
+            <param name="strokemodes" type="optiongroup" appearance="combo" gui-text="Stroke width options:">
+                <option value="2">Fixed size (px)</option>
+                <option value="3">Scale (%)</option>
+                <option value="5">Mean selected</option>
+                <option value="6">Median selected</option>
+                <option value="7">Min selected</option>
+                <option value="8">Max selected</option>
+            </param>
+            <param name="setstrokew" type="float" precision="2" min="0" max="10000" gui-text="Stroke width value (if applicable)">1</param>
+            <label appearance="header">Other options</label>
+            <param name="clearclipmasks" type="bool" gui-text="Remove clips and masks?" gui-description="Deletes all clips and masks without releasing them">false</param>
+        </page>
+    </param>
+    <effect needs-live-preview="false">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific"/>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>

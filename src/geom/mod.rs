@@ -6,7 +6,7 @@ pub mod path;
 
 use std::str::FromStr;
 
-pub use kurbo::{Affine, BezPath, Point, Rect, Vec2};
+pub use kurbo::{Affine, BezPath, PathEl, Point, Rect, Vec2};
 
 use crate::num;
 
@@ -218,5 +218,47 @@ impl Doc {
         let w = ipx(self.attr(svg, "width")?)?;
         let h = ipx(self.attr(svg, "height")?)?;
         (w > 0.0 && h > 0.0).then(|| Rect::new(0.0, 0.0, w, h))
+    }
+
+    /// Pixels per user unit (`cache.py:1182–1277`, Inkscape's Document Properties "Scale"):
+    /// `width`/`height` in px over the viewBox, `preserveAspectRatio` picking `min` (meet, the
+    /// default) or `max` (slice); `1.0` when the document carries no usable size.
+    /// Deviation: align `none` with distinct factors gives the geometric mean (upstream: no scale).
+    pub fn px_per_uu(&self) -> f64 {
+        let svg = self.svg();
+        let Some(vb) = self.viewbox() else { return 1.0 };
+        let factor = |attr: &str, vb_len: f64| -> Option<f64> {
+            let Some(s) = self.attr(svg, attr) else {
+                return Some(1.0);
+            };
+            let s = s.trim();
+            if let Some(pct) = s.strip_suffix('%') {
+                return num::parse(pct).map(|v| v / 100.0);
+            }
+            ipx(s).map(|px| px / vb_len)
+        };
+        let (Some(xfr), Some(yfr)) = (factor("width", vb.width()), factor("height", vb.height()))
+        else {
+            return 1.0;
+        };
+        let par = self.attr(svg, "preserveAspectRatio").unwrap_or("");
+        let toks: Vec<&str> = par.split_whitespace().collect();
+        let (align_none, slice) = match toks.as_slice() {
+            ["none"] | ["none", _] => (true, false),
+            [_, "slice"] | ["slice"] => (false, true),
+            _ => (false, false),
+        };
+        let v = if align_none {
+            if (xfr - yfr).abs() < 0.001 {
+                xfr
+            } else {
+                (xfr * yfr).sqrt()
+            }
+        } else if slice {
+            xfr.max(yfr)
+        } else {
+            xfr.min(yfr)
+        };
+        if v.is_finite() && v > 0.0 { v } else { 1.0 }
     }
 }
