@@ -806,6 +806,47 @@ fn a_duplicate_id_keeps_pointing_at_the_first_node_after_a_move() {
 }
 
 #[test]
+fn moving_a_node_out_of_a_detached_subtree_reindexes_its_ids() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    let c = doc.by_id("c").unwrap();
+    doc.detach(b);
+    assert_eq!(doc.by_id("c"), None, "c left the index with the whole of b");
+    doc.append_child(z, c);
+    assert_eq!(
+        doc.by_id("c"),
+        Some(c),
+        "c re-enters the document and must be re-indexed even though it kept a (detached) parent"
+    );
+    assert_eq!(doc.by_id("d"), None, "d is still inside the detached b");
+}
+
+#[test]
+fn a_shadowed_duplicate_id_becomes_resolvable_when_the_indexed_one_is_detached_then_the_shadow_moves()
+ {
+    let mut doc = Doc::parse(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"first\"><rect id=\"dup\" width=\"1\"/><rect id=\"dup\" width=\"2\"/></g><g id=\"z\"/></svg>".as_bytes(),
+    )
+    .unwrap();
+    let first = doc.by_id("first").unwrap();
+    let indexed = doc.by_id("dup").unwrap();
+    let second = doc.last_child(first).unwrap();
+    assert_ne!(
+        indexed, second,
+        "the first-wins duplicate shadows the second"
+    );
+    let z = doc.by_id("z").unwrap();
+    doc.detach(first);
+    assert_eq!(doc.by_id("dup"), None, "the indexed dup left with `first`");
+    doc.append_child(z, second);
+    assert_eq!(
+        doc.by_id("dup"),
+        Some(second),
+        "moving the shadow out of the now-detached `first` re-indexes it — 0.1.0's behaviour"
+    );
+}
+
+#[test]
 fn selection_ordered_keeps_inkscape_order_and_drops_repeats() {
     let mut body = String::new();
     for i in 0..5000 {
@@ -827,7 +868,7 @@ fn selection_ordered_keeps_inkscape_order_and_drops_repeats() {
 
 #[test]
 fn selection_of_one_id_matches_the_general_path() {
-    let doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
     let one = doc.selection(&["c".to_string()]);
     let two = doc.selection(&["d".to_string(), "c".to_string()]);
     assert_eq!(one, vec![doc.by_id("c").unwrap()]);
@@ -837,4 +878,16 @@ fn selection_of_one_id_matches_the_general_path() {
         "document order"
     );
     assert!(doc.selection(&["nope".to_string()]).is_empty());
+
+    let c = doc.by_id("c").unwrap();
+    doc.detach(c);
+    assert!(
+        doc.selection(&["c".to_string()]).is_empty(),
+        "the one-id fast path must agree with the general path on a detached node"
+    );
+    assert_eq!(
+        doc.selection(&["c".to_string(), "d".to_string()]),
+        vec![doc.by_id("d").unwrap()],
+        "d is unaffected; c is gone from both paths"
+    );
 }

@@ -799,6 +799,13 @@ impl Doc {
         true
     }
 
+    /// Whether `n` is reachable from the document root — as opposed to merely having a parent: a
+    /// node inside a detached subtree still has a parent, but the id index no longer tracks it
+    /// (see `after_move`).
+    fn in_document(&self, n: NodeId) -> bool {
+        n == self.root || self.ancestors(n).any(|a| a == self.root)
+    }
+
     /// Unlinks `n` from its parent (keeping its subtree). No-op if detached.
     pub fn detach(&mut self, n: NodeId) {
         if !self.unlink(n) {
@@ -830,7 +837,8 @@ impl Doc {
 
     pub fn append_child(&mut self, parent: NodeId, n: NodeId) {
         self.assert_can_attach(n, parent);
-        let was = self.unlink(n);
+        let was = self.in_document(n);
+        self.unlink(n);
         self.link_last(parent, n);
         self.after_move(n, was);
     }
@@ -845,7 +853,8 @@ impl Doc {
 
     pub fn insert_before(&mut self, n: NodeId, anchor: NodeId) {
         self.assert_can_attach(n, anchor);
-        let was = self.unlink(n);
+        let was = self.in_document(n);
+        self.unlink(n);
         let p = self.nodes[anchor as usize]
             .parent
             .expect("anchor must be attached");
@@ -902,7 +911,11 @@ impl Doc {
     /// detach would cost more than it saves — deliberately not done (Plan 9).
     pub fn selection(&self, ids: &[String]) -> Vec<NodeId> {
         if let [one] = ids {
-            return self.by_id(one).into_iter().collect();
+            return self
+                .by_id(one)
+                .filter(|&n| self.in_document(n))
+                .into_iter()
+                .collect();
         }
         let wanted: std::collections::HashSet<NodeId> =
             ids.iter().filter_map(|i| self.by_id(i)).collect();
