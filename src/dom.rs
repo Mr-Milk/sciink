@@ -561,6 +561,11 @@ impl Doc {
 
     pub fn set_attr(&mut self, n: NodeId, name: &str, value: impl Into<String>) {
         let value = value.into();
+        if let Some(cur) = self.attr(n, name) {
+            if cur == value && (name != "id" || self.ids.get(value.as_str()) == Some(&n)) {
+                return; // nothing changes: no attribute write, no generation bump
+            }
+        }
         if name == "id" {
             if let Some(old) = self.attr(n, "id").map(str::to_string) {
                 if self.ids.get(&old) == Some(&n) {

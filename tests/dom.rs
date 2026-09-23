@@ -675,3 +675,42 @@ fn a_large_attribute_round_trips_byte_for_byte() {
     assert_eq!(out.len(), svg.len());
     assert!(out == svg.as_bytes(), "large attribute changed");
 }
+
+#[test]
+fn setting_an_attribute_to_its_current_value_bumps_no_generation() {
+    let mut doc = Doc::parse(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"r\" style=\"fill:red\" width=\"3\"/></svg>",
+    )
+    .unwrap();
+    let r = doc.by_id("r").unwrap();
+    let (g0, s0) = (doc.generation(), doc.style_generation());
+    doc.set_attr(r, "style", "fill:red");
+    doc.set_attr(r, "width", "3");
+    doc.set_attr(r, "id", "r");
+    assert_eq!(
+        doc.generation(),
+        g0,
+        "identical writes must not bump generation"
+    );
+    assert_eq!(
+        doc.style_generation(),
+        s0,
+        "identical writes must not bump style_generation"
+    );
+    doc.set_attr(r, "style", "fill:blue");
+    assert!(doc.generation() > g0 && doc.style_generation() > s0);
+}
+
+#[test]
+fn a_duplicate_id_keeps_pointing_at_the_first_node() {
+    let mut doc = Doc::parse(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"dup\" width=\"1\"/><rect id=\"dup\" width=\"2\"/></svg>",
+    )
+    .unwrap();
+    let first = doc.by_id("dup").unwrap();
+    assert_eq!(doc.attr(first, "width"), Some("1"));
+    let g0 = doc.generation();
+    doc.set_attr(first, "id", "dup");
+    assert_eq!(doc.by_id("dup"), Some(first));
+    assert_eq!(doc.generation(), g0);
+}
