@@ -655,3 +655,40 @@ fn apply_removes_an_unchecked_positions_presentation_attribute_too() {
     // the Markers page never writes the store: nothing was ever created here
     let _ = std::fs::remove_file(&store);
 }
+
+#[test]
+fn adding_from_an_unmarked_path_and_applying_an_empty_template_are_errors() {
+    let store = tmp_store("empty-template");
+    let _ = std::fs::remove_file(&store);
+    // F1: the selected path carries no markers
+    let svg = format!(r#"<svg {NS}><path id="p" d="M0,0 L10,0" style="stroke:#000"/></svg>"#);
+    let e = fm(
+        &svg,
+        &store,
+        &[
+            "--tab=addremove",
+            "--addt=true",
+            "--template_name=Empty",
+            "--id=p",
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(e, "The selected path has no markers to store.");
+    assert!(!store.exists(), "nothing was saved");
+    // F2: a hand-edited store whose template has a marker without a position resolves to no markers
+    std::fs::write(&store, r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:sciink="https://github.com/Mr-Milk/sciink"><marker sciink:template="Broken" orient="auto"><path d="M0,0 h1"/></marker></svg>"#).unwrap();
+    let e = fm(
+        &svg,
+        &store,
+        &[
+            "--tab=markers",
+            "--template=3",
+            "--custom_name=Broken",
+            "--smarker=true",
+            "--id=p",
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(e, "Template 'Broken' has no markers stored.");
+    std::fs::remove_file(&store).unwrap();
+}
