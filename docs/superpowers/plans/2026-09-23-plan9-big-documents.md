@@ -3751,7 +3751,96 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ## Appendix A — baseline (Task 2)
 
-(filled by Task 2)
+| selection | tool | phase | dt ms |
+|---|---|---|---|
+| figure_1-3 | flattener | parse | 60.5 |
+| figure_1-3 | flattener | selection | 1.8 |
+| figure_1-3 | flattener | workingset | 0.2 |
+| figure_1-3 | flattener | defsmove | 0.3 |
+| figure_1-3 | flattener | unlink | 97.4 |
+| figure_1-3 | flattener | ungroup | 181.0 |
+| figure_1-3 | flattener | rects | 6.6 |
+| figure_1-3 | flattener | fonts | 183.9 |
+| figure_1-3 | flattener | text | 214.7 |
+| figure_1-3 | flattener | fonts | 0.3 |
+| figure_1-3 | flattener | bbox | 392.5 |
+| figure_1-3 | flattener | dedup | 5.2 |
+| figure_1-3 | flattener | whiterects | 0.1 |
+| figure_1-3 | flattener | cleanup | 30.8 |
+| figure_1-3 | flattener | write | 81.1 |
+| figure_1-3 | flattener | total | 1072.2 |
+| g660 | flattener | parse | 61.9 |
+| g660 | flattener | selection | 2.1 |
+| g660 | flattener | workingset | 0.3 |
+| g660 | flattener | defsmove | 0.1 |
+| g660 | flattener | unlink | 0.1 |
+| g660 | flattener | ungroup | 108.7 |
+| g660 | flattener | rects | 13.0 |
+| g660 | flattener | fonts | 158.4 |
+| g660 | flattener | text | 170.2 |
+| g660 | flattener | fonts | 0.3 |
+| g660 | flattener | bbox | 438.0 |
+| g660 | flattener | dedup | 13.0 |
+| g660 | flattener | whiterects | 0.1 |
+| g660 | flattener | cleanup | 3.2 |
+| g660 | flattener | write | 80.0 |
+| g660 | flattener | total | 890.8 |
+| g9740 | flattener | parse | 60.4 |
+| g9740 | flattener | selection | 1.6 |
+| g9740 | flattener | workingset | 0.2 |
+| g9740 | flattener | defsmove | 0.1 |
+| g9740 | flattener | unlink | 0.1 |
+| g9740 | flattener | ungroup | 45.7 |
+| g9740 | flattener | rects | 21.0 |
+| g9740 | flattener | fonts | 177.0 |
+| g9740 | flattener | text | 320.8 |
+| g9740 | flattener | fonts | 0.3 |
+| g9740 | flattener | bbox | 356.8 |
+| g9740 | flattener | dedup | 2.4 |
+| g9740 | flattener | whiterects | 1.9 |
+| g9740 | flattener | cleanup | 28.3 |
+| g9740 | flattener | write | 80.1 |
+| g9740 | flattener | total | 919.4 |
+| layer1 | flattener | parse | 63.9 |
+| layer1 | flattener | selection | 1.6 |
+| layer1 | flattener | workingset | 2.2 |
+| layer1 | flattener | defsmove | 7.7 |
+| layer1 | flattener | unlink | 247.2 |
+| layer1 | flattener | ungroup | 2018.2 |
+| layer1 | flattener | rects | 244.1 |
+| layer1 | flattener | fonts | 167.3 |
+| layer1 | flattener | text | 1087.9 |
+| layer1 | flattener | fonts | 0.4 |
+| layer1 | flattener | bbox | 1170.2 |
+| layer1 | flattener | dedup | 532.8 |
+| layer1 | flattener | whiterects | 542.0 |
+| layer1 | flattener | cleanup | 96.3 |
+| layer1 | flattener | write | 115.0 |
+| layer1 | flattener | total | 6129.1 |
+| figure_1-3 | homogenizer | parse | 58.0 |
+| figure_1-3 | homogenizer | selection | 1.3 |
+| figure_1-3 | homogenizer | fonts | 173.9 |
+| figure_1-3 | homogenizer | fontsize | 225.6 |
+| figure_1-3 | homogenizer | fonts | 0.4 |
+| figure_1-3 | homogenizer | recentre | 19.5 |
+| figure_1-3 | homogenizer | cleanup | 0.1 |
+| figure_1-3 | homogenizer | write | 80.9 |
+| figure_1-3 | homogenizer | total | 385.5 |
+| layer1 | homogenizer | parse | 58.1 |
+| layer1 | homogenizer | selection | 2.6 |
+| layer1 | homogenizer | fonts | 159.5 |
+| layer1 | homogenizer | fontsize | 1754.6 |
+| layer1 | homogenizer | fonts | 0.3 |
+| layer1 | homogenizer | recentre | 529.8 |
+| layer1 | homogenizer | cleanup | 0.1 |
+| layer1 | homogenizer | write | 81.6 |
+| layer1 | homogenizer | total | 2426.8 |
+| - | about | parse | 60.2 |
+| - | about | fonts | 172.9 |
+| - | about | fonts | 173.0 |
+| - | about | total | 234.8 |
+
+Apple M-series Mac, macOS, warm cache — 2026-09-23. About `phase=fonts`: ms=173, faces=1022.
 
 ## Appendix B — after (Task 16)
 
