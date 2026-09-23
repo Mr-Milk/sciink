@@ -6,7 +6,7 @@ Homogenizer, Text Ghoster, Combine by Color, Favorite Markers). One compiled bin
 works with Inkscape 1.2 and later.
 
 Status: early development. The tools land one by one; design specs live in `docs/spec/`. The current
-release ships nine menu entries — five tools, three diagnostics and one debug editor:
+release ships ten menu entries — six tools, three diagnostics and one debug editor:
 
 - **Extensions ▸ Scientific ▸ Flattener** — makes an imported plot editable: deep ungroup (composing
   transforms, clips and styles onto the leaves and unlinking clones), matplotlib minus-sign glyphs back
@@ -32,6 +32,10 @@ release ships nine menu entries — five tools, three diagnostics and one debug 
 - **Extensions ▸ Scientific ▸ Text Ghoster** — puts a blurred, semi-transparent white rectangle behind
   each selected object, sized from its text, so labels stay readable on top of data. Group several
   texts first to treat them as one.
+- **Extensions ▸ Scientific ▸ Favorite Markers** — puts a stored marker template (start, mid, end)
+  on the selected paths at the size you choose; store the markers of a selected path as a new
+  template and remove templates on the second page, no restart needed. Arrow, Triangle and
+  Distance come built in.
 - **Extensions ▸ Scientific ▸ Diagnostics** — version, platform, the document's size and element counts,
   and how many font faces were found (and how long that took). Proves the installation works.
 - **Extensions ▸ Scientific ▸ Debug ▸ Font Probe** — for every `font-family` the document asks for (and
@@ -107,6 +111,9 @@ search, mostly for tests and for reproducing a figure built elsewhere:
 The upstream oracles need the installed fonts and the `tests/upstream` fixture symlink; run them with
 
     SCIINK_SYSTEM_FONTS=1 cargo test --test text_fixtures --test text_tools --test text_ghoster --test flattener_fixtures --test homogenizer_fixtures -- --ignored --test-threads=1
+
+The non-ignored fixture tests (`cargo test --test '*_fixtures'`) run whenever `tests/upstream/data`
+is present and are skipped otherwise.
 
 Set `SCIINK_LOG=/tmp/sciink.log` in Inkscape's environment to get timing lines.
 Releases: push a tag `vX.Y.Z` matching `Cargo.toml`'s version; the `release` workflow builds
