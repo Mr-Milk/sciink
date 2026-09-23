@@ -218,10 +218,8 @@ pub fn store_path(override_: Option<&Path>) -> PathBuf {
     if let Some(p) = override_ {
         return p.to_path_buf();
     }
-    if let Some(dir) = std::env::var_os("INKSCAPE_PROFILE_DIR") {
-        return PathBuf::from(dir)
-            .join("sciink")
-            .join("favorite_markers.svg");
+    if let Some(dir) = crate::paths::data_dir() {
+        return dir.join("favorite_markers.svg");
     }
     crate::paths::inx_dir().join("favorite_markers.svg")
 }
@@ -378,7 +376,11 @@ pub fn template_name(cli: &FavoriteMarkersCli) -> Result<String, String> {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = FavoriteMarkersCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("favorite-markers");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut messages: Vec<String> = Vec::new();
     let path = store_path(cli.store.as_deref());
     let mut store = Store::load(&path)?;
@@ -394,6 +396,9 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
             }
         }
     }
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), shapes.len())
+    });
     if cli.tab == "addremove" {
         let mut changed = false;
         if cli.addt {
@@ -448,8 +453,12 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
             [cli.smarker, cli.mmarker, cli.emarker],
             cli.size,
         )?;
+        t.phase("apply", || format!("shapes={}", shapes.len()));
     }
+    t.phase("cleanup", String::new);
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

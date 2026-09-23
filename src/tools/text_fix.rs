@@ -38,7 +38,11 @@ pub struct TextFixCli {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = TextFixCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("text-fix");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let els = text_elements(&doc, &cli.common.ids);
     if els.is_empty() {
         return Err("select at least one text element (or a group containing text)".to_string());
@@ -60,5 +64,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     messages.extend(warn.0.iter().map(|w| format!("warning: {w}")));
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

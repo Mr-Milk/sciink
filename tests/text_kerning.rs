@@ -783,3 +783,83 @@ fn duplicate_and_nested_selections_neither_panic_nor_leave_orphans() {
         "no glyph lost:\n{after}"
     );
 }
+
+#[test]
+fn a_thousand_sibling_texts_run_in_linear_time_and_the_nested_one_is_skipped() {
+    use sciink::text::kerning::{KerningOptions, remove_kerning};
+    let mut body = String::new();
+    for i in 0..1000 {
+        body.push_str(&format!(
+            r#"<text id="t{i}" x="{}" y="{}" style="{DV};font-size:4px">w{i} x</text>"#,
+            (i % 40) * 20,
+            (i / 40) * 8 + 5
+        ));
+    }
+    body.push_str(&format!(
+        r#"<text id="outer" x="0" y="300" style="{DV};font-size:4px">o<text id="inner" x="10" y="300">i</text></text>"#
+    ));
+    let svg = format!(r#"<svg {NS} width="900" height="400">{body}</svg>"#);
+    let mut d = Doc::parse(svg.as_bytes()).unwrap();
+    let mut els: Vec<_> = (0..1000)
+        .map(|i| d.by_id(&format!("t{i}")).unwrap())
+        .collect();
+    let outer0 = d.by_id("outer").unwrap();
+    els.push(outer0);
+    els.push(d.by_id("inner").unwrap());
+    let mut w = Warnings::default();
+    let t0 = std::time::Instant::now();
+    let out = remove_kerning(
+        &mut d,
+        &els,
+        &KerningOptions::from_inx(true, true, true, true, 1),
+        fonts(),
+        &mut w,
+    );
+    assert!(t0.elapsed().as_secs() < 20, "quadratic nested-text check");
+
+    let outer_after = d.by_id("outer").unwrap();
+    let inner0 = els[1001];
+
+    assert_ne!(
+        outer_after, outer0,
+        "outer IS rewritten: new element replaces old"
+    );
+
+    // The 1 000 siblings and `outer` are rewritten (new nodes); `inner` is skipped as nested and
+    // detached with the old `outer`; one sibling splits, giving 1 002 returned nodes.
+
+    assert!(
+        out.contains(&outer_after),
+        "new outer (rewritten) is in the returned list"
+    );
+    assert!(
+        !out.contains(&outer0),
+        "old outer is not returned (was rewritten and detached)"
+    );
+    assert!(
+        !out.contains(&inner0),
+        "old inner is not returned (nested, skipped, and parent detached)"
+    );
+
+    let returned_originals = els.iter().take(1002).filter(|e| out.contains(e)).count();
+    assert_eq!(
+        returned_originals, 0,
+        "none of the original input NodeIds are returned (outer rewritten, inner skipped)"
+    );
+    assert_eq!(
+        out.len(),
+        1002,
+        "new outer (1) + split-offs from parsing siblings and outer (~1001) = 1002"
+    );
+    assert!(
+        out.iter().all(|&n| d.parent(n).is_some()),
+        "every returned node is attached"
+    );
+
+    let nested: Vec<&String> =
+        w.0.iter()
+            .filter(|m| m.contains("nested in another selected text"))
+            .collect();
+    assert_eq!(nested.len(), 1, "{:?}", w.0);
+    assert!(nested[0].contains("inner"), "{}", nested[0]);
+}

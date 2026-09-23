@@ -38,4 +38,8 @@ if ! "$bin" --tool=about "$here/tests/data/edge/simple.svg" > "$tmp/out.svg" 2> 
 fi
 cmp -s "$tmp/out.svg" "$here/tests/data/edge/simple.svg" || { echo "FAIL: about did not echo the document"; exit 1; }
 grep -q 'document: 3 elements' "$tmp/err.txt" || { echo "FAIL: about report missing"; cat "$tmp/err.txt"; exit 1; }
+for f in DejaVuSans.ttf DejaVuSans-Bold.ttf LICENSE-DejaVu.txt; do
+  test -f "$tmp/sciink/fonts/$f" || { echo "FAIL: fonts/$f missing"; exit 1; }
+done
+grep -q 'bundled fonts: .*(2 faces)' "$tmp/err.txt" || { echo "FAIL: about does not see the bundled fonts"; cat "$tmp/err.txt"; exit 1; }
 echo "PACKAGE-OK $zip"

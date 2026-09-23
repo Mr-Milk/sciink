@@ -12,7 +12,7 @@
             <param name="lightnessth" type="float" precision="0" min="0" max="100" gui-text="Lightness threshold (%)">15</param>
         </page>
     </param>
-    <effect needs-live-preview="true">
+    <effect needs-live-preview="false">
         <object-type>all</object-type>
         <effects-menu>
             <submenu name="Scientific"/>

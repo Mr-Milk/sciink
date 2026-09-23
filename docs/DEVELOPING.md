@@ -92,11 +92,25 @@ Flattener's text pipeline alone on the selection.
 |---|---|
 | `SCIINK_FONT_DIRS` | Extra font directories, separated by the platform's path-list separator (`:` / `;`). |
 | `SCIINK_NO_SYSTEM_FONTS=1` | Skip the system font scan; only `SCIINK_FONT_DIRS` is used. |
-| `SCIINK_LOG=<file>` | Append-only log: a summary line from Diagnostics and the message and source location of any internal error. stderr is the user's dialog, so nothing else is written there. |
+| `SCIINK_NO_BUNDLED_FONTS=1` | Skip the bundled font directory (the DejaVu Sans fallback shipped next to the `.inx` files). |
+| `SCIINK_NO_FONT_CACHE=1` | Skip the persistent font-scan cache; always scan the filesystem. |
+| `SCIINK_FONT_CACHE=<path>` | Use `<path>` as the font-scan cache file instead of the default location under the data/cache dir. |
+| `SCIINK_LOG=<file>` | Append-only log: one line per phase of every run (`tool=<tool> phase=<name> dt=<ms>`), the Diagnostics summary and the source location of any internal error. stderr is the user's dialog, so nothing else is written there. |
 | `INKSCAPE_PROFILE_DIR` | Set by Inkscape. Favorite Markers stores its templates in `$INKSCAPE_PROFILE_DIR/sciink/favorite_markers.svg`, falling back to the `.inx` directory. |
 | `SCIINK_UPSTREAM_TESTS` | Tests: the upstream `tests/data` directory (alternative to the `tests/upstream` symlink). |
 | `SCIINK_SYSTEM_FONTS=1` | Tests: run the `#[ignore]`d oracles against the installed fonts. |
 | `SCIINK_GIT_SHA`, `SCIINK_TARGET` | Build time, set by `release.yml`; shown by `--version` and Diagnostics. |
+
+## Performance on large documents
+
+Inkscape writes the whole document to a temporary file, runs the extension, reads the result back
+and re-renders it. On a 50 MB SVG that round trip takes seconds before and after our binary runs,
+and we do not control it; time Extensions ▸ Scientific ▸ Diagnostics on the file to see your own
+floor (Diagnostics itself does ~0.3 s of work). Two things keep it small: link raster images instead
+of embedding them (one manuscript we measured carried 27 MB of base64 in 93 `<image>` elements), and
+run the tools per figure rather than on a whole layer. Our own share is logged per phase with
+`SCIINK_LOG`; on a 62 000-element document the Flattener takes ≈ 0.2 s on one figure and
+≈ 1.0 s on the whole layer.
 
 ## Repository layout
 
@@ -117,14 +131,16 @@ docs/superpowers/plans/  one implementation plan per part, with the rulings made
 ## Conventions
 
 - Behaviour follows Scientific-Inkscape, constants included. Every intentional difference is recorded
-  under "Deliberate deviations" in [`spec/02-geometry-tools.md`](spec/02-geometry-tools.md) or
-  [`spec/01-text-engine.md`](spec/01-text-engine.md), with the reason.
+  under "Deliberate deviations" in [`spec/02-geometry-tools.md`](spec/02-geometry-tools.md),
+  [`spec/01-text-engine.md`](spec/01-text-engine.md) or [`spec/03-infrastructure.md`](spec/03-infrastructure.md),
+  with the reason.
 - Tools are silent on success. stderr carries only `warning: …` lines and error messages, because
   Inkscape shows it as a dialog.
 - Every number written to the document goes through `num::fmt` (8 significant digits), so output is
   byte-stable across runs and platforms.
 - Tests never loosen a tolerance to pass; a mismatch with upstream is either a bug or a documented
   deviation with its own test.
+- Bump `FONT_CACHE_FORMAT` in `src/text/fontcache.rs` when `face_metrics` or the cached fields change.
 
 ## Packaging
 
@@ -135,8 +151,10 @@ dist/test-package.sh dist/out/sciink-macos-universal.zip     # layout, exec bit,
 dist/test-install.sh dist/out/sciink-macos-universal.zip     # install.sh offline: install, upgrade, uninstall
 ```
 
-A zip contains `sciink/{*.inx, bin/sciink[.exe], README.txt, LICENSE}` and is unzipped straight into
-the extensions directory. Each OS zips its own binary in CI so the exec bit survives.
+A zip contains `sciink/{*.inx, bin/sciink[.exe], fonts/, README.txt, LICENSE}` and is unzipped straight
+into the extensions directory. `fonts/` carries the bundled DejaVu Sans faces and their licence, copied
+from `tests/fonts` (not moved — that directory is also what tests load). Each OS zips its own binary in
+CI so the exec bit survives.
 
 ## CI
 
@@ -164,15 +182,11 @@ The installers download `releases/latest`; `SCIINK_VERSION=vX.Y.Z` / `-Version v
 
 ## Known gaps
 
-- `ops::bbox` yields no box for a `<use>` inside a `clipPath` whose target sits under `<defs>`.
-- The Flattener and Combine by Color build character tables for the whole document, not just the
-  selection.
+- A `<use>` whose `href` does not resolve has no bounding box, so a `clipPath` made of one clips its
+  element away entirely (upstream behaves the same; `Other_tests.svg`'s `image270` is such a case,
+  which is why the clip-region oracle counts 10 of 11 clipped elements).
 - Favorite Markers re-saves a template among the store's direct children only; a store re-saved by
   Inkscape can reorder the template list.
-- The first run after boot scans every installed font file (about 3 s for 1000 faces on macOS);
-  later runs take a few hundred milliseconds. A persistent scan cache is the planned fix.
-- DejaVu Sans is not bundled, so matplotlib's default font is measured with a substitute where it is
-  not installed.
 - Inkscape 1.4's headless `--actions` route runs the tools with an empty selection (`select-by-id`
   and `select-all` do not reach the extension), so script the binary directly instead.
 - Scientific-Inkscape's Autoexporter and Gallery Viewer are not ported.

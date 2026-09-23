@@ -502,3 +502,17 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
   whitespace share markers.
 - Attributes copied from or to a document get a known namespace prefix declared on the destination
   root; an attribute with an unknown prefix is dropped (upstream's lxml declares every prefix).
+
+## Deliberate deviations (Plan 9)
+
+- **Deviation removed:** the Flattener's character table covers only the elements whose boxes the
+  bbox stage requests (`ngs2`), matching upstream's `BB2(svg, ngs2)` → `make_char_table(els=tels)`.
+  Plans 6–8 built it over the whole document; that was the deviation (and ≈ 0.5 s per run on a
+  5 000-text document).
+- The duplicate-path and white-rectangle passes enumerate candidates through a bucket index and a
+  uniform grid (`geom::grid`) instead of all pairs. Same predicates, same visiting order, same
+  results (property-tested against the pairwise code); upstream is O(k²) in numpy.
+- `Doc::selection` and the bbox stage keep one whole-document walk each to recover document order
+  (1–2 ms on 62 000 nodes) — a rank index that every attach/detach would invalidate was rejected.
+- `ops::bbox` gives no box to a `<use>` whose `href` does not resolve (upstream `dhelpers.py:1505–1521`
+  does the same); this was misfiled as a bug in 0.1.0's known gaps.

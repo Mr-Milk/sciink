@@ -25,6 +25,7 @@ pub fn with_vendored_fonts<T>(f: impl FnOnce() -> T) -> T {
         unsafe {
             std::env::set_var("SCIINK_NO_SYSTEM_FONTS", "1");
             std::env::set_var("SCIINK_FONT_DIRS", fontdir());
+            std::env::set_var("SCIINK_NO_FONT_CACHE", "1");
         }
     });
     f()
@@ -200,4 +201,154 @@ pub fn pixel_diff_fraction(a: &(u32, u32, Vec<u8>), b: &(u32, u32, Vec<u8>), thr
             })
             .count();
     differing as f64 / n.max(1) as f64
+}
+
+/// A deterministic many-figure document in the shape of a multi-panel matplotlib export.
+pub struct BigDoc {
+    pub figures: usize,
+    pub groups_per_figure: usize,
+    pub shapes: usize,
+    pub texts: usize,
+    pub clones: usize,
+    pub style_rules: usize,
+    pub image_kb: usize,
+}
+
+impl Default for BigDoc {
+    fn default() -> Self {
+        BigDoc {
+            figures: 100,
+            groups_per_figure: 3,
+            shapes: 30,
+            texts: 4,
+            clones: 5,
+            style_rules: 20,
+            image_kb: 0,
+        }
+    }
+}
+
+struct Lcg(u64);
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+impl BigDoc {
+    /// The document as compact XML: no whitespace between elements.
+    pub fn svg(&self) -> String {
+        let mut rng = Lcg(0x5c11_9e11);
+        let cols = 10usize;
+        let (fw, fh) = (100.0, 80.0);
+        let rows = self.figures.div_ceil(cols).max(1);
+        let mut s = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">",
+            cols as f64 * fw,
+            rows as f64 * fh,
+            cols as f64 * fw,
+            rows as f64 * fh
+        );
+        for _ in 0..self.style_rules {
+            s.push_str("<style>*{stroke-linejoin: round; stroke-linecap: butt}</style>");
+        }
+        s.push_str("<defs><path id=\"marker\" d=\"M0 0h1v1h-1z\"/>");
+        for i in 0..self.figures {
+            s.push_str(&format!(
+                "<clipPath id=\"clip{i}\"><rect x=\"0\" y=\"0\" width=\"{fw}\" height=\"{fh}\"/></clipPath>"
+            ));
+        }
+        s.push_str("</defs>");
+        if self.image_kb > 0 {
+            let payload: String = (0..self.image_kb * 1024)
+                .map(|k| {
+                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[k % 64]
+                        as char
+                })
+                .collect();
+            s.push_str(&format!(
+                "<image id=\"img\" x=\"0\" y=\"0\" width=\"10\" height=\"10\" href=\"data:image/png;base64,{payload}\"/>"
+            ));
+        }
+        s.push_str("<g id=\"layer1\">");
+        for i in 0..self.figures {
+            let (x, y) = ((i % cols) as f64 * fw, (i / cols) as f64 * fh);
+            s.push_str(&format!(
+                "<g id=\"fig{i}\" transform=\"translate({x},{y})\">"
+            ));
+            for lvl in 0..self.groups_per_figure {
+                let clip = if lvl == 0 {
+                    format!(" clip-path=\"url(#clip{i})\"")
+                } else {
+                    String::new()
+                };
+                s.push_str(&format!(
+                    "<g id=\"fig{i}g{lvl}\" transform=\"translate(0.5,0.5)\"{clip}>"
+                ));
+            }
+            s.push_str(&format!(
+                "<rect id=\"bg{i}\" x=\"0\" y=\"0\" width=\"{fw}\" height=\"{fh}\" style=\"fill:#ffffff;stroke:none\"/>"
+            ));
+            let mut last = String::new();
+            let mut last_style = String::new();
+            for k in 0..self.shapes {
+                let (d, style) = if k % 5 == 4 && !last.is_empty() {
+                    (last.clone(), last_style.clone())
+                } else {
+                    let (px, py) = (rng.below(70) as f64, rng.below(50) as f64);
+                    let d = format!(
+                        "M{px} {py}l{} {}l{} {}z",
+                        rng.below(9) + 1,
+                        rng.below(9) + 1,
+                        rng.below(9) + 1,
+                        rng.below(9) + 1
+                    );
+                    let style = format!(
+                        "fill:#{:02x}{:02x}{:02x};stroke:none",
+                        rng.below(200) + 20,
+                        rng.below(200) + 20,
+                        rng.below(200) + 20
+                    );
+                    (d, style)
+                };
+                last = d.clone();
+                last_style = style.clone();
+                s.push_str(&format!(
+                    "<path id=\"fig{i}p{k}\" d=\"{d}\" style=\"{style}\"/>"
+                ));
+            }
+            for k in 0..self.clones {
+                s.push_str(&format!(
+                    "<use id=\"fig{i}u{k}\" href=\"#marker\" x=\"{}\" y=\"{}\"/>",
+                    rng.below(70),
+                    rng.below(50)
+                ));
+            }
+            for k in 0..self.texts {
+                let dx = if k % 2 == 1 {
+                    " dx=\"0 0.2 0.1 0.3 0.2\""
+                } else {
+                    ""
+                };
+                s.push_str(&format!(
+                    "<text id=\"fig{i}t{k}\" x=\"{}\" y=\"{}\" style=\"font-family:'DejaVu Sans';font-size:4px\"{dx}>label {i}-{k}</text>",
+                    rng.below(40) + 2,
+                    rng.below(50) + 8
+                ));
+            }
+            for _ in 0..self.groups_per_figure {
+                s.push_str("</g>");
+            }
+            s.push_str("</g>");
+        }
+        s.push_str("</g></svg>");
+        s
+    }
 }

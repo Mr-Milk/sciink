@@ -47,6 +47,13 @@ pub fn delete_up(doc: &mut Doc, ctx: &mut Ctx, n: NodeId) {
     }
 }
 
+/// `haystack` contains `needle` ignoring ASCII case (the inline-style pre-filter must match
+/// whatever `Style::parse` would lower-case).
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    n.len() <= h.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+}
+
 /// Removes `clip-path`/`mask` attributes and inline-style entries that reference an id in
 /// `deleted`, so no orphan `url(#…)` survives a deletion. Done once per run instead of per
 /// deletion (upstream cache.py:697–704); references that were dangling before are left alone.
@@ -69,6 +76,11 @@ pub fn drop_dangling_refs(doc: &mut Doc, deleted: &HashSet<String>) {
             }
         }
         if let Some(inline) = doc.attr(n, "style") {
+            if !(contains_ignore_ascii_case(inline, "clip-path")
+                || contains_ignore_ascii_case(inline, "mask"))
+            {
+                continue;
+            }
             let mut st = Style::parse(inline);
             let mut changed = false;
             for att in ["clip-path", "mask"] {
@@ -102,10 +114,14 @@ fn referenced_clip_ids(doc: &Doc) -> HashSet<String> {
             }
         }
         if let Some(inline) = doc.attr(n, "style") {
-            let st = Style::parse(inline);
-            for att in ["clip-path", "mask"] {
-                if let Some(id) = st.get(att).and_then(url_id) {
-                    out.insert(id.to_string());
+            if contains_ignore_ascii_case(inline, "clip-path")
+                || contains_ignore_ascii_case(inline, "mask")
+            {
+                let st = Style::parse(inline);
+                for att in ["clip-path", "mask"] {
+                    if let Some(id) = st.get(att).and_then(url_id) {
+                        out.insert(id.to_string());
+                    }
                 }
             }
         }

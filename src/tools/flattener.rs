@@ -10,8 +10,8 @@ use kurbo::{Affine, BezPath, Rect};
 use crate::Output;
 use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
+use crate::geom::inverse;
 use crate::geom::path::{parse_d, path_eq, reverse, shape_path};
-use crate::geom::{intersects, inverse};
 use crate::num;
 use crate::ops::Ctx;
 use crate::ops::bbox::{BboxOpts, bb2, bbox, is_drawn, is_rectangle};
@@ -145,7 +145,7 @@ impl Options {
 }
 
 /// F:187–194: the Exclusions page sets (`True`) or removes the marker on the selection.
-pub(crate) fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
+pub fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
     for &el in sel {
         if exclude {
             doc.set_attr(el, EXCLUDE_ATTR, "True");
@@ -159,7 +159,7 @@ pub(crate) fn mark_exclusions(doc: &mut Doc, sel: &[NodeId], exclude: bool) {
 /// labelled `<label> original`, locked (`sodipodi:insensitive`), at opacity 0.3 — while the
 /// original is labelled `<label> flat` and its element children become the selection to flatten.
 /// **Deviation:** the copy carries no ids (`Doc::deep_clone` drops them; upstream assigns random ones).
-pub(crate) fn duplicate_for_testmode(doc: &mut Doc, sel: &[NodeId]) -> Vec<NodeId> {
+pub fn duplicate_for_testmode(doc: &mut Doc, sel: &[NodeId]) -> Vec<NodeId> {
     let mut out = Vec::new();
     for &el in sel {
         let d = doc.deep_clone(el);
@@ -182,7 +182,7 @@ fn excluded(doc: &Doc, n: NodeId) -> bool {
 
 /// F:195–201 `seld`: the selection (minus excluded elements) and every element under it, in
 /// document order, deduplicated, minus the elements that carry the exclusion marker themselves.
-pub(crate) fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
+pub fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for &root in sel {
@@ -199,7 +199,7 @@ pub(crate) fn working_set(doc: &Doc, sel: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// The members of `els` still in the document.
-pub(crate) fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
+pub fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
     els.iter()
         .copied()
         .filter(|&n| doc.parent(n).is_some())
@@ -207,7 +207,7 @@ pub(crate) fn attached(doc: &Doc, els: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// `ngs` (F:224): the attached members of `seld` that are neither containers nor unrendered.
-pub(crate) fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
+pub fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
     attached(doc, seld)
         .into_iter()
         .filter(|&n| !CONTAINER_TAGS.contains(&doc.tag(n)))
@@ -215,7 +215,7 @@ pub(crate) fn non_containers(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
 }
 
 /// `gs` (F:223): the attached groups of `seld`.
-pub(crate) fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
+pub fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
     attached(doc, seld)
         .into_iter()
         .filter(|&n| doc.tag(n) == "g")
@@ -224,12 +224,19 @@ pub(crate) fn groups(doc: &Doc, seld: &[NodeId]) -> Vec<NodeId> {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = FlattenerCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("flattener");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
-    let mut ctx = Ctx::new();
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut sel = doc.selection(&cli.common.ids);
+    let mut ctx = Ctx::for_roots(sel.clone());
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
     if cli.tab == "Exclusions" {
         mark_exclusions(&mut doc, &sel, cli.markexc == 1);
-        return finish(doc, ctx, false);
+        return finish(doc, ctx, false, t);
     }
     let opts = if cli.testmode {
         sel = duplicate_for_testmode(&mut doc, &sel);
@@ -238,15 +245,24 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         Options::from_cli(&cli)
     };
     let mut seld = working_set(&doc, &sel);
+    t.phase("workingset", || format!("seld={}", seld.len()));
     if opts.deepungroup {
+        let before = seld.len();
         move_defs_and_clips_to_root(&mut doc, &mut seld);
+        t.phase("defsmove", || {
+            format!("moved={}", before.saturating_sub(seld.len()))
+        });
     }
     if groups(&doc, &seld).is_empty() && non_containers(&doc, &seld).is_empty() {
         return Err("No objects selected!".to_string());
     }
     if opts.deepungroup {
+        let clones = seld.iter().filter(|&&n| doc.tag(n) == "use").count();
         unlink_clones(&mut doc, &mut ctx, &mut seld);
+        t.phase("unlink", || format!("clones={clones}"));
+        let ngroups = groups(&doc, &seld).len();
         deep_ungroup(&mut doc, &mut ctx, &seld, opts.removetextclips);
+        t.phase("ungroup", || format!("groups={ngroups}"));
     }
     let mut ngs = non_containers(&doc, &seld);
     let wrects = if opts.removerectw || opts.reversions || opts.revertpaths {
@@ -254,26 +270,39 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     } else {
         Vec::new()
     };
+    t.phase("rects", || {
+        format!("ngs={} wrects={}", ngs.len(), wrects.len())
+    });
     if opts.fixtext {
+        let before = ngs.len();
         text_phase(&mut doc, &mut ctx, &mut ngs, &opts);
+        t.phase("text", || format!("ngs_in={before} ngs_out={}", ngs.len()));
     }
     if opts.removerectw || opts.removeduppaths {
-        bbox_stage(&mut doc, &mut ctx, &ngs, &wrects, &opts);
+        bbox_stage(&mut doc, &mut ctx, &ngs, &wrects, &opts, &mut t);
     }
-    finish(doc, ctx, true)
+    finish(doc, ctx, true, t)
 }
 
 /// End of every run: created-clip gc and dangling-reference sweep (`Ctx::finish`), whitespace and
 /// `unlinked_clone` markers when the document was flattened (F:513–548, spec §B.3 step 9).
-fn finish(mut doc: Doc, mut ctx: Ctx, flattened: bool) -> Result<Output, String> {
+fn finish(
+    mut doc: Doc,
+    mut ctx: Ctx,
+    flattened: bool,
+    mut t: crate::log::Timer,
+) -> Result<Output, String> {
     ctx.finish(&mut doc);
     if flattened {
         strip_whitespace(&mut doc);
         strip_attr(&mut doc, "unlinked_clone");
     }
+    t.phase("cleanup", String::new);
     let messages = ctx.warn.0.iter().map(|w| format!("warning: {w}")).collect();
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }
 
@@ -283,7 +312,7 @@ pub const MPL_COMMENT: &str = "mpl_comment";
 /// F:203–218: every selected `<defs>`, `<clipPath>` and `<mask>` is appended to the root `<defs>`
 /// (a `<defs>` moves whole, nested); it and its descendants leave the working set. The root
 /// `<defs>` itself (and anything containing it) is never moved.
-pub(crate) fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
+pub fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>) {
     for pass in [&["defs"][..], &["clipPath", "mask"][..]] {
         let movers: Vec<NodeId> = seld
             .iter()
@@ -307,7 +336,7 @@ pub(crate) fn move_defs_and_clips_to_root(doc: &mut Doc, seld: &mut Vec<NodeId>)
 
 /// F:229–246: every `<use>` of the working set whose target exists and is not a `<symbol>` is
 /// unlinked; the clone leaves the set and the copy's subtree joins it.
-pub(crate) fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
+pub fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>) {
     let uses: Vec<NodeId> = seld
         .iter()
         .copied()
@@ -332,7 +361,7 @@ pub(crate) fn unlink_clones(doc: &mut Doc, ctx: &mut Ctx, seld: &mut Vec<NodeId>
 /// children are all comments, `<defs>` or unlinked clones is a matplotlib text group: it keeps
 /// its glyphs grouped, gets `mpl_comment` = its comments joined by `;`, and loses the comments.
 /// A group already carrying `mpl_comment` is kept. Everything else is dissolved with `ungroup`.
-pub(crate) fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
+pub fn deep_ungroup(doc: &mut Doc, ctx: &mut Ctx, seld: &[NodeId], remove_text_clip: bool) {
     let mut gs: Vec<(usize, NodeId)> = groups(doc, seld)
         .into_iter()
         .map(|g| {
@@ -510,7 +539,7 @@ fn revert_thin(doc: &mut Doc, el: NodeId, bb: kurbo::Rect, fill: (u8, u8, u8, f6
 /// `reversions` a matplotlib minus glyph becomes a `<text>`; with `revertpaths` a dark thin
 /// rectangle becomes a stroke. Returns the white-rectangle candidates; `ngs` gets the reverted
 /// texts in place of their glyph paths.
-pub(crate) fn rect_passes(
+pub fn rect_passes(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs: &mut Vec<NodeId>,
@@ -569,7 +598,7 @@ pub(crate) fn rect_passes(
 /// F:372–388 `setreplacement`: every `<text>`/`<tspan>` of the working set loses its inline
 /// `-inkscape-font-specification` and gets `replacement` appended to its family list (or as its
 /// family when it has none), unless the list already ends with it.
-pub(crate) fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
+pub fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
     for el in attached(doc, ngs) {
         if !matches!(doc.tag(el), "text" | "tspan") {
             continue;
@@ -602,7 +631,7 @@ pub(crate) fn replace_fonts(doc: &mut Doc, ngs: &[NodeId], replacement: &str) {
 
 /// F:370–413: font replacement, language switches, the kerning pipeline, text clips; fonts load
 /// only when there is text to process.
-pub(crate) fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
+pub fn text_phase(doc: &mut Doc, ctx: &mut Ctx, ngs: &mut Vec<NodeId>, o: &Options) {
     if o.setreplacement {
         replace_fonts(doc, ngs, &o.replacement);
     }
@@ -659,12 +688,12 @@ fn same_rgba(a: &crate::ops::style::Rgba, b: &crate::ops::style::Rgba) -> bool {
 
 /// F:422–497: prune identical overlapping paths — of two rectangle-like elements with the same
 /// rough box, style, rgba paints and global geometry, the one underneath goes.
-pub(crate) fn remove_duplicates(
+pub fn remove_duplicates(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs2: &mut Vec<NodeId>,
     bbs: &HashMap<NodeId, Rect>,
-) {
+) -> usize {
     let inside = shape_inside_targets(doc);
     let els: Vec<NodeId> = ngs2
         .iter()
@@ -675,121 +704,120 @@ pub(crate) fn remove_duplicates(
         .collect();
     let boxes: Vec<Rect> = els.iter().map(|n| bbs[n]).collect();
     let size = |r: &Rect| r.width().max(r.height());
-    let equal = |i: usize, j: usize| -> bool {
-        let (a, b) = (&boxes[i], &boxes[j]);
-        if a.width() == 0.0 || a.height() == 0.0 || b.width() == 0.0 || b.height() == 0.0 {
-            return false;
-        }
-        let tol = 1e-6 * size(a).max(size(b));
-        (a.x0 - b.x0).abs() <= tol
-            && (a.y0 - b.y0).abs() <= tol
-            && (a.x1 - b.x1).abs() <= tol
-            && (a.y1 - b.y1).abs() <= tol
-    };
     let mut sfs: Vec<Option<crate::ops::style::StrokeFill>> = vec![None; els.len()];
     let mut paths: Vec<Option<kurbo::BezPath>> = vec![None; els.len()];
-    let mut removed: HashSet<usize> = HashSet::new();
-    for jj in (0..els.len()).rev() {
-        for ii in 0..jj {
-            if removed.contains(&ii) || !equal(ii, jj) {
-                continue;
-            }
-            if sfs[jj].is_none() {
-                sfs[jj] = Some(strokefill(doc, els[jj]));
-            }
-            if sfs[ii].is_none() {
-                sfs[ii] = Some(strokefill(doc, els[ii]));
-            }
-            let (my, oth) = (sfs[jj].as_ref().unwrap(), sfs[ii].as_ref().unwrap());
-            if my.stroke_is_url || my.fill_is_url || (my.stroke.is_none() && my.fill.is_none()) {
-                continue;
-            }
-            if let Some(s) = &my.stroke {
-                if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgba(s, o)) {
-                    continue;
-                }
-            }
-            if let Some(f) = &my.fill {
-                if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgba(f, o)) {
-                    continue;
-                }
-            }
-            if !style_eq(&doc.specified_style(els[jj]), &doc.specified_style(els[ii])) {
-                continue;
-            }
-            if paths[jj].is_none() {
-                if let Some(pp) = shape_path(doc, els[jj]) {
-                    paths[jj] = Some(doc.composed_transform(els[jj]) * pp.path);
-                }
-            }
-            if paths[ii].is_none() {
-                if let Some(pp) = shape_path(doc, els[ii]) {
-                    paths[ii] = Some(doc.composed_transform(els[ii]) * pp.path);
-                }
-            }
-            let (Some(gj), Some(gi)) = (&paths[jj], &paths[ii]) else {
-                continue;
-            };
-            let tol = 1e-6 * size(&boxes[ii]).max(size(&boxes[jj]));
-            if !(path_eq(gj, gi, tol) || path_eq(gj, &reverse(gi), tol)) {
-                continue;
-            }
-            delete_up(doc, ctx, els[ii]);
-            removed.insert(ii);
+    let removed = crate::geom::grid::duplicate_scan(&boxes, &mut |ii, jj| {
+        if sfs[jj].is_none() {
+            sfs[jj] = Some(strokefill(doc, els[jj]));
         }
-    }
+        if sfs[ii].is_none() {
+            sfs[ii] = Some(strokefill(doc, els[ii]));
+        }
+        let (my, oth) = (sfs[jj].as_ref().unwrap(), sfs[ii].as_ref().unwrap());
+        if my.stroke_is_url || my.fill_is_url || (my.stroke.is_none() && my.fill.is_none()) {
+            return false;
+        }
+        if let Some(s) = &my.stroke {
+            if s.alpha != 1.0 || !oth.stroke.as_ref().is_some_and(|o| same_rgba(s, o)) {
+                return false;
+            }
+        }
+        if let Some(f) = &my.fill {
+            if f.alpha != 1.0 || !oth.fill.as_ref().is_some_and(|o| same_rgba(f, o)) {
+                return false;
+            }
+        }
+        if !style_eq(&doc.specified_style(els[jj]), &doc.specified_style(els[ii])) {
+            return false;
+        }
+        if paths[jj].is_none() {
+            if let Some(pp) = shape_path(doc, els[jj]) {
+                paths[jj] = Some(doc.composed_transform(els[jj]) * pp.path);
+            }
+        }
+        if paths[ii].is_none() {
+            if let Some(pp) = shape_path(doc, els[ii]) {
+                paths[ii] = Some(doc.composed_transform(els[ii]) * pp.path);
+            }
+        }
+        let (Some(gj), Some(gi)) = (&paths[jj], &paths[ii]) else {
+            return false;
+        };
+        let tol = 1e-6 * size(&boxes[ii]).max(size(&boxes[jj]));
+        if !(path_eq(gj, gi, tol) || path_eq(gj, &reverse(gi), tol)) {
+            return false;
+        }
+        delete_up(doc, ctx, els[ii]);
+        true
+    });
     let gone: HashSet<NodeId> = removed.iter().map(|&i| els[i]).collect();
     ngs2.retain(|n| !gone.contains(n));
+    removed.len()
 }
 
 /// F:499–509: a white-rectangle candidate with nothing behind it (no earlier element whose box
 /// strictly intersects its own) is a background and goes; a deleted one no longer counts as
 /// being behind the next.
-pub(crate) fn remove_white_rects(
+pub fn remove_white_rects(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs2: &[NodeId],
     bbs: &HashMap<NodeId, Rect>,
     wrects: &[NodeId],
-) {
+) -> usize {
     let ngs3: Vec<NodeId> = ngs2
         .iter()
         .copied()
         .filter(|n| doc.parent(*n).is_some() && bbs.contains_key(n))
         .collect();
     let white: HashSet<NodeId> = wrects.iter().copied().collect();
-    let mut deleted: HashSet<usize> = HashSet::new();
-    for ii in 0..ngs3.len() {
-        if !white.contains(&ngs3[ii]) {
-            continue;
-        }
-        let wb = bbs[&ngs3[ii]];
-        let behind = (0..ii).any(|k| !deleted.contains(&k) && intersects(bbs[&ngs3[k]], wb));
-        if !behind {
-            delete_up(doc, ctx, ngs3[ii]);
-            deleted.insert(ii);
-        }
+    let boxes: Vec<Rect> = ngs3.iter().map(|n| bbs[n]).collect();
+    let flags: Vec<bool> = ngs3.iter().map(|n| white.contains(n)).collect();
+    // the test reads only `bbs`, never the document, so deleting after the scan is equivalent
+    let deleted = crate::geom::grid::background_scan(&boxes, &flags);
+    for &ii in &deleted {
+        delete_up(doc, ctx, ngs3[ii]);
     }
+    deleted.len()
 }
 
 /// F:415–510: rough boxes of the drawn working set, then duplicates, then white rectangles.
-pub(crate) fn bbox_stage(
+pub fn bbox_stage(
     doc: &mut Doc,
     ctx: &mut Ctx,
     ngs: &[NodeId],
     wrects: &[NodeId],
     o: &Options,
+    t: &mut crate::log::Timer,
 ) {
     let ngset: HashSet<NodeId> = attached(doc, ngs).into_iter().collect();
     let mut ngs2: Vec<NodeId> = doc
         .descendants(doc.svg())
         .filter(|n| ngset.contains(n) && is_drawn(doc, *n))
         .collect();
+    // upstream BB2(svg, ngs2) → make_char_table(els = tels): measure — and warn about the fonts
+    // of — exactly the elements whose boxes are requested. Reset first: set_text_roots is a
+    // no-op once a table already exists, so a table an earlier, abnormal path built over the
+    // wrong scope would otherwise survive instead of being rebuilt over ngs2.
+    ctx.reset_char_table();
+    ctx.set_text_roots(ngs2.clone());
     let bbs = bb2(doc, ctx, &ngs2, true);
+    t.phase("bbox", || {
+        format!(
+            "ngs2={} boxes={} table_texts={}",
+            ngs2.len(),
+            bbs.len(),
+            ctx.char_table_els().unwrap_or(0)
+        )
+    });
     if o.removeduppaths {
-        remove_duplicates(doc, ctx, &mut ngs2, &bbs);
+        let cands = ngs2.len();
+        let removed = remove_duplicates(doc, ctx, &mut ngs2, &bbs);
+        t.phase("dedup", || format!("cands={cands} removed={removed}"));
     }
     if o.removerectw {
-        remove_white_rects(doc, ctx, &ngs2, &bbs, wrects);
+        let cands = wrects.len();
+        let removed = remove_white_rects(doc, ctx, &ngs2, &bbs, wrects);
+        t.phase("whiterects", || format!("cands={cands} removed={removed}"));
     }
 }

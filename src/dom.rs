@@ -113,6 +113,12 @@ pub struct Doc {
     // Read/written starting in Task 4 (navigation/mutation); laid down here so
     // the struct shape doesn't change under later tasks.
     next_auto_id: u32,
+    /// Byte length of the parsed source; `write` pre-sizes its buffer from it (0 for built documents).
+    source_len: usize,
+    /// Number of `<style>` elements ever created in this document (never
+    /// decremented on delete); zero means `subtree_has_style` can answer
+    /// without walking.
+    style_elements: usize,
     /// Bumped on every mutation; consumers cache derived data keyed by it.
     pub(crate) generation: Cell<u64>,
     /// Bumped when a `<style>` element or its text changes.
@@ -146,6 +152,8 @@ impl Doc {
             svg: 0,
             ids: HashMap::new(),
             next_auto_id: 1,
+            source_len: bytes.len(),
+            style_elements: 0,
             generation: Cell::new(0),
             sheet_generation: Cell::new(0),
             style_generation: Cell::new(0),
@@ -286,6 +294,12 @@ impl Doc {
     }
 
     fn alloc(&mut self, kind: Kind) -> NodeId {
+        if let Kind::Element { name, .. } = &kind {
+            let local = name.rsplit_once(':').map(|(_, l)| l).unwrap_or(name);
+            if local == "style" {
+                self.style_elements += 1;
+            }
+        }
         self.nodes.push(Node::new(kind));
         (self.nodes.len() - 1) as NodeId
     }
@@ -310,6 +324,9 @@ impl Doc {
         enum Step {
             Open(NodeId),
             Close(NodeId),
+        }
+        if out.is_empty() {
+            out.reserve(self.source_len + self.source_len / 16);
         }
         let mut stack: Vec<Step> = Vec::new();
         let mut c = self.nodes[self.root as usize].last;
@@ -555,6 +572,11 @@ impl Doc {
 
     pub fn set_attr(&mut self, n: NodeId, name: &str, value: impl Into<String>) {
         let value = value.into();
+        if let Some(cur) = self.attr(n, name) {
+            if cur == value && (name != "id" || self.ids.get(value.as_str()) == Some(&n)) {
+                return; // nothing changes: no attribute write, no generation bump
+            }
+        }
         if name == "id" {
             if let Some(old) = self.attr(n, "id").map(str::to_string) {
                 if self.ids.get(&old) == Some(&n) {
@@ -668,6 +690,9 @@ impl Doc {
             Some((prefix, _)) => format!("{prefix}:{local}"),
             None => local.to_string(),
         };
+        if !was_style && local == "style" {
+            self.style_elements += 1;
+        }
         if was_style || local == "style" {
             self.bump_sheet();
         }
@@ -752,10 +777,11 @@ impl Doc {
         root_copy
     }
 
-    /// Unlinks `n` from its parent (keeping its subtree). No-op if detached.
-    pub fn detach(&mut self, n: NodeId) {
+    /// Pointer surgery only: takes `n` out of its parent's child list, leaving the id index,
+    /// the generations and the subtree untouched. `false` when `n` was already detached.
+    fn unlink(&mut self, n: NodeId) -> bool {
         let Some(p) = self.nodes[n as usize].parent else {
-            return;
+            return false;
         };
         let (prev, next) = (self.nodes[n as usize].prev, self.nodes[n as usize].next);
         match prev {
@@ -766,18 +792,31 @@ impl Doc {
             Some(x) => self.nodes[x as usize].prev = prev,
             None => self.nodes[p as usize].last = prev,
         }
-        {
-            let node = &mut self.nodes[n as usize];
-            node.parent = None;
-            node.prev = None;
-            node.next = None;
+        let node = &mut self.nodes[n as usize];
+        node.parent = None;
+        node.prev = None;
+        node.next = None;
+        true
+    }
+
+    /// Whether `n` is reachable from the document root — as opposed to merely having a parent: a
+    /// node inside a detached subtree still has a parent, but the id index no longer tracks it
+    /// (see `after_move`).
+    fn in_document(&self, n: NodeId) -> bool {
+        n == self.root || self.ancestors(n).any(|a| a == self.root)
+    }
+
+    /// Unlinks `n` from its parent (keeping its subtree). No-op if detached.
+    pub fn detach(&mut self, n: NodeId) {
+        if !self.unlink(n) {
+            return;
         }
         self.unindex_subtree(n);
         if self.subtree_has_style(n) {
             self.bump_sheet();
         }
         // Detaching changes the (now former) ancestor chain the subtree saw;
-        // see the comment in `after_attach`.
+        // see the comment in `after_move`.
         self.bump_style();
         self.bump();
     }
@@ -798,9 +837,10 @@ impl Doc {
 
     pub fn append_child(&mut self, parent: NodeId, n: NodeId) {
         self.assert_can_attach(n, parent);
-        self.detach(n);
+        let was = self.in_document(n);
+        self.unlink(n);
         self.link_last(parent, n);
-        self.after_attach(n);
+        self.after_move(n, was);
     }
 
     pub fn prepend_child(&mut self, parent: NodeId, n: NodeId) {
@@ -813,7 +853,8 @@ impl Doc {
 
     pub fn insert_before(&mut self, n: NodeId, anchor: NodeId) {
         self.assert_can_attach(n, anchor);
-        self.detach(n);
+        let was = self.in_document(n);
+        self.unlink(n);
         let p = self.nodes[anchor as usize]
             .parent
             .expect("anchor must be attached");
@@ -829,7 +870,7 @@ impl Doc {
             Some(x) => self.nodes[x as usize].next = Some(n),
             None => self.nodes[p as usize].first = Some(n),
         }
-        self.after_attach(n);
+        self.after_move(n, was);
     }
 
     pub fn insert_after(&mut self, n: NodeId, anchor: NodeId) {
@@ -865,8 +906,17 @@ impl Doc {
         d
     }
 
-    /// Nodes for the given ids in document order; unknown ids are dropped.
+    /// Nodes for the given ids in document order; unknown ids are dropped. One pre-order walk of
+    /// the document (1–2 ms for 60 000 nodes); a rank index maintained across every attach and
+    /// detach would cost more than it saves — deliberately not done (Plan 9).
     pub fn selection(&self, ids: &[String]) -> Vec<NodeId> {
+        if let [one] = ids {
+            return self
+                .by_id(one)
+                .filter(|&n| self.in_document(n))
+                .into_iter()
+                .collect();
+        }
         let wanted: std::collections::HashSet<NodeId> =
             ids.iter().filter_map(|i| self.by_id(i)).collect();
         self.descendants(self.svg)
@@ -877,10 +927,11 @@ impl Doc {
     /// Nodes for the given ids in the order given (Inkscape's selection order), each once;
     /// unknown ids are dropped. The Scaler's match target is the FIRST selected object.
     pub fn selection_ordered(&self, ids: &[String]) -> Vec<NodeId> {
+        let mut seen: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
         let mut out: Vec<NodeId> = Vec::new();
         for id in ids {
             if let Some(n) = self.by_id(id) {
-                if !out.contains(&n) {
+                if seen.insert(n) {
                     out.push(n);
                 }
             }
@@ -903,8 +954,14 @@ impl Doc {
         self.style_generation.set(self.style_generation.get() + 1);
     }
 
-    fn after_attach(&mut self, n: NodeId) {
-        self.index_subtree(n);
+    /// Bookkeeping after `n` was linked in. The id index only learns material that was not in
+    /// the document before: `index_subtree` is `or_insert`-only and no id changes during a move,
+    /// so re-indexing a moved subtree would be a no-op. A moved `<style>` still bumps the sheet
+    /// (the sheet concatenates `<style>` text in document order).
+    fn after_move(&mut self, n: NodeId, was_attached: bool) {
+        if !was_attached {
+            self.index_subtree(n);
+        }
         if self.subtree_has_style(n) {
             self.bump_sheet();
         }
@@ -916,30 +973,40 @@ impl Doc {
     }
 
     fn index_subtree(&mut self, n: NodeId) {
-        let ids: Vec<(String, NodeId)> = self
-            .descendants(n)
-            .filter_map(|d| self.attr(d, "id").map(|id| (id.to_string(), d)))
-            .collect();
-        for (id, d) in ids {
-            self.ids.entry(id).or_insert(d);
+        let nodes: Vec<NodeId> = self.descendants(n).collect();
+        for d in nodes {
+            let Kind::Element { attrs, .. } = &self.nodes[d as usize].kind else {
+                continue;
+            };
+            let Some(a) = attrs.iter().find(|a| a.name == "id") else {
+                continue;
+            };
+            if !self.ids.contains_key(a.value.as_str()) {
+                self.ids.insert(a.value.clone(), d);
+            }
         }
     }
 
     fn unindex_subtree(&mut self, n: NodeId) {
-        let ids: Vec<(String, NodeId)> = self
-            .descendants(n)
-            .filter_map(|d| self.attr(d, "id").map(|id| (id.to_string(), d)))
-            .collect();
-        for (id, d) in ids {
-            if self.ids.get(&id) == Some(&d) {
-                self.ids.remove(&id);
+        let nodes: Vec<NodeId> = self.descendants(n).collect();
+        for d in nodes {
+            let Kind::Element { attrs, .. } = &self.nodes[d as usize].kind else {
+                continue;
+            };
+            let Some(a) = attrs.iter().find(|a| a.name == "id") else {
+                continue;
+            };
+            if self.ids.get(a.value.as_str()) == Some(&d) {
+                self.ids.remove(a.value.as_str());
             }
         }
     }
 
     fn subtree_has_style(&self, n: NodeId) -> bool {
-        self.descendants(n)
-            .any(|d| self.is_element(d) && self.tag(d) == "style")
+        self.style_elements > 0
+            && self
+                .descendants(n)
+                .any(|d| self.is_element(d) && self.tag(d) == "style")
     }
 }
 
@@ -998,29 +1065,43 @@ fn attr_affects_style(name: &str) -> bool {
     matches!(name, "style" | "class" | "id") || crate::style::PRESENTATION_ATTRS.contains(&name)
 }
 
+/// Copies `s` into `out` escaping `& < > "` — runs of ordinary bytes are copied in bulk.
 fn escape_text(s: &str, out: &mut Vec<u8>) {
-    for b in s.bytes() {
-        match b {
-            b'&' => out.extend_from_slice(b"&amp;"),
-            b'<' => out.extend_from_slice(b"&lt;"),
-            b'>' => out.extend_from_slice(b"&gt;"),
-            b'"' => out.extend_from_slice(b"&quot;"),
-            _ => out.push(b),
-        }
+    let b = s.as_bytes();
+    let mut start = 0usize;
+    for i in 0..b.len() {
+        let rep: &[u8] = match b[i] {
+            b'&' => b"&amp;",
+            b'<' => b"&lt;",
+            b'>' => b"&gt;",
+            b'"' => b"&quot;",
+            _ => continue,
+        };
+        out.extend_from_slice(&b[start..i]);
+        out.extend_from_slice(rep);
+        start = i + 1;
     }
+    out.extend_from_slice(&b[start..]);
 }
 
+/// Attribute values additionally escape the whitespace characters an attribute cannot hold raw.
 fn escape_attr(s: &str, out: &mut Vec<u8>) {
-    for b in s.bytes() {
-        match b {
-            b'&' => out.extend_from_slice(b"&amp;"),
-            b'<' => out.extend_from_slice(b"&lt;"),
-            b'>' => out.extend_from_slice(b"&gt;"),
-            b'"' => out.extend_from_slice(b"&quot;"),
-            b'\n' => out.extend_from_slice(b"&#10;"),
-            b'\r' => out.extend_from_slice(b"&#13;"),
-            b'\t' => out.extend_from_slice(b"&#9;"),
-            _ => out.push(b),
-        }
+    let b = s.as_bytes();
+    let mut start = 0usize;
+    for i in 0..b.len() {
+        let rep: &[u8] = match b[i] {
+            b'&' => b"&amp;",
+            b'<' => b"&lt;",
+            b'>' => b"&gt;",
+            b'"' => b"&quot;",
+            b'\n' => b"&#10;",
+            b'\r' => b"&#13;",
+            b'\t' => b"&#9;",
+            _ => continue,
+        };
+        out.extend_from_slice(&b[start..i]);
+        out.extend_from_slice(rep);
+        start = i + 1;
     }
+    out.extend_from_slice(&b[start..]);
 }

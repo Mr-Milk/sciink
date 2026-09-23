@@ -38,12 +38,13 @@ const SKIP_TAGS: &[&str] = &[
     "missing-glyph",
 ];
 
-/// CBC:39–60: the selection and its descendants (document order, deduplicated), keeping the
-/// path-like elements — not a skipped tag, and carrying `d`, `points` or `x1`.
-pub fn candidates(doc: &Doc, ids: &[String]) -> Vec<NodeId> {
+/// CBC:39–60 over the given roots (the selection and its descendants, document order,
+/// deduplicated), keeping the path-like elements — not a skipped tag, and carrying `d`, `points`
+/// or `x1`.
+pub fn candidates_from(doc: &Doc, roots: &[NodeId]) -> Vec<NodeId> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for root in doc.selection(ids) {
+    for &root in roots {
         for n in doc.descendants(root) {
             if !doc.is_element(n) || SKIP_TAGS.contains(&doc.tag(n)) {
                 continue;
@@ -57,6 +58,10 @@ pub fn candidates(doc: &Doc, ids: &[String]) -> Vec<NodeId> {
         }
     }
     out
+}
+
+pub fn candidates(doc: &Doc, ids: &[String]) -> Vec<NodeId> {
+    candidates_from(doc, &doc.selection(ids))
 }
 
 fn same_width(a: Option<f64>, b: Option<f64>) -> bool {
@@ -138,18 +143,32 @@ pub fn combine_by_color(doc: &mut Doc, ctx: &mut Ctx, els: &[NodeId], threshold:
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = CombineByColorCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("combine-by-color");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut messages = Vec::new();
-    let mut ctx = Ctx::new();
-    if doc.selection(&cli.common.ids).is_empty() {
+    let sel = doc.selection(&cli.common.ids);
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
+    let mut ctx = Ctx::for_roots(sel.clone());
+    if sel.is_empty() {
         messages.push("combine-by-color: nothing selected".to_string());
     } else {
-        let els = candidates(&doc, &cli.common.ids);
-        combine_by_color(&mut doc, &mut ctx, &els, cli.lightnessth / 100.0);
+        let els = candidates_from(&doc, &sel);
+        let removed = combine_by_color(&mut doc, &mut ctx, &els, cli.lightnessth / 100.0);
+        t.phase("combine", || {
+            format!("candidates={} removed={removed}", els.len())
+        });
         ctx.finish(&mut doc);
+        t.phase("cleanup", String::new);
     }
     messages.extend(ctx.warn.0.iter().map(|w| format!("warning: {w}")));
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

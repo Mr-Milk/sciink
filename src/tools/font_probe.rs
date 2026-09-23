@@ -36,7 +36,11 @@ pub fn describe_face(fs: &FontSystem, k: Option<crate::text::fonts::FaceKey>) ->
                 .and_then(|p| p.file_name())
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "memory".into());
-            format!("{} ({file})", i.family)
+            let mut s = format!("{} ({file})", i.family);
+            if fs.is_bundled(k) {
+                s.push_str(" [bundled]");
+            }
+            s
         }
     }
 }
@@ -72,7 +76,11 @@ pub fn text_elements(doc: &Doc, ids: &[String]) -> Vec<NodeId> {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = FontProbeCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("font-probe");
     let doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let els = text_elements(&doc, &cli.common.ids);
     let mut specs: Vec<FontSpec> = Vec::new();
     for &el in &els {
@@ -117,6 +125,8 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     for w in &warn.0 {
         let _ = writeln!(rep, "warning: {w}");
     }
+    t.phase("write", || format!("bytes={}", input.len()));
+    t.total(String::new);
     Ok(Output {
         svg: input.to_vec(),
         messages: vec![rep.trim_end().to_string()],

@@ -281,3 +281,24 @@ Flattener (+ `--testmode`).
 
 ---
 
+## Deliberate deviations (Plan 9)
+
+1. **Persistent font-scan cache.** Face metadata and metrics are cached under
+   `$INKSCAPE_PROFILE_DIR/sciink/fontcache-1-<key hash>.tsv` (one file per distinct scan key, so
+   e.g. alternating `SCIINK_FONT_DIRS` settings do not invalidate each other's cache; per-user temp
+   directory when the variable is unset) and validated by the size and mtime of every cached font
+   file plus the mtime of every directory holding one; not noticed: a font installed into a
+   brand-new top-level font directory, a font added to a new subdirectory that holds no font files
+   itself (only directories that contain cached files are stated), and a font file replaced with
+   identical size and mtime. `SCIINK_NO_FONT_CACHE=1` disables the cache,
+   `SCIINK_FONT_CACHE=<path>` moves it. Upstream rescans on every run. Cached faces report English
+   (US) for every family name; only the names are used.
+2. **Bundled DejaVu Sans (Book, Bold)** ships in `<extension dir>/fonts` and is scanned after the
+   system fonts; a face of identical family, weight, style and width that is not bundled sorts ahead
+   of the bundled copy, so an installed DejaVu Sans always wins. `SCIINK_NO_SYSTEM_FONTS=1` disables
+   the bundle too; `SCIINK_NO_BUNDLED_FONTS=1` disables only it. Upstream bundles nothing.
+3. **Per-phase timing** is written to `SCIINK_LOG` (`tool=… phase=… dt=…`); upstream has no
+   equivalent. Nothing reaches stderr.
+4. **`needs-live-preview="false"` on every tool** — this matches upstream; Plans 5–7 had enabled it
+   on four tools and that was the deviation.
+

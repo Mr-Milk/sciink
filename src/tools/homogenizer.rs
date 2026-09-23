@@ -539,7 +539,11 @@ pub(crate) fn clear_clipmasks(doc: &mut Doc, sela: &[NodeId]) {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = HomogenizerCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("homogenizer");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut messages: Vec<String> = Vec::new();
     let sel0 = doc.selection(&cli.common.ids);
     let mut ctx = Ctx::for_roots(sel0.clone());
@@ -553,10 +557,13 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
             }
         }
     }
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
     if sel0.is_empty() {
         // Deviation: upstream shows IMAGE_ERR for an empty selection (`all([])` is true)
         messages.push("homogenizer: nothing selected".to_string());
-        return finish(doc, ctx, messages);
+        return finish(doc, ctx, messages, t);
     }
     if sel.iter().all(|&n| doc.tag(n) == "image") {
         return Err(IMAGE_ERR.to_string());
@@ -592,32 +599,47 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     };
     if cli.setfontsize {
         set_font_size(&mut doc, &mut ctx, &tels, cli.fontsize, cli.fontmodes);
+        t.phase("fontsize", || format!("tels={}", tels.len()));
     }
     if cli.fixtextdistortion {
         fix_distortion(&mut doc, &mut ctx, &tels);
+        t.phase("distortion", || format!("tels={}", tels.len()));
     }
     if cli.setfontfamily {
         set_font_family(&mut doc, &mut ctx, &sel_text, &cli.fontfamily)?;
+        t.phase("family", || format!("sel_text={}", sel_text.len()));
     }
     if text_opts {
         recentre(&mut doc, &mut ctx, &sel0, &tels, &bbs, cli.plotaware);
+        t.phase("recentre", || format!("tels={}", tels.len()));
     }
     if cli.setstroke {
         set_stroke(&mut doc, &mut ctx, &sela, cli.setstrokew, cli.strokemodes);
+        t.phase("stroke", || format!("sela={}", sela.len()));
     }
     if cli.fusetransforms {
         fuse_all(&mut doc, &mut ctx, &sela);
+        t.phase("fuse", || format!("sela={}", sela.len()));
     }
     if cli.clearclipmasks {
         clear_clipmasks(&mut doc, &sela);
+        t.phase("clips", || format!("sela={}", sela.len()));
     }
-    finish(doc, ctx, messages)
+    finish(doc, ctx, messages, t)
 }
 
-fn finish(mut doc: Doc, mut ctx: Ctx, mut messages: Vec<String>) -> Result<Output, String> {
+fn finish(
+    mut doc: Doc,
+    mut ctx: Ctx,
+    mut messages: Vec<String>,
+    mut t: crate::log::Timer,
+) -> Result<Output, String> {
     ctx.finish(&mut doc);
+    t.phase("cleanup", String::new);
     messages.extend(ctx.warn.0.iter().map(|w| format!("warning: {w}")));
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

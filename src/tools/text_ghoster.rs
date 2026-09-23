@@ -91,14 +91,22 @@ pub fn ghost(doc: &mut Doc, ctx: &mut Ctx, el: NodeId) -> Option<NodeId> {
 
 pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let cli = TextGhosterCli::try_parse_from(argv).map_err(first_line)?;
+    let mut t = crate::log::Timer::new("text-ghoster");
     let mut doc = Doc::parse(input).map_err(|e| e.to_string())?;
+    t.phase("parse", || {
+        format!("bytes={} elements={}", input.len(), doc.element_count())
+    });
     let mut messages = Vec::new();
     let sel = doc.selection(&cli.common.ids);
+    t.phase("selection", || {
+        format!("ids={} sel={}", cli.common.ids.len(), sel.len())
+    });
     // measure (and warn about fonts of) the selected text only, as upstream's BB2(svg, sel) does
     let mut ctx = Ctx::for_roots(sel.clone());
     if sel.is_empty() {
         messages.push("text-ghoster: nothing selected".to_string());
     }
+    let n = sel.len();
     for el in sel {
         if ghost(&mut doc, &mut ctx, el).is_none() {
             ctx.warn.push(format!(
@@ -107,9 +115,13 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
             ));
         }
     }
+    t.phase("ghost", || format!("sel={n}"));
     ctx.finish(&mut doc);
+    t.phase("cleanup", String::new);
     messages.extend(ctx.warn.0.iter().map(|w| format!("warning: {w}")));
     let mut svg = Vec::new();
     doc.write(&mut svg);
+    t.phase("write", || format!("bytes={}", svg.len()));
+    t.total(String::new);
     Ok(Output { svg, messages })
 }

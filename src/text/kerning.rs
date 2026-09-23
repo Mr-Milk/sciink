@@ -730,12 +730,13 @@ pub fn remove_kerning(
         .copied()
         .filter(|&e| doc.is_element(e) && matches!(doc.tag(e), "text" | "flowRoot"))
         .collect();
+    // Membership in `cands` via a set: one ancestor walk per element instead of one per pair.
+    // `cands` is deduplicated and `ancestors(e)` never yields `e`, so "some member is a strict
+    // ancestor of e" is exactly the old `o != e && ancestors(e).any(|a| a == o)` over all `o`.
+    let cset: HashSet<NodeId> = cands.iter().copied().collect();
     let mut tels: Vec<NodeId> = Vec::with_capacity(cands.len());
     for &e in &cands {
-        if cands
-            .iter()
-            .any(|&o| o != e && doc.ancestors(e).any(|a| a == o))
-        {
+        if doc.ancestors(e).any(|a| cset.contains(&a)) {
             // the ancestor's parse already absorbed this element's characters
             warn.push(format!(
                 "{}: nested in another selected text element; not edited",

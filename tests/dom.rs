@@ -581,3 +581,313 @@ fn ensure_prefix_declares_known_prefixes_once_and_refuses_unknown_ones() {
     assert!(!d.ensure_prefix("foo"));
     assert_eq!(d.attr(svg, "xmlns:foo"), None);
 }
+
+/// The byte-at-a-time escapers this plan replaces, kept as the reference.
+fn escape_text_ref(s: &str, out: &mut Vec<u8>) {
+    for b in s.bytes() {
+        match b {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
+            _ => out.push(b),
+        }
+    }
+}
+fn escape_attr_ref(s: &str, out: &mut Vec<u8>) {
+    for b in s.bytes() {
+        match b {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
+            b'\n' => out.extend_from_slice(b"&#10;"),
+            b'\r' => out.extend_from_slice(b"&#13;"),
+            b'\t' => out.extend_from_slice(b"&#9;"),
+            _ => out.push(b),
+        }
+    }
+}
+
+/// Every string of length ≤ 4 over the special bytes plus three ordinary chars, as an
+/// attribute value and as text: the document must serialise exactly as the reference escapers say.
+#[test]
+fn escaping_is_unchanged_for_every_special_byte_position() {
+    let alphabet: Vec<&str> = vec!["&", "<", ">", "\"", "\n", "\r", "\t", "a", "é", "𝄞"];
+    let mut cases: Vec<String> = vec![String::new()];
+    for len in 1..=4 {
+        let mut next = Vec::new();
+        for c in &cases {
+            if c.chars().count() == len - 1 {
+                for a in &alphabet {
+                    next.push(format!("{c}{a}"));
+                }
+            }
+        }
+        cases.extend(next);
+    }
+    for s in &cases {
+        // attribute: build the document from the escaped reference form so parse() sees the value `s`
+        let mut esc_attr = Vec::new();
+        escape_attr_ref(s, &mut esc_attr);
+        let mut esc_text = Vec::new();
+        // XML parsers may normalise a raw carriage return in text content, so that byte is only
+        // exercised inside the attribute (where it is written as &#13;)
+        if !s.contains('\r') {
+            escape_text_ref(s, &mut esc_text);
+        }
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"g\" data-v=\"{}\">{}</g></svg>",
+            String::from_utf8(esc_attr).unwrap(),
+            String::from_utf8(esc_text).unwrap()
+        );
+        let doc = Doc::parse(svg.as_bytes()).unwrap();
+        let g = doc.by_id("g").unwrap();
+        assert_eq!(
+            doc.attr(g, "data-v"),
+            Some(s.as_str()),
+            "value round trip for {s:?}"
+        );
+        let mut out = Vec::new();
+        doc.write(&mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            svg,
+            "serialisation for {s:?}"
+        );
+    }
+}
+
+#[test]
+fn a_large_attribute_round_trips_byte_for_byte() {
+    let payload: String = (0..4_000_000u32)
+        .map(|i| {
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[(i % 64) as usize]
+                as char
+        })
+        .collect();
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><image id=\"i\" href=\"data:image/png;base64,{payload}\"/></svg>"
+    );
+    let doc = Doc::parse(svg.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    doc.write(&mut out);
+    assert_eq!(out.len(), svg.len());
+    assert!(out == svg.as_bytes(), "large attribute changed");
+}
+
+#[test]
+fn setting_an_attribute_to_its_current_value_bumps_no_generation() {
+    let mut doc = Doc::parse(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"r\" style=\"fill:red\" width=\"3\"/></svg>",
+    )
+    .unwrap();
+    let r = doc.by_id("r").unwrap();
+    let (g0, s0) = (doc.generation(), doc.style_generation());
+    doc.set_attr(r, "style", "fill:red");
+    doc.set_attr(r, "width", "3");
+    doc.set_attr(r, "id", "r");
+    assert_eq!(
+        doc.generation(),
+        g0,
+        "identical writes must not bump generation"
+    );
+    assert_eq!(
+        doc.style_generation(),
+        s0,
+        "identical writes must not bump style_generation"
+    );
+    doc.set_attr(r, "style", "fill:blue");
+    assert!(doc.generation() > g0 && doc.style_generation() > s0);
+}
+
+#[test]
+fn a_duplicate_id_keeps_pointing_at_the_first_node() {
+    let mut doc = Doc::parse(
+        b"<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"dup\" width=\"1\"/><rect id=\"dup\" width=\"2\"/></svg>",
+    )
+    .unwrap();
+    let first = doc.by_id("dup").unwrap();
+    assert_eq!(doc.attr(first, "width"), Some("1"));
+    let g0 = doc.generation();
+    doc.set_attr(first, "id", "dup");
+    assert_eq!(doc.by_id("dup"), Some(first));
+    assert_eq!(doc.generation(), g0);
+}
+
+const MOVE_DOC: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"a\"><g id=\"b\"><rect id=\"c\"/><rect id=\"d\"/></g></g><g id=\"z\"/></svg>";
+
+#[test]
+fn moving_a_subtree_keeps_every_id_resolvable() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    let before: Vec<_> = ["a", "b", "c", "d", "z"]
+        .iter()
+        .map(|i| doc.by_id(i).unwrap())
+        .collect();
+    doc.append_child(z, b);
+    let after: Vec<_> = ["a", "b", "c", "d", "z"]
+        .iter()
+        .map(|i| doc.by_id(i).unwrap())
+        .collect();
+    assert_eq!(before, after);
+    assert_eq!(doc.parent(b), Some(z));
+    doc.insert_before(b, doc.by_id("a").unwrap());
+    let again: Vec<_> = ["a", "b", "c", "d", "z"]
+        .iter()
+        .map(|i| doc.by_id(i).unwrap())
+        .collect();
+    assert_eq!(before, again);
+}
+
+#[test]
+fn moving_a_subtree_bumps_each_generation_exactly_once() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    let (g, s, sh) = (
+        doc.generation(),
+        doc.style_generation(),
+        doc.sheet_generation(),
+    );
+    doc.append_child(z, b);
+    assert_eq!(doc.generation(), g + 1);
+    assert_eq!(doc.style_generation(), s + 1);
+    assert_eq!(doc.sheet_generation(), sh, "no <style> moved");
+    let mut with_style = Doc::parse(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"a\"><style id=\"s\">*{fill:red}</style></g><g id=\"z\"/></svg>".as_bytes(),
+    )
+    .unwrap();
+    let (a, z) = (
+        with_style.by_id("a").unwrap(),
+        with_style.by_id("z").unwrap(),
+    );
+    let sh = with_style.sheet_generation();
+    with_style.append_child(z, a);
+    assert!(
+        with_style.sheet_generation() > sh,
+        "a moved <style> re-orders the sheet"
+    );
+}
+
+#[test]
+fn detaching_then_reattaching_a_subtree_restores_the_id_index() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    doc.detach(b);
+    assert_eq!(doc.by_id("b"), None);
+    assert_eq!(doc.by_id("c"), None);
+    doc.append_child(z, b);
+    assert_eq!(doc.by_id("b"), Some(b));
+    assert_eq!(doc.by_id("c").map(|c| doc.parent(c)), Some(Some(b)));
+}
+
+#[test]
+fn a_duplicate_id_keeps_pointing_at_the_first_node_after_a_move() {
+    let mut doc = Doc::parse(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"first\"><rect id=\"dup\" width=\"1\"/></g><g id=\"second\"><rect id=\"dup\" width=\"2\"/></g><g id=\"z\"/></svg>".as_bytes(),
+    )
+    .unwrap();
+    let first_dup = doc.by_id("dup").unwrap();
+    assert_eq!(doc.attr(first_dup, "width"), Some("1"));
+    let (second, z) = (doc.by_id("second").unwrap(), doc.by_id("z").unwrap());
+    doc.append_child(z, second);
+    assert_eq!(
+        doc.by_id("dup"),
+        Some(first_dup),
+        "moving the shadowed node changes nothing"
+    );
+    let first = doc.by_id("first").unwrap();
+    doc.append_child(z, first);
+    assert_eq!(
+        doc.by_id("dup"),
+        Some(first_dup),
+        "moving the indexed node keeps it indexed"
+    );
+}
+
+#[test]
+fn moving_a_node_out_of_a_detached_subtree_reindexes_its_ids() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let (b, z) = (doc.by_id("b").unwrap(), doc.by_id("z").unwrap());
+    let c = doc.by_id("c").unwrap();
+    doc.detach(b);
+    assert_eq!(doc.by_id("c"), None, "c left the index with the whole of b");
+    doc.append_child(z, c);
+    assert_eq!(
+        doc.by_id("c"),
+        Some(c),
+        "c re-enters the document and must be re-indexed even though it kept a (detached) parent"
+    );
+    assert_eq!(doc.by_id("d"), None, "d is still inside the detached b");
+}
+
+#[test]
+fn a_shadowed_duplicate_id_becomes_resolvable_when_the_indexed_one_is_detached_then_the_shadow_moves()
+ {
+    let mut doc = Doc::parse(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"first\"><rect id=\"dup\" width=\"1\"/><rect id=\"dup\" width=\"2\"/></g><g id=\"z\"/></svg>".as_bytes(),
+    )
+    .unwrap();
+    let first = doc.by_id("first").unwrap();
+    let indexed = doc.by_id("dup").unwrap();
+    let second = doc.last_child(first).unwrap();
+    assert_ne!(
+        indexed, second,
+        "the first-wins duplicate shadows the second"
+    );
+    let z = doc.by_id("z").unwrap();
+    doc.detach(first);
+    assert_eq!(doc.by_id("dup"), None, "the indexed dup left with `first`");
+    doc.append_child(z, second);
+    assert_eq!(
+        doc.by_id("dup"),
+        Some(second),
+        "moving the shadow out of the now-detached `first` re-indexes it — 0.1.0's behaviour"
+    );
+}
+
+#[test]
+fn selection_ordered_keeps_inkscape_order_and_drops_repeats() {
+    let mut body = String::new();
+    for i in 0..5000 {
+        body.push_str(&format!("<rect id=\"r{i}\"/>"));
+    }
+    let doc =
+        Doc::parse(format!("<svg xmlns=\"http://www.w3.org/2000/svg\">{body}</svg>").as_bytes())
+            .unwrap();
+    let mut ids: Vec<String> = (0..5000).rev().map(|i| format!("r{i}")).collect();
+    ids.push("r4999".to_string()); // repeat
+    ids.push("missing".to_string());
+    let t0 = std::time::Instant::now();
+    let sel = doc.selection_ordered(&ids);
+    assert!(t0.elapsed().as_secs() < 5, "quadratic selection_ordered");
+    assert_eq!(sel.len(), 5000);
+    assert_eq!(sel[0], doc.by_id("r4999").unwrap());
+    assert_eq!(sel[4999], doc.by_id("r0").unwrap());
+}
+
+#[test]
+fn selection_of_one_id_matches_the_general_path() {
+    let mut doc = Doc::parse(MOVE_DOC.as_bytes()).unwrap();
+    let one = doc.selection(&["c".to_string()]);
+    let two = doc.selection(&["d".to_string(), "c".to_string()]);
+    assert_eq!(one, vec![doc.by_id("c").unwrap()]);
+    assert_eq!(
+        two,
+        vec![doc.by_id("c").unwrap(), doc.by_id("d").unwrap()],
+        "document order"
+    );
+    assert!(doc.selection(&["nope".to_string()]).is_empty());
+
+    let c = doc.by_id("c").unwrap();
+    doc.detach(c);
+    assert!(
+        doc.selection(&["c".to_string()]).is_empty(),
+        "the one-id fast path must agree with the general path on a detached node"
+    );
+    assert_eq!(
+        doc.selection(&["c".to_string(), "d".to_string()]),
+        vec![doc.by_id("d").unwrap()],
+        "d is unaffected; c is gone from both paths"
+    );
+}

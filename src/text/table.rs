@@ -16,6 +16,7 @@ pub struct CharTable {
     true_style: HashMap<FontSpec, Option<FaceKey>>,
     char_style: HashMap<(FontSpec, char), Option<FaceKey>>,
     preceders: HashMap<(FaceKey, char), Vec<char>>,
+    el_count: usize,
 }
 
 fn is_generic(f: &str) -> bool {
@@ -127,11 +128,17 @@ impl CharTable {
             true_style,
             char_style,
             preceders,
+            el_count: els.len(),
         }
     }
 
     pub fn spec_count(&self) -> usize {
         self.true_style.len()
+    }
+
+    /// How many elements `build` was given (the table's scope).
+    pub fn el_count(&self) -> usize {
+        self.el_count
     }
 
     pub fn true_face(&self, spec: &FontSpec) -> Option<FaceKey> {

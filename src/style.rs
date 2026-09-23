@@ -7,7 +7,8 @@
 //! propagates down — upstream does not distinguish inherited properties and the
 //! ported algorithms rely on that. Missing values come from `default_value`.
 
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::dom::{Doc, NodeId};
@@ -370,11 +371,24 @@ struct Rule {
     /// `(name, value, important)`
     decls: Vec<(String, String, bool)>,
     order: usize,
+    /// A lone `*` compound: matches every element unconditionally.
+    universal: bool,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Stylesheet {
     rules: Vec<Rule>,
+    /// The lone-`*` rules' declarations folded in source order (see `cascaded_style`); only
+    /// meaningful when `universal_folded`.
+    universal_normal: Style,
+    universal_important: Style,
+    /// `order` of the first lone-`*` rule (the folded block's position in the cascade).
+    universal_order: usize,
+    /// True when every rule of specificity (0,0,0) is a lone `*`, so those rules can be applied as
+    /// one pre-merged block without changing the cascade order. A `* *` rule disables the fold.
+    universal_folded: bool,
+    /// Every property name declared anywhere in the sheet (`sheet_value` short-circuit).
+    props: HashSet<String>,
 }
 
 impl Stylesheet {
@@ -425,12 +439,47 @@ pub fn parse_stylesheet(css: &str) -> Stylesheet {
                     selector,
                     decls: decls.clone(),
                     order,
+                    universal: false,
                 });
                 order += 1;
             }
         }
         i = close;
     }
+    finish_sheet(sheet)
+}
+
+/// Computes the per-rule `universal` flag, the folded universal blocks and the property index.
+fn finish_sheet(mut sheet: Stylesheet) -> Stylesheet {
+    let mut folded = true;
+    let mut first: Option<usize> = None;
+    for r in &mut sheet.rules {
+        let c = &r.selector.parts[0].0;
+        r.universal = r.selector.parts.len() == 1
+            && c.tag.is_none()
+            && c.id.is_none()
+            && c.classes.is_empty();
+        if r.selector.specificity == (0, 0, 0) && !r.universal {
+            folded = false;
+        }
+        for (k, _, _) in &r.decls {
+            sheet.props.insert(k.clone());
+        }
+    }
+    if folded {
+        for r in sheet.rules.iter().filter(|r| r.universal) {
+            first.get_or_insert(r.order);
+            for (k, v, imp) in &r.decls {
+                if *imp {
+                    sheet.universal_important.set_decl(k, v);
+                } else {
+                    sheet.universal_normal.set_decl(k, v);
+                }
+            }
+        }
+    }
+    sheet.universal_folded = folded;
+    sheet.universal_order = first.unwrap_or(0);
     sheet
 }
 
@@ -650,46 +699,64 @@ impl Doc {
     /// The element's own declarations from all three sources, no inheritance.
     /// This is what `ungroup` pushes down onto children.
     pub fn cascaded_style(&self, n: NodeId) -> Style {
-        // sort key: (important, is_inline, specificity, order) — later wins
-        let mut decls: Vec<(DeclKey, String, String)> = Vec::new();
+        // sort key: (important, is_inline, specificity, order) — later wins; the sort is stable,
+        // so declarations pushed with equal keys keep their push order
+        let sheet = self.stylesheet();
+        let inline = self.attr(n, "style");
+        let mut decls: Vec<(DeclKey, Cow<'_, str>, &str)> = Vec::new();
         for a in self.attrs(n) {
             if PRESENTATION_ATTRS.contains(&a.name.as_str()) {
                 decls.push((
                     (false, false, (0, 0, 0), 0),
-                    a.name.clone(),
-                    a.value.clone(),
+                    Cow::Borrowed(a.name.as_str()),
+                    a.value.as_str(),
                 ));
             }
         }
-        let sheet = self.stylesheet();
-        for rule in &sheet.rules {
-            if rule.selector.matches(self, n) {
-                for (k, v, imp) in &rule.decls {
-                    decls.push((
-                        (*imp, false, rule.selector.specificity, rule.order + 1),
-                        k.clone(),
-                        v.clone(),
-                    ));
-                }
+        if sheet.universal_folded {
+            let key = (false, false, (0, 0, 0), sheet.universal_order + 1);
+            for (k, v) in &sheet.universal_normal.0 {
+                decls.push((key, Cow::Borrowed(k.as_str()), v.as_str()));
+            }
+            let key = (true, false, (0, 0, 0), sheet.universal_order + 1);
+            for (k, v) in &sheet.universal_important.0 {
+                decls.push((key, Cow::Borrowed(k.as_str()), v.as_str()));
             }
         }
-        if let Some(inline) = self.attr(n, "style") {
+        for rule in &sheet.rules {
+            if (sheet.universal_folded && rule.universal) || !rule.selector.matches(self, n) {
+                continue;
+            }
+            for (k, v, imp) in &rule.decls {
+                decls.push((
+                    (*imp, false, rule.selector.specificity, rule.order + 1),
+                    Cow::Borrowed(k.as_str()),
+                    v.as_str(),
+                ));
+            }
+        }
+        if let Some(inline) = inline {
             for (idx, decl) in split_declarations(inline).enumerate() {
                 let Some((k, v)) = decl.split_once(':') else {
                     continue;
                 };
-                let k = k.trim().to_ascii_lowercase();
+                let k = k.trim();
                 let (v, imp) = strip_important(v.trim());
                 if k.is_empty() || v.is_empty() {
                     continue;
                 }
-                decls.push(((imp, true, (0, 0, 0), idx), k, v.to_string()));
+                let k = if k.bytes().any(|b| b.is_ascii_uppercase()) {
+                    Cow::Owned(k.to_ascii_lowercase())
+                } else {
+                    Cow::Borrowed(k)
+                };
+                decls.push(((imp, true, (0, 0, 0), idx), k, v));
             }
         }
         decls.sort_by_key(|d| d.0);
         let mut st = Style::default();
-        for (_, k, v) in decls {
-            st.set_decl(&k, &v);
+        for (_, k, v) in &decls {
+            st.set_decl(k, v);
         }
         st
     }
@@ -794,6 +861,9 @@ impl Doc {
     /// source order)` wins; later declarations win ties.
     pub fn sheet_value(&self, n: NodeId, prop: &str) -> Option<String> {
         let sheet = self.stylesheet();
+        if !sheet.props.contains(prop) {
+            return None;
+        }
         let mut best: Option<(SheetKey, String)> = None;
         for rule in &sheet.rules {
             if !rule.selector.matches(self, n) {

@@ -20,7 +20,7 @@ pub enum FontStyle {
     Oblique,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FaceInfo {
     pub family: String,
     pub path: Option<PathBuf>,
@@ -35,6 +35,7 @@ pub struct FaceInfo {
     pub descent_max: f64,
     pub x_height: f64,
     pub cap_height: f64,
+    pub bundled: bool,
 }
 
 pub struct FontSystem {
@@ -54,14 +55,42 @@ pub struct FontSystem {
 /// face pass (`FaceInfo` per face, which re-reads every font file for its metrics) are the whole
 /// cost of `load()`, and a tool run may build two font systems (`remove_kerning` and the bbox
 /// stage's `Ctx`); later loads clone the first result (`Database` and `FaceInfo` are `Clone`).
-type ScanKey = (bool, Vec<PathBuf>);
+///
+/// What a scan covers: the system fonts (unless `SCIINK_NO_SYSTEM_FONTS=1`), the `SCIINK_FONT_DIRS`
+/// directories in order, and the bundled font directory (`paths::bundled_font_dir`, present only
+/// when the system fonts are scanned and `SCIINK_NO_BUNDLED_FONTS` is not `1`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScanKey {
+    pub system: bool,
+    pub dirs: Vec<PathBuf>,
+    pub bundled: Option<PathBuf>,
+}
+
 type Scan = (fontdb::Database, Vec<(fontdb::ID, FaceInfo)>);
 static SCANS: OnceLock<Mutex<HashMap<ScanKey, Arc<Scan>>>> = OnceLock::new();
 static SCAN_COUNT: AtomicUsize = AtomicUsize::new(0);
+static FACE_OPENS: AtomicUsize = AtomicUsize::new(0);
+static CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
+static CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
+static CACHE_WRITES: AtomicUsize = AtomicUsize::new(0);
 
 /// How many filesystem font scans this process has run (tests).
 pub fn scan_count() -> usize {
     SCAN_COUNT.load(Ordering::SeqCst)
+}
+
+/// Font files opened for metrics in this process (tests).
+pub fn face_open_count() -> usize {
+    FACE_OPENS.load(Ordering::SeqCst)
+}
+
+/// `(cache hits, cache misses, cache writes)` in this process (tests).
+pub fn cache_events() -> (usize, usize, usize) {
+    (
+        CACHE_HITS.load(Ordering::SeqCst),
+        CACHE_MISSES.load(Ordering::SeqCst),
+        CACHE_WRITES.load(Ordering::SeqCst),
+    )
 }
 
 fn scan_key() -> ScanKey {
@@ -69,10 +98,121 @@ fn scan_key() -> ScanKey {
     let dirs = std::env::var_os("SCIINK_FONT_DIRS")
         .map(|d| std::env::split_paths(&d).collect())
         .unwrap_or_default();
-    (system, dirs)
+    let bundled = if system && std::env::var_os("SCIINK_NO_BUNDLED_FONTS").is_none_or(|v| v != "1")
+    {
+        crate::paths::bundled_font_dir()
+    } else {
+        None
+    };
+    ScanKey {
+        system,
+        dirs,
+        bundled,
+    }
 }
 
-/// The scan for the current environment, from the cache or freshly made (and then cached).
+/// The filesystem scan itself: fontdb enumerates the faces, `scan_entries` opens each for metrics.
+fn scan_fresh(key: &ScanKey) -> Scan {
+    SCAN_COUNT.fetch_add(1, Ordering::SeqCst);
+    let mut db = fontdb::Database::new();
+    if key.system {
+        db.load_system_fonts();
+    }
+    for d in &key.dirs {
+        db.load_fonts_dir(d);
+    }
+    if let Some(b) = &key.bundled {
+        db.load_fonts_dir(b);
+    }
+    let entries = FontSystem::scan_entries(&db, key.bundled.as_deref());
+    (db, entries)
+}
+
+/// A scan rebuilt from cached faces: fontdb takes the metadata as given (`push_face_info`) and our
+/// metrics come from the cache, so no font file is opened.
+fn from_cached(faces: Vec<super::fontcache::CachedFace>) -> Scan {
+    let mut db = fontdb::Database::new();
+    let mut entries = Vec::with_capacity(faces.len());
+    for f in faces {
+        let Some(path) = f.info.path.clone() else {
+            continue;
+        };
+        let id = db.push_face_info(fontdb::FaceInfo {
+            id: fontdb::ID::dummy(),
+            source: fontdb::Source::File(path),
+            index: f.info.index,
+            families: f
+                .families
+                .into_iter()
+                .map(|n| (n, fontdb::Language::English_UnitedStates))
+                .collect(),
+            post_script_name: f.post_script_name,
+            style: match f.info.style {
+                FontStyle::Normal => fontdb::Style::Normal,
+                FontStyle::Italic => fontdb::Style::Italic,
+                FontStyle::Oblique => fontdb::Style::Oblique,
+            },
+            weight: fontdb::Weight(f.info.weight),
+            stretch: stretch_from_number(f.info.width),
+            monospaced: f.monospaced,
+        });
+        entries.push((id, f.info));
+    }
+    (db, entries)
+}
+
+fn stretch_from_number(n: u16) -> fontdb::Stretch {
+    use fontdb::Stretch as S;
+    match n {
+        1 => S::UltraCondensed,
+        2 => S::ExtraCondensed,
+        3 => S::Condensed,
+        4 => S::SemiCondensed,
+        6 => S::SemiExpanded,
+        7 => S::Expanded,
+        8 => S::ExtraExpanded,
+        9 => S::UltraExpanded,
+        _ => S::Normal,
+    }
+}
+
+/// The faces of a fresh scan in cache form; `None` when a face has no file path.
+fn to_cached(scan: &Scan) -> Option<Vec<super::fontcache::CachedFace>> {
+    scan.1
+        .iter()
+        .map(|(id, info)| {
+            let f = scan.0.face(*id)?;
+            info.path.as_ref()?;
+            Some(super::fontcache::CachedFace {
+                info: info.clone(),
+                families: f.families.iter().map(|(n, _)| n.clone()).collect(),
+                post_script_name: f.post_script_name.clone(),
+                monospaced: f.monospaced,
+            })
+        })
+        .collect()
+}
+
+/// Read the cache for `key` when there is one, else scan and (try to) write it.
+fn scan_with_cache_raw(key: &ScanKey, cache: Option<&std::path::Path>) -> Scan {
+    if let Some(p) = cache {
+        if let Some(faces) = super::fontcache::read(p, key) {
+            CACHE_HITS.fetch_add(1, Ordering::SeqCst);
+            return from_cached(faces);
+        }
+        CACHE_MISSES.fetch_add(1, Ordering::SeqCst);
+    }
+    let scan = scan_fresh(key);
+    if let Some(p) = cache {
+        if let Some(faces) = to_cached(&scan) {
+            super::fontcache::write(p, key, &faces);
+            CACHE_WRITES.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    scan
+}
+
+/// The scan for the current environment, from the process memo, the disk cache, or fresh.
 fn scanned() -> Arc<Scan> {
     let key = scan_key();
     let cache = SCANS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -80,16 +220,8 @@ fn scanned() -> Arc<Scan> {
     if let Some(s) = guard.get(&key) {
         return s.clone();
     }
-    SCAN_COUNT.fetch_add(1, Ordering::SeqCst);
-    let mut db = fontdb::Database::new();
-    if key.0 {
-        db.load_system_fonts();
-    }
-    for d in &key.1 {
-        db.load_fonts_dir(d);
-    }
-    let entries = FontSystem::scan_entries(&db);
-    let scan = Arc::new((db, entries));
+    let path = super::fontcache::cache_path(&key);
+    let scan = Arc::new(scan_with_cache_raw(&key, path.as_deref()));
     guard.insert(key, scan.clone());
     scan
 }
@@ -100,7 +232,15 @@ impl FontSystem {
     pub fn load() -> FontSystem {
         let t0 = Instant::now();
         let scan = scanned();
-        Self::from_entries(scan.0.clone(), scan.1.clone(), t0)
+        let fs = Self::from_entries(scan.0.clone(), scan.1.clone(), t0);
+        crate::log::line(&format!(
+            "tool=fonts phase=scan dt={:.1} faces={} scans={} cache_hits={}",
+            fs.load_ms,
+            fs.infos.len(),
+            scan_count(),
+            CACHE_HITS.load(Ordering::SeqCst)
+        ));
+        fs
     }
 
     /// Only the given directories (tests); never cached.
@@ -110,13 +250,25 @@ impl FontSystem {
         for d in dirs {
             db.load_fonts_dir(d);
         }
-        let entries = Self::scan_entries(&db);
+        let entries = Self::scan_entries(&db, None);
+        Self::from_entries(db, entries, t0)
+    }
+
+    /// Scan `key` through the disk cache at `cache` (read if valid, else scan and write). Bypasses
+    /// the process-wide memo — the entry point the font-cache tests use.
+    pub fn scan_with_cache(key: &ScanKey, cache: Option<&std::path::Path>) -> FontSystem {
+        let t0 = Instant::now();
+        let (db, entries) = scan_with_cache_raw(key, cache);
         Self::from_entries(db, entries, t0)
     }
 
     /// The face pass: one `FaceInfo` per parsable face, sorted by (family, weight, style, width,
-    /// path, index). This is the part of `from_db` up to and including `entries.sort_by(...)`.
-    fn scan_entries(db: &fontdb::Database) -> Vec<(fontdb::ID, FaceInfo)> {
+    /// bundled, path, index). This is the part of `from_db` up to and including
+    /// `entries.sort_by(...)`.
+    fn scan_entries(
+        db: &fontdb::Database,
+        bundled: Option<&std::path::Path>,
+    ) -> Vec<(fontdb::ID, FaceInfo)> {
         let mut entries: Vec<(fontdb::ID, FaceInfo)> = Vec::new();
         for f in db.faces() {
             let family = f
@@ -134,6 +286,7 @@ impl FontSystem {
                 fontdb::Style::Italic => FontStyle::Italic,
                 fontdb::Style::Oblique => FontStyle::Oblique,
             };
+            FACE_OPENS.fetch_add(1, Ordering::SeqCst);
             let metrics = db.with_face_data(f.id, |data, idx| {
                 ttf_parser::Face::parse(data, idx)
                     .ok()
@@ -144,7 +297,7 @@ impl FontSystem {
                 f.id,
                 FaceInfo {
                     family,
-                    path,
+                    path: path.clone(),
                     index,
                     weight: f.weight.0,
                     style,
@@ -156,6 +309,7 @@ impl FontSystem {
                     descent_max: m.4,
                     x_height: m.5,
                     cap_height: m.6,
+                    bundled: matches!((&path, bundled), (Some(p), Some(b)) if p.starts_with(b)),
                 },
             ));
         }
@@ -165,6 +319,7 @@ impl FontSystem {
                 a.1.weight,
                 a.1.style as u8,
                 a.1.width,
+                a.1.bundled as u8,
                 &a.1.path,
                 a.1.index,
             );
@@ -173,6 +328,7 @@ impl FontSystem {
                 b.1.weight,
                 b.1.style as u8,
                 b.1.width,
+                b.1.bundled as u8,
                 &b.1.path,
                 b.1.index,
             );
@@ -242,6 +398,11 @@ impl FontSystem {
 
     pub fn faces(&self) -> impl Iterator<Item = FaceKey> + '_ {
         (0..self.infos.len() as u32).map(FaceKey)
+    }
+
+    /// True when the face comes from the bundled font directory shipped next to the `.inx` files.
+    pub fn is_bundled(&self, k: FaceKey) -> bool {
+        self.infos[k.0 as usize].bundled
     }
 
     /// Faces whose font reports `family` (case-insensitive); empty when unknown.

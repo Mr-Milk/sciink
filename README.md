@@ -77,15 +77,26 @@ xattr -dr com.apple.quarantine "$HOME/Library/Application Support/org.inkscape.I
 | **Diagnostics**, **Debug** | Version, platform and font report; Font Probe, Text Highlight and Text Fix show what the text engine measures and does. |
 
 Options and defaults match the original. Known differences are listed under "Deliberate deviations" in
-[docs/spec/02-geometry-tools.md](docs/spec/02-geometry-tools.md) and
-[docs/spec/01-text-engine.md](docs/spec/01-text-engine.md). Scientific-Inkscape's Autoexporter and
+[docs/spec/02-geometry-tools.md](docs/spec/02-geometry-tools.md),
+[docs/spec/01-text-engine.md](docs/spec/01-text-engine.md) and
+[docs/spec/03-infrastructure.md](docs/spec/03-infrastructure.md). Scientific-Inkscape's Autoexporter and
 Gallery Viewer are not part of sciink.
 
 ## Fonts
 
 Text is measured with the fonts installed on your machine. A missing family is substituted and the tool
 reports which one (Diagnostics and Debug ▸ Font Probe show every resolution). `SCIINK_FONT_DIRS` adds
-font directories; `SCIINK_NO_SYSTEM_FONTS=1` skips the system fonts.
+font directories; `SCIINK_NO_SYSTEM_FONTS=1` skips the system fonts. DejaVu Sans (Book and Bold) is
+bundled, so matplotlib's default font measures correctly even where it is not installed; an installed
+copy takes precedence (`SCIINK_NO_SYSTEM_FONTS=1` also skips the bundled copy; `SCIINK_NO_BUNDLED_FONTS=1`
+skips only it).
+
+## Large documents
+
+Inkscape writes the whole document to a temporary file, runs the extension, reads the result back and
+re-renders it, so most of the wait on a large file is that round trip, not the tool itself. Link raster
+images instead of embedding them, since base64 image data inflates both the file and the round trip.
+Run a tool on one figure's selection rather than on a whole layer or the whole document.
 
 ## Developing
 
@@ -94,4 +105,5 @@ dev loop, packaging and releases. Changes are listed in [CHANGELOG.md](CHANGELOG
 
 ## License
 
-[GPL-2.0-or-later](LICENSE), like Scientific-Inkscape.
+[GPL-2.0-or-later](LICENSE), like Scientific-Inkscape. DejaVu Sans is redistributed under the
+Bitstream Vera and DejaVu licences (`fonts/LICENSE-DejaVu.txt` in the release).
