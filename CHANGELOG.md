@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 — 2026-09-23
 
 First release with all six tools of Scientific-Inkscape's core, as one native binary per platform
 (macOS universal, Windows x64, Linux x64) with no Python dependency:
