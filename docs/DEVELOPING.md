@@ -131,8 +131,9 @@ docs/superpowers/plans/  one implementation plan per part, with the rulings made
 ## Conventions
 
 - Behaviour follows Scientific-Inkscape, constants included. Every intentional difference is recorded
-  under "Deliberate deviations" in [`spec/02-geometry-tools.md`](spec/02-geometry-tools.md) or
-  [`spec/01-text-engine.md`](spec/01-text-engine.md), with the reason.
+  under "Deliberate deviations" in [`spec/02-geometry-tools.md`](spec/02-geometry-tools.md),
+  [`spec/01-text-engine.md`](spec/01-text-engine.md) or [`spec/03-infrastructure.md`](spec/03-infrastructure.md),
+  with the reason.
 - Tools are silent on success. stderr carries only `warning: …` lines and error messages, because
   Inkscape shows it as a dialog.
 - Every number written to the document goes through `num::fmt` (8 significant digits), so output is
