@@ -12,7 +12,9 @@ First release with all six tools of Scientific-Inkscape's core, as one native bi
   markings.
 - **Homogenizer** — font size, font family (Inkscape font specifications), text distortion, stroke
   width, transform fusing, clip/mask removal; plot-aware text placement.
-- **Text Ghoster**, **Combine by Color**, **Favorite Markers**.
+- **Text Ghoster**, **Combine by Color**.
+- **Favorite Markers** — stored start/mid/end marker templates (Arrow, Triangle, Distance built
+  in) applied at any size; add your own from a selected path, no restart needed.
 - Diagnostics (About) and three debug tools (Font Probe, Text Highlight, Text Fix).
 - One-line installers for macOS/Linux (`install.sh`) and Windows (`install.ps1`).
 

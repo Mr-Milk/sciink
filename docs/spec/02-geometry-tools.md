@@ -300,10 +300,12 @@ else marker; parse `url(#id)` properly).
 - Add/remove (:387-444): addt → store props of first path-like selected element under template_name; remt →
   delete by name. Message "Templates successfully updated!…".
 - **Storage**: an SVG document at `$INKSCAPE_PROFILE_DIR/sciink/favorite_markers.svg` (Inkscape exports
-  INKSCAPE_PROFILE_DIR; `inkex/utils.py:57-64`), fallback `<binary dir>/favorite_markers.svg`, overridable
-  with a hidden `--store <path>` parameter (tests). Format `{"templates": {"Arrow":
-  [start|null, mid|null, end|null], …}}` with `{"attrs": {...}, "paths": [{...}]}` (prefixed attr names).
-  Three built-ins (`favorite_markers.py:24-214`) embedded in the binary. UX: `template` dropdown = `Arrow |
+  INKSCAPE_PROFILE_DIR; `inkex/utils.py:57-64`), fallback `<inx dir>/favorite_markers.svg` (the extension
+  folder), overridable with a hidden `--store <path>` parameter (tests). Format: one `<marker
+  sciink:template="<name>" sciink:position="start|mid|end" …marker attributes…>` element per stored marker,
+  its `<path>` children carrying the path attributes (ids never stored; a known namespace prefix is declared
+  on the store's root, an unknown one drops the attribute). Three built-ins (`favorite_markers.py:24-214`)
+  embedded in the binary. UX: `template` dropdown = `Arrow |
   Triangle | Distance | Custom (name below)` + `template_name` string; add/remove tab: `addt`, `remt` (by
   name), `list` checkbox prints stored names to stderr. No self-modifying .inx, no restart. Lost: custom names
   not in dropdown; no pickle migration.
@@ -491,3 +493,12 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
   them when applying).
 - `needs-live-preview` stays off (upstream's value): a preview on the Add/remove page would rewrite
   the store on every parameter change.
+- Adding a template from a path without markers is an error (upstream stores an empty entry).
+- Applying a template with no stored markers is an error (upstream silently removes the shapes'
+  markers).
+- A checked position whose template has no stored marker removes the shape's inline marker
+  (upstream-identical).
+- Marker ids strip whitespace from the template name, so templates whose names differ only in
+  whitespace share markers.
+- Attributes copied from or to a document get a known namespace prefix declared on the destination
+  root; an attribute with an unknown prefix is dropped (upstream's lxml declares every prefix).

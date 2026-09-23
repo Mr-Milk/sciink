@@ -66,11 +66,11 @@ Then restart Inkscape. The tools appear under **Extensions ▸ Scientific**.
 
 Until the first stable release ships, GitHub's `latest` release excludes pre-releases, so both
 installers automatically fall back to the newest release including pre-releases. Pin a specific
-version instead with `SCIINK_VERSION=v0.1.0-alpha.1` (sh) or `-Version v0.1.0-alpha.1`
+version instead with `SCIINK_VERSION=v0.1.0` (sh) or `-Version v0.1.0`
 (PowerShell):
 
-    curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | SCIINK_VERSION=v0.1.0-alpha.1 sh
-    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Version v0.1.0-alpha.1
+    curl -fsSL https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.sh | SCIINK_VERSION=v0.1.0 sh
+    & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Mr-Milk/sciink/main/install.ps1))) -Version v0.1.0
 
 Manual install: download `sciink-<os>.zip` from the
 [latest release](https://github.com/Mr-Milk/sciink/releases/latest) and unzip it into Inkscape's
