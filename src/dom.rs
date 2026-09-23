@@ -579,6 +579,27 @@ impl Doc {
         self.bump();
     }
 
+    /// Makes `prefix` usable on this document: `true` when the root `<svg>` already declares
+    /// `xmlns:<prefix>`, when it is `xml`, or when the prefix is one of the standard ones
+    /// (`KNOWN_NS`) — then the declaration is added to the root. `false` for an unknown prefix.
+    pub fn ensure_prefix(&mut self, prefix: &str) -> bool {
+        if prefix == "xml" {
+            return true;
+        }
+        let svg = self.svg();
+        let decl = format!("xmlns:{prefix}");
+        if self.attr(svg, &decl).is_some() {
+            return true;
+        }
+        match KNOWN_NS.iter().find(|(_, p)| *p == prefix) {
+            Some((uri, _)) => {
+                self.set_attr(svg, &decl, uri.to_string());
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn remove_attr(&mut self, n: NodeId, name: &str) -> Option<String> {
         if name == "id" {
             if let Some(old) = self.attr(n, "id").map(str::to_string) {

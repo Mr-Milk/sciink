@@ -12,7 +12,6 @@ use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
 use crate::geom::Affine;
 use crate::ops::cleanup::url_id;
-use crate::ops::style::remove_inline;
 
 use super::first_line;
 
@@ -59,6 +58,22 @@ fn attrs_of(doc: &Doc, n: NodeId, skip: &[&str]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Copies attributes onto `dst`, skipping `skip`, declaring a known namespace prefix on the
+/// destination's root when needed and dropping an attribute whose prefix cannot be declared.
+fn copy_attrs(doc: &mut Doc, dst: NodeId, attrs: &[(String, String)], skip: &[&str]) {
+    for (k, v) in attrs {
+        if skip.contains(&k.as_str()) {
+            continue;
+        }
+        if let Some((prefix, _)) = k.split_once(':') {
+            if prefix != "xmlns" && !doc.ensure_prefix(prefix) {
+                continue;
+            }
+        }
+        doc.set_attr(dst, k, v.clone());
+    }
+}
+
 impl Store {
     pub fn builtins() -> Store {
         Store {
@@ -89,7 +104,7 @@ impl Store {
     fn markers(&self) -> Vec<NodeId> {
         let svg = self.doc.svg();
         self.doc
-            .children(svg)
+            .descendants(svg)
             .filter(|&n| self.doc.is_element(n) && self.doc.tag(n) == "marker")
             .collect()
     }
@@ -163,18 +178,15 @@ impl Store {
             let mk = self.doc.new_element("marker");
             self.doc.set_attr(mk, TEMPLATE_ATTR, name);
             self.doc.set_attr(mk, POSITION_ATTR, POSITIONS[i]);
-            for (k, v) in &m.attrs {
-                if k != "id" && k != TEMPLATE_ATTR && k != POSITION_ATTR {
-                    self.doc.set_attr(mk, k, v.clone());
-                }
-            }
+            copy_attrs(
+                &mut self.doc,
+                mk,
+                &m.attrs,
+                &["id", TEMPLATE_ATTR, POSITION_ATTR],
+            );
             for p in &m.paths {
                 let pe = self.doc.new_element("path");
-                for (k, v) in p {
-                    if k != "id" {
-                        self.doc.set_attr(pe, k, v.clone());
-                    }
-                }
+                copy_attrs(&mut self.doc, pe, p, &["id"]);
                 self.doc.append_child(mk, pe);
             }
             match prev {
@@ -296,21 +308,13 @@ pub fn ensure_marker(doc: &mut Doc, name: &str, m: &MarkerData, s: f64) -> Strin
         }
     }
     let mk = doc.new_element("marker");
-    for (k, v) in &m.attrs {
-        if k != "id" {
-            doc.set_attr(mk, k, v.clone());
-        }
-    }
+    copy_attrs(doc, mk, &m.attrs, &["id"]);
     let g = doc.new_element("g");
     doc.append_child(mk, g);
     doc.set_transform(g, Affine::scale(s));
     for p in &m.paths {
         let pe = doc.new_element("path");
-        for (k, v) in p {
-            if k != "id" {
-                doc.set_attr(pe, k, v.clone());
-            }
-        }
+        copy_attrs(doc, pe, p, &["id"]);
         doc.append_child(g, pe);
     }
     doc.append_child(defs, mk);
@@ -335,6 +339,9 @@ pub fn apply(
             store.templates().join(", ")
         )
     })?;
+    if t.iter().all(Option::is_none) {
+        return Err(format!("Template '{tname}' has no markers stored."));
+    }
     let s = size / 100.0;
     for &el in shapes {
         for (i, pos) in POSITIONS.iter().enumerate() {
@@ -344,7 +351,7 @@ pub fn apply(
                     let id = ensure_marker(doc, &format!("FM{tname}{pos}"), m, s);
                     doc.set_style(el, &prop, &format!("url(#{id})"));
                 }
-                _ => remove_inline(doc, el, &prop),
+                _ => doc.remove_style(el, &prop),
             }
         }
     }
@@ -377,7 +384,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
     let mut store = Store::load(&path)?;
     // FM:368–370: the selection and its descendants, shapes only, each once
     let mut shapes: Vec<NodeId> = Vec::new();
-    for r in doc.selection(&cli.common.ids) {
+    for r in doc.selection_ordered(&cli.common.ids) {
         for n in doc
             .descendants(r)
             .filter(|&n| doc.is_element(n) && SHAPE_TAGS.contains(&doc.tag(n)))
@@ -388,6 +395,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         }
     }
     if cli.tab == "addremove" {
+        let mut changed = false;
         if cli.addt {
             let name = cli.template_name.trim();
             if name.is_empty() {
@@ -402,17 +410,23 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
                 marker_props(&doc, sty.get("marker-mid")),
                 marker_props(&doc, sty.get("marker-end")),
             ];
+            if t.iter().all(Option::is_none) {
+                return Err("The selected path has no markers to store.".to_string());
+            }
             store.set(name, &t);
+            changed = true;
         }
         if cli.remt {
             let name = cli.template_rem.trim();
-            if !store.remove(name) {
+            if store.remove(name) {
+                changed = true;
+            } else {
                 messages.push(format!(
                     "warning: template '{name}' is not stored; nothing removed"
                 ));
             }
         }
-        if cli.addt || cli.remt {
+        if changed {
             store.save(&path)?;
             messages.push("Templates successfully updated!".to_string());
         }

@@ -520,7 +520,11 @@ fn add_remove_and_list_round_trip_through_the_store() {
         &store,
         &["--tab=addremove", "--remt=true", "--template_rem=My Arrows"],
     );
-    assert_eq!(msgs.len(), 2, "{msgs:?}");
+    assert_eq!(
+        msgs.len(),
+        1,
+        "a failed removal yields the warning alone, no success message: {msgs:?}"
+    );
     assert!(
         msgs[0].starts_with("warning: ") && msgs[0].contains("My Arrows"),
         "{}",
