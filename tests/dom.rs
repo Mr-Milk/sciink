@@ -581,3 +581,97 @@ fn ensure_prefix_declares_known_prefixes_once_and_refuses_unknown_ones() {
     assert!(!d.ensure_prefix("foo"));
     assert_eq!(d.attr(svg, "xmlns:foo"), None);
 }
+
+/// The byte-at-a-time escapers this plan replaces, kept as the reference.
+fn escape_text_ref(s: &str, out: &mut Vec<u8>) {
+    for b in s.bytes() {
+        match b {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
+            _ => out.push(b),
+        }
+    }
+}
+fn escape_attr_ref(s: &str, out: &mut Vec<u8>) {
+    for b in s.bytes() {
+        match b {
+            b'&' => out.extend_from_slice(b"&amp;"),
+            b'<' => out.extend_from_slice(b"&lt;"),
+            b'>' => out.extend_from_slice(b"&gt;"),
+            b'"' => out.extend_from_slice(b"&quot;"),
+            b'\n' => out.extend_from_slice(b"&#10;"),
+            b'\r' => out.extend_from_slice(b"&#13;"),
+            b'\t' => out.extend_from_slice(b"&#9;"),
+            _ => out.push(b),
+        }
+    }
+}
+
+/// Every string of length ≤ 4 over the special bytes plus three ordinary chars, as an
+/// attribute value and as text: the document must serialise exactly as the reference escapers say.
+#[test]
+fn escaping_is_unchanged_for_every_special_byte_position() {
+    let alphabet: Vec<&str> = vec!["&", "<", ">", "\"", "\n", "\r", "\t", "a", "é", "𝄞"];
+    let mut cases: Vec<String> = vec![String::new()];
+    for len in 1..=4 {
+        let mut next = Vec::new();
+        for c in &cases {
+            if c.chars().count() == len - 1 {
+                for a in &alphabet {
+                    next.push(format!("{c}{a}"));
+                }
+            }
+        }
+        cases.extend(next);
+    }
+    for s in &cases {
+        // attribute: build the document from the escaped reference form so parse() sees the value `s`
+        let mut esc_attr = Vec::new();
+        escape_attr_ref(s, &mut esc_attr);
+        let mut esc_text = Vec::new();
+        // XML parsers may normalise a raw carriage return in text content, so that byte is only
+        // exercised inside the attribute (where it is written as &#13;)
+        if !s.contains('\r') {
+            escape_text_ref(s, &mut esc_text);
+        }
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"g\" data-v=\"{}\">{}</g></svg>",
+            String::from_utf8(esc_attr).unwrap(),
+            String::from_utf8(esc_text).unwrap()
+        );
+        let doc = Doc::parse(svg.as_bytes()).unwrap();
+        let g = doc.by_id("g").unwrap();
+        assert_eq!(
+            doc.attr(g, "data-v"),
+            Some(s.as_str()),
+            "value round trip for {s:?}"
+        );
+        let mut out = Vec::new();
+        doc.write(&mut out);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            svg,
+            "serialisation for {s:?}"
+        );
+    }
+}
+
+#[test]
+fn a_large_attribute_round_trips_byte_for_byte() {
+    let payload: String = (0..4_000_000u32)
+        .map(|i| {
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"[(i % 64) as usize]
+                as char
+        })
+        .collect();
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\"><image id=\"i\" href=\"data:image/png;base64,{payload}\"/></svg>"
+    );
+    let doc = Doc::parse(svg.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    doc.write(&mut out);
+    assert_eq!(out.len(), svg.len());
+    assert!(out == svg.as_bytes(), "large attribute changed");
+}

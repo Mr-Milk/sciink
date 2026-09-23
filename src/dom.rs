@@ -113,6 +113,8 @@ pub struct Doc {
     // Read/written starting in Task 4 (navigation/mutation); laid down here so
     // the struct shape doesn't change under later tasks.
     next_auto_id: u32,
+    /// Byte length of the parsed source; `write` pre-sizes its buffer from it (0 for built documents).
+    source_len: usize,
     /// Bumped on every mutation; consumers cache derived data keyed by it.
     pub(crate) generation: Cell<u64>,
     /// Bumped when a `<style>` element or its text changes.
@@ -146,6 +148,7 @@ impl Doc {
             svg: 0,
             ids: HashMap::new(),
             next_auto_id: 1,
+            source_len: bytes.len(),
             generation: Cell::new(0),
             sheet_generation: Cell::new(0),
             style_generation: Cell::new(0),
@@ -310,6 +313,9 @@ impl Doc {
         enum Step {
             Open(NodeId),
             Close(NodeId),
+        }
+        if out.is_empty() {
+            out.reserve(self.source_len + self.source_len / 16);
         }
         let mut stack: Vec<Step> = Vec::new();
         let mut c = self.nodes[self.root as usize].last;
@@ -998,29 +1004,43 @@ fn attr_affects_style(name: &str) -> bool {
     matches!(name, "style" | "class" | "id") || crate::style::PRESENTATION_ATTRS.contains(&name)
 }
 
+/// Copies `s` into `out` escaping `& < > "` — runs of ordinary bytes are copied in bulk.
 fn escape_text(s: &str, out: &mut Vec<u8>) {
-    for b in s.bytes() {
-        match b {
-            b'&' => out.extend_from_slice(b"&amp;"),
-            b'<' => out.extend_from_slice(b"&lt;"),
-            b'>' => out.extend_from_slice(b"&gt;"),
-            b'"' => out.extend_from_slice(b"&quot;"),
-            _ => out.push(b),
-        }
+    let b = s.as_bytes();
+    let mut start = 0usize;
+    for i in 0..b.len() {
+        let rep: &[u8] = match b[i] {
+            b'&' => b"&amp;",
+            b'<' => b"&lt;",
+            b'>' => b"&gt;",
+            b'"' => b"&quot;",
+            _ => continue,
+        };
+        out.extend_from_slice(&b[start..i]);
+        out.extend_from_slice(rep);
+        start = i + 1;
     }
+    out.extend_from_slice(&b[start..]);
 }
 
+/// Attribute values additionally escape the whitespace characters an attribute cannot hold raw.
 fn escape_attr(s: &str, out: &mut Vec<u8>) {
-    for b in s.bytes() {
-        match b {
-            b'&' => out.extend_from_slice(b"&amp;"),
-            b'<' => out.extend_from_slice(b"&lt;"),
-            b'>' => out.extend_from_slice(b"&gt;"),
-            b'"' => out.extend_from_slice(b"&quot;"),
-            b'\n' => out.extend_from_slice(b"&#10;"),
-            b'\r' => out.extend_from_slice(b"&#13;"),
-            b'\t' => out.extend_from_slice(b"&#9;"),
-            _ => out.push(b),
-        }
+    let b = s.as_bytes();
+    let mut start = 0usize;
+    for i in 0..b.len() {
+        let rep: &[u8] = match b[i] {
+            b'&' => b"&amp;",
+            b'<' => b"&lt;",
+            b'>' => b"&gt;",
+            b'"' => b"&quot;",
+            b'\n' => b"&#10;",
+            b'\r' => b"&#13;",
+            b'\t' => b"&#9;",
+            _ => continue,
+        };
+        out.extend_from_slice(&b[start..i]);
+        out.extend_from_slice(rep);
+        start = i + 1;
     }
+    out.extend_from_slice(&b[start..]);
 }
