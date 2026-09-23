@@ -205,3 +205,23 @@ fn strip_attr_removes_an_attribute_everywhere() {
     assert_eq!(d.attr(id(&d, "p"), "d"), Some("M0 0"));
     assert_eq!(strip_attr(&mut d, "unlinked_clone"), 0);
 }
+
+#[test]
+fn ops_cleanup_still_drops_an_inline_clip_path_reference_to_a_deleted_id() {
+    let mut d = sciink::dom::Doc::parse(
+        r#"<svg xmlns="http://www.w3.org/2000/svg"><defs><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><rect id="a" style="fill:red;clip-path:url(#c)"/><rect id="b" style="fill:blue"/></svg>"#
+            .as_bytes(),
+    )
+    .unwrap();
+    let mut deleted = std::collections::HashSet::new();
+    deleted.insert("c".to_string());
+    sciink::ops::cleanup::drop_dangling_refs(&mut d, &deleted);
+    let a = d.by_id("a").unwrap();
+    let b = d.by_id("b").unwrap();
+    assert_eq!(d.attr(a, "style"), Some("fill:red"));
+    assert_eq!(
+        d.attr(b, "style"),
+        Some("fill:blue"),
+        "untouched style is not re-serialised"
+    );
+}

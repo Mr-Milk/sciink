@@ -351,3 +351,97 @@ fn sheet_value_reports_only_stylesheet_declarations() {
     ));
     assert_eq!(d.sheet_value(id(&d, "r"), "fill").as_deref(), Some("red"));
 }
+
+#[test]
+fn a_sheet_of_many_universal_rules_cascades_to_the_same_style_as_one_merged_rule() {
+    let mut rules = String::new();
+    for i in 0..200 {
+        // every rule sets stroke-linejoin; every 7th also stroke-width; every 50th an !important fill
+        rules.push_str(&format!(
+            "*{{stroke-linejoin: {}; ",
+            if i % 2 == 0 { "round" } else { "bevel" }
+        ));
+        if i % 7 == 0 {
+            rules.push_str(&format!("stroke-width: {i}px; "));
+        }
+        if i % 50 == 0 {
+            rules.push_str(&format!("fill: #{i:02x}0000 !important; "));
+        }
+        rules.push_str("}\n");
+    }
+    let many = doc(&format!(
+        r#"<svg {NS}><style>{rules}</style><g id="g" style="fill:blue"><rect id="r" stroke-width="1"/></g></svg>"#
+    ));
+    // the same declarations written as one rule, in the order a single pass would produce
+    let one = doc(&format!(
+        r#"<svg {NS}><style>*{{stroke-linejoin: bevel; stroke-width: 196px; fill: #960000 !important}}</style><g id="g" style="fill:blue"><rect id="r" stroke-width="1"/></g></svg>"#
+    ));
+    let a = many.cascaded_style(id(&many, "r"));
+    let b = one.cascaded_style(id(&one, "r"));
+    assert_eq!(a.to_css(), b.to_css());
+    assert_eq!(
+        a.to_css(),
+        "stroke-width:196px;stroke-linejoin:bevel;fill:#960000",
+        "presentation attribute first (position), universal rules override its value, !important last"
+    );
+    let ga = many.cascaded_style(id(&many, "g"));
+    assert_eq!(
+        ga.to_css(),
+        "stroke-linejoin:bevel;stroke-width:196px;fill:#960000",
+        "!important beats inline"
+    );
+}
+
+#[test]
+fn universal_rules_still_lose_to_a_tag_rule_and_to_inline_style() {
+    let d = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red;stroke:red}} rect{{fill:green}} *{{stroke:blue}}</style><rect id="r" style="stroke:black"/><path id="p"/></svg>"#
+    ));
+    assert_eq!(
+        d.cascaded_style(id(&d, "r")).to_css(),
+        "fill:green;stroke:black"
+    );
+    assert_eq!(
+        d.cascaded_style(id(&d, "p")).to_css(),
+        "fill:red;stroke:blue"
+    );
+}
+
+#[test]
+fn a_presentation_attribute_still_loses_to_a_universal_rule() {
+    let d = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red}}</style><rect id="r" fill="blue" stroke="black"/></svg>"#
+    ));
+    // position from the attribute (first mention), value from the sheet
+    assert_eq!(
+        d.cascaded_style(id(&d, "r")).to_css(),
+        "fill:red;stroke:black"
+    );
+}
+
+#[test]
+fn a_descendant_universal_rule_disables_the_fold_but_not_the_result() {
+    let d = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red}} * *{{fill:green}} *{{fill:blue}}</style><g id="g"><rect id="r"/></g></svg>"#
+    ));
+    // source order decides among equal-specificity rules: red, green (matches r, not g), blue
+    assert_eq!(d.cascaded_style(id(&d, "r")).to_css(), "fill:blue");
+    assert_eq!(d.cascaded_style(id(&d, "g")).to_css(), "fill:blue");
+    let d2 = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red}} *{{fill:blue}} * *{{fill:green}}</style><g id="g"><rect id="r"/></g></svg>"#
+    ));
+    // `* *` matches every element below the root <svg>, so g (a child of the root) is green too
+    assert_eq!(d2.cascaded_style(id(&d2, "r")).to_css(), "fill:green");
+    assert_eq!(d2.cascaded_style(id(&d2, "g")).to_css(), "fill:green");
+}
+
+#[test]
+fn sheet_value_returns_none_for_a_property_the_sheet_never_declares() {
+    let d = doc(&format!(
+        r#"<svg {NS}><style>*{{stroke-linejoin:round}} #r{{fill:red}}</style><rect id="r"/></svg>"#
+    ));
+    let r = id(&d, "r");
+    assert_eq!(d.sheet_value(r, "fill").as_deref(), Some("red"));
+    assert_eq!(d.sheet_value(r, "clip-path"), None);
+    assert_eq!(d.sheet_value(r, "mask"), None);
+}

@@ -69,6 +69,9 @@ pub fn drop_dangling_refs(doc: &mut Doc, deleted: &HashSet<String>) {
             }
         }
         if let Some(inline) = doc.attr(n, "style") {
+            if !(inline.contains("clip-path") || inline.contains("mask")) {
+                continue;
+            }
             let mut st = Style::parse(inline);
             let mut changed = false;
             for att in ["clip-path", "mask"] {
@@ -102,10 +105,12 @@ fn referenced_clip_ids(doc: &Doc) -> HashSet<String> {
             }
         }
         if let Some(inline) = doc.attr(n, "style") {
-            let st = Style::parse(inline);
-            for att in ["clip-path", "mask"] {
-                if let Some(id) = st.get(att).and_then(url_id) {
-                    out.insert(id.to_string());
+            if inline.contains("clip-path") || inline.contains("mask") {
+                let st = Style::parse(inline);
+                for att in ["clip-path", "mask"] {
+                    if let Some(id) = st.get(att).and_then(url_id) {
+                        out.insert(id.to_string());
+                    }
                 }
             }
         }
