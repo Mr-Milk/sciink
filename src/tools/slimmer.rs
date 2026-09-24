@@ -33,6 +33,9 @@ pub struct SlimmerCli {
     pub dedupstyles: bool,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "true")]
     pub removeempty: bool,
+    /// Also remove shapes with neither fill nor stroke (they still carry bounding boxes).
+    #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "false")]
+    pub removeinvisible: bool,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "true")]
     pub collapsegroups: bool,
     #[arg(long, value_parser = inx_bool, action = clap::ArgAction::Set, default_value = "true")]
@@ -211,10 +214,10 @@ fn invisible_shape(doc: &Doc, n: NodeId) -> bool {
 }
 
 /// Step (b): removes drawn elements that contribute nothing to the rendering — empty or zero-size
-/// shapes, shapes with neither fill nor stroke, empty `<text>`, empty non-layer `<g>` — in reverse
-/// document order, so a group emptied by this pass is caught in the same pass. Exact by the
-/// predicates above; the guards are in `removable_context` and `no_markers`.
-pub fn remove_empty(doc: &mut Doc, refs: &HashSet<String>) -> usize {
+/// shapes, empty `<text>`, empty non-layer `<g>` — and, when `invisible`, shapes with neither fill
+/// nor stroke — in reverse document order, so a group emptied by this pass is caught in the same
+/// pass. Exact by the predicates above; the guards are in `removable_context` and `no_markers`.
+pub fn remove_empty(doc: &mut Doc, refs: &HashSet<String>, invisible: bool) -> usize {
     let nodes: Vec<NodeId> = doc
         .descendants(doc.svg())
         .skip(1)
@@ -229,7 +232,8 @@ pub fn remove_empty(doc: &mut Doc, refs: &HashSet<String>) -> usize {
             "g" => empty_group(doc, n),
             "text" => empty_text(doc, n),
             t if SHAPES.contains(&t) => {
-                no_markers(doc, n) && (empty_shape(doc, n) || invisible_shape(doc, n))
+                no_markers(doc, n)
+                    && (empty_shape(doc, n) || (invisible && invisible_shape(doc, n)))
             }
             _ => false,
         };
@@ -393,9 +397,10 @@ fn prune_empty_groups(doc: &mut Doc, refs: &HashSet<String>) -> usize {
 /// direct child of any `<defs>` except `DEFS_KEEP`) goes when no id in it — its own or a
 /// descendant's — is referenced. Repeats until stable, because a definition can hold the only
 /// reference to another (gradient `href` chains). Nested `<defs>` left empty go too (the root
-/// `<defs>` stays; Inkscape expects one), as do groups emptied by that. Exact: nothing rendered
-/// pointed at any of it. Returns (definitions removed, rounds run, emptied containers removed).
-pub fn prune_unused(doc: &mut Doc) -> (usize, usize, usize) {
+/// `<defs>` stays; Inkscape expects one); emptied non-layer `<g>` go too, but only when
+/// `remove_groups` (`o.removeempty`). Exact: nothing rendered pointed at any of it. Returns
+/// (definitions removed, rounds run, emptied containers removed).
+pub fn prune_unused(doc: &mut Doc, remove_groups: bool) -> (usize, usize, usize) {
     let (mut pruned, mut rounds, mut containers) = (0usize, 0usize, 0usize);
     loop {
         rounds += 1;
@@ -439,7 +444,12 @@ pub fn prune_unused(doc: &mut Doc) -> (usize, usize, usize) {
         for &e in &empty_defs {
             detach_tidy(doc, e);
         }
-        let emptied = empty_defs.len() + prune_empty_groups(doc, &refs);
+        let emptied = empty_defs.len()
+            + if remove_groups {
+                prune_empty_groups(doc, &refs)
+            } else {
+                0
+            };
         pruned += removed_now;
         containers += emptied;
         if removed_now + emptied == 0 {
@@ -804,9 +814,11 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
     }
     if o.removeempty {
         let refs = referenced_ids(doc);
-        let n = remove_empty(doc, &refs);
+        let n = remove_empty(doc, &refs, o.removeinvisible);
         r.empty_removed = n;
-        t.phase("empty", || format!("removed={n}"));
+        t.phase("empty", || {
+            format!("removed={n} invisible={}", o.removeinvisible)
+        });
     }
     if o.collapsegroups {
         let refs = referenced_ids(doc);
@@ -822,7 +834,7 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         }
     }
     if o.pruneunused {
-        let (n, rounds, containers) = prune_unused(doc);
+        let (n, rounds, containers) = prune_unused(doc, o.removeempty);
         r.defs_pruned = n;
         r.prune_rounds = rounds;
         r.containers_removed = containers;

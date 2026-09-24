@@ -182,10 +182,34 @@ fn empty_paths_zero_size_shapes_empty_text_and_empty_groups_are_removed() {
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
     for id in [
-        "nod", "blank", "moveonly", "flat", "nowidth", "r0", "e0", "nopts", "ghost", "thin",
-        "attrnone", "et", "eg", "eg2", "eg3",
+        "nod", "blank", "moveonly", "flat", "nowidth", "r0", "e0", "nopts", "et", "eg", "eg2",
+        "eg3",
     ] {
         assert!(!has(&d, id), "{id} paints nothing and should be gone: {s}");
+    }
+    for id in [
+        "layer", "dot", "closed", "zl", "wt", "ok", "cg", "vis", "ghost", "thin", "attrnone",
+    ] {
+        assert!(
+            has(&d, id),
+            "{id} is invisible, not empty: kept without --removeinvisible: {s}"
+        );
+    }
+    assert!(
+        msgs[0].contains("empty or invisible elements removed: 12"),
+        "{msgs:?}"
+    );
+
+    let (s, msgs) = slim(&svg, &["--removeinvisible=true"]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in [
+        "nod", "blank", "moveonly", "flat", "nowidth", "r0", "e0", "nopts", "et", "eg", "eg2",
+        "eg3", "ghost", "thin", "attrnone",
+    ] {
+        assert!(
+            !has(&d, id),
+            "{id} should be gone with --removeinvisible=true: {s}"
+        );
     }
     for id in ["layer", "dot", "closed", "zl", "wt", "ok", "cg", "vis"] {
         assert!(has(&d, id), "{id} must stay: {s}");
@@ -194,6 +218,20 @@ fn empty_paths_zero_size_shapes_empty_text_and_empty_groups_are_removed() {
         msgs[0].contains("empty or invisible elements removed: 15"),
         "{msgs:?}"
     );
+}
+
+#[test]
+fn emptied_groups_are_removed_only_with_removeempty() {
+    let svg = format!(r#"<svg {NS}><g id="placeholder"/></svg>"#);
+    let (s, _msgs) = slim(&svg, &["--removeempty=false"]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "placeholder"),
+        "emptied groups survive with --removeempty=false: {s}"
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(!has(&d, "placeholder"), "emptied groups go by default: {s}");
 }
 
 #[test]
