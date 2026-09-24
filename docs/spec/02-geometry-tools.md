@@ -318,16 +318,17 @@ Order: styles → empty → wrappers → prune → merge → precision. Every de
 - **styles**: `<style>` elements with identical text (attributes ⊆ {id, type=text/css}, no `@`) keep the
   LAST copy — same-precedence conflicts are decided by source order, so only the last copy's position
   matters. Every remaining sheet then moves to the front of the root, in document order (CSS applies
-  document-wide, so a figure that held one can be deleted without restyling the rest), except a sheet
-  nested inside a clipPath/mask/gradient/pattern/marker/filter/symbol, which stays where it is.
+  document-wide, so a figure that held one can be deleted without restyling the rest); while a sheet
+  nested inside a clipPath/mask/gradient/pattern/marker/filter/symbol remains, nothing moves (that
+  sheet cannot leave, and moving the others past it would reorder the cascade).
 - **opaque stylesheets**: when the sheet holds a selector the parser drops (attribute selectors,
   pseudo-classes, sibling combinators — `Stylesheet::unsupported_rules()`) or any `@` rule, the empty,
   wrappers and merge steps are all skipped, with one note; styles, prune and precision still run.
 - **empty**: drawn elements (no `UNRENDERED` ancestor, not under a `<symbol>` or a referenced subtree — a
   `<use>` re-renders it with the clone's paint —, not referenced, no `inkscape:label`, not a `<switch>`
   child, not `display:none`, no filter): shapes with blank `d` or only movetos, `points` without digits,
-  non-positive/missing `width`/`height`/`r`; an ellipse only when both radii resolve to non-positive (a
-  missing or `auto` radius takes the other one, SVG 2); with `removeinvisible` also `fill:none` with
+  non-positive/missing `width`/`height`/`r`; an ellipse whose resolved `rx` or `ry` is zero (a missing
+  or `auto` radius takes the other one, SVG 2; both missing means zero); with `removeinvisible` also `fill:none` with
   `stroke:none` or zero width (no markers) — off by default because such a shape still carries a bounding
   box (alignment, snapping, page fitting; matplotlib's transparent backgrounds); `<text>` without
   characters (not `xml:space="preserve"`, no `<tref>`); non-layer `<g>` without element or comment
@@ -342,14 +343,16 @@ Order: styles → empty → wrappers → prune → merge → precision. Every de
   every `url(#…)`, `href`, `#id`-valued attribute or `;`/`,`/space/`|` list of them, and every `#ident` in
   `<style>` text) and the subtree holds no `style`/`script`/`font`/`font-face` (document-wide wherever they
   sit); an element with `inkscape:swatch` or `osb:paint` (referenced by name) is never a candidate; to a
-  fixpoint; emptied nested `<defs>` go, emptied non-layer groups only with `removeempty`; the root `<defs>`
-  stays.
+  fixpoint; emptied nested `<defs>` go unless their id is referenced, emptied non-layer groups only with
+  `removeempty`; the root `<defs>` stays.
 - **merge**: clipPath, mask, gradients, pattern, marker, filter, symbol with the same canonical key
   (parent's specified style and `xml:space`; tag, attributes but id, cascaded style, children with text
   compared verbatim) keep the first, which moves into the root `<defs>` when its parent's specified style
-  equals the root's (stays when already there; when the styles differ the key is not merged at all, so no
-  figure comes to depend on another's content); references repointed (`url(…)` in any attribute, `href`,
-  every `#id` token of a non-paint attribute); refused for referenced inner ids, ids in `<style>` text,
+  equals the root's and no stylesheet rule has a combinator (stays when already there; otherwise the key is
+  not merged at all — relocating could change what the survivor inherits or which rules match it — so no
+  figure comes to depend on another's content; the root `<defs>` is created only for a move that happens);
+  references repointed (`url(…)` in any attribute, `href`, every whole `#id` list token of an attribute
+  that is neither a paint property nor `style`); refused for referenced inner ids, ids in `<style>` text,
   missing or duplicated ids, a definition nested inside another definition, and a definition holding a
   `style`/`script`/`font`/`font-face`; to a fixpoint.
 - **precision** (opt-in, lossy): `d`, `points`, shape `x y width height rx ry cx cy r x1 y1 x2 y2` rounded to
@@ -577,8 +580,9 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
 - Whole-document scope, selection ignored; no `delete_up` (emptied ancestors are handled by the
   empty-group predicate, which keeps layers); no fonts are loaded.
 - Figures stay self-contained: a merged definition's survivor moves into the root `<defs>` when its
-  parent's specified style equals the root's, and a set of duplicates whose parents' styles differ is left
-  unmerged; every remaining `<style>` moves to the front of the root. Deleting one imported figure can
+  parent's specified style equals the root's and no stylesheet rule uses a descendant or child combinator,
+  and a set of duplicates that cannot move is left unmerged; every remaining `<style>` moves to the front
+  of the root (none while one is pinned inside a definition). Deleting one imported figure can
   therefore not remove a definition or a stylesheet another figure depends on (Inkscape copies referenced
   definitions on copy and paste, so a figure pasted elsewhere still carries its clips).
 - Elements carrying `inkscape:swatch` or `osb:paint`, and `color-profile`, `animate*` and `set` children of

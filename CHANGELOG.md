@@ -34,7 +34,7 @@ such documents.
   single-child wrapper groups, prunes unused definitions and merges identical ones with references
   repointed. Optional coordinate rounding in significant digits. A report dialog lists what changed. On a
   52 MB manuscript: 176 sheets, 3 489 definitions pruned, 4 246 merged, 2 834 groups collapsed; 62 357 →
-  44 073 elements, 52.6 MB → 49.1 MB; Inkscape's round trip 27.2 s → 13.4 s.
+  44 073 elements, 52.6 MB → 49.1 MB; Inkscape's headless round trip 27.2 s → 13.4 s on one machine.
 
 ## 0.1.0 — 2026-09-23
 

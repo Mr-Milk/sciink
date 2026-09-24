@@ -69,6 +69,111 @@ fn every_reference_resolves(d: &roxmltree::Document) -> bool {
 }
 
 #[test]
+fn an_emptied_nested_defs_whose_id_is_referenced_survives_pruning() {
+    let svg = format!(
+        r##"<svg {NS}><g id="fig"><defs id="d"><clipPath id="c"><rect width="1" height="1"/></clipPath></defs><rect id="r" width="1" height="1"/></g><use id="u" href="#d"/></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(!has(&d, "c"), "the unreferenced clipPath goes: {s}");
+    assert!(
+        has(&d, "d"),
+        "the emptied <defs> is the target of a <use> and stays: {s}"
+    );
+    assert!(every_reference_resolves(&d), "{s}");
+}
+
+#[test]
+fn repointing_leaves_external_fragments_and_inline_colours_alone() {
+    // `abc` duplicates `s`; a hex-looking id must be rewritten only where `#abc` is a whole local
+    // id token — not inside a colour, not inside an external fragment
+    let svg = format!(
+        r##"<svg {NS} {INK}><defs><clipPath id="s"><rect width="1" height="1"/></clipPath><clipPath id="abc"><rect width="1" height="1"/></clipPath></defs><rect id="r1" clip-path="url(#s)" width="1" height="1"/><rect id="r2" style="clip-path:url(#abc);fill:#abc" width="1" height="1"/><a id="link" href="other.svg#abc"><rect id="r3" width="1" height="1"/></a><path id="p" inkscape:path-effect="#abc" d="M0 0L1 1"/></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(!has(&d, "abc") && has(&d, "s"), "{s}");
+    assert_eq!(
+        by_id(&d, "r2").attribute("style"),
+        Some("clip-path:url(#s);fill:#abc"),
+        "the url() is repointed, the colour is not an id: {s}"
+    );
+    assert_eq!(
+        by_id(&d, "link").attribute("href"),
+        Some("other.svg#abc"),
+        "an external fragment is not a local reference: {s}"
+    );
+    assert_eq!(
+        by_id(&d, "p").attribute(("http://www.inkscape.org/namespaces/inkscape", "path-effect")),
+        Some("#s"),
+        "a whole local id token is repointed: {s}"
+    );
+}
+
+#[test]
+fn stylesheets_stay_in_place_while_a_pinned_nested_sheet_remains() {
+    // A, B (inside a referenced clipPath: never moved), A: dedup keeps the last A, after B, so A
+    // still wins the tie; moving A to the front would put B last and flip the winner
+    let svg = format!(
+        r#"<svg {NS}><style id="a1">*{{fill:red}}</style><defs><clipPath id="c"><style id="b">*{{fill:blue}}</style><rect width="1" height="1"/></clipPath></defs><style id="a2">*{{fill:red}}</style><rect id="r" clip-path="url(#c)" width="1" height="1"/></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let sheets: Vec<&str> = d
+        .descendants()
+        .filter(|n| n.has_tag_name("style"))
+        .map(|n| n.attribute("id").unwrap())
+        .collect();
+    assert_eq!(sheets, ["b", "a2"], "order preserved, nothing moved: {s}");
+    assert!(
+        msgs[0].contains("duplicate stylesheets removed: 1\n"),
+        "no sheet moved: {msgs:?}"
+    );
+    let fill = |svg: &str| {
+        let d = Doc::parse(svg.as_bytes()).unwrap();
+        d.computed(d.by_id("r").unwrap(), "fill")
+    };
+    assert_eq!(fill(&svg), "red", "the last rule wins before");
+    assert_eq!(fill(&s), "red", "and after");
+}
+
+#[test]
+fn a_refused_relocation_creates_no_root_defs() {
+    // identical clipPaths under parents whose style differs from what the (absent) root <defs>
+    // would give: the key is refused, and the document must not gain an empty <defs> for it
+    let svg = format!(
+        r#"<svg {NS}><g id="figA" style="fill:blue"><clipPath id="ca"><rect width="1" height="1"/></clipPath><rect clip-path="url(#ca)" width="1" height="1"/></g><g id="figB" style="fill:blue"><clipPath id="cb"><rect width="1" height="1"/></clipPath><rect clip-path="url(#cb)" width="1" height="1"/></g></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        !d.descendants().any(|n| n.has_tag_name("defs")),
+        "no <defs> for a merge that did not happen: {s}"
+    );
+    assert_eq!(msgs, ["Slimmer: nothing to do"], "{s}");
+}
+
+#[test]
+fn merging_is_refused_under_a_combinator_rule_that_relocation_could_unmatch() {
+    let figs = r#"<g id="figA"><defs><clipPath id="ca"><rect width="1" height="1"/></clipPath></defs><rect clip-path="url(#ca)" width="1" height="1"/></g><g id="figB"><defs><clipPath id="cb"><rect width="1" height="1"/></clipPath></defs><rect clip-path="url(#cb)" width="1" height="1"/></g>"#;
+    // `g clipPath` matches both copies where they are and would stop matching a survivor moved
+    // into the root <defs>, changing its clip-rule
+    let svg = format!(r#"<svg {NS}><style>g clipPath{{clip-rule:evenodd}}</style>{figs}</svg>"#);
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "ca") && has(&d, "cb"),
+        "no relocation under a combinator rule: {s}"
+    );
+    // a rule without a combinator cannot depend on the ancestors: the merge proceeds
+    let svg = format!(r#"<svg {NS}><style>clipPath{{clip-rule:evenodd}}</style>{figs}</svg>"#);
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "ca") && !has(&d, "cb"), "{s}");
+    assert!(every_reference_resolves(&d), "{s}");
+}
+
+#[test]
 fn duplicate_stylesheets_keep_the_last_copy_and_the_cascade() {
     let svg = format!(
         r#"<svg {NS}><style id="s1">*{{fill:red}}</style><g id="wrap"><style id="s2">*{{fill:blue}}</style></g><style id="s3">*{{fill:red}}</style><rect id="r" width="1" height="1"/></svg>"#

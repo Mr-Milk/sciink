@@ -410,6 +410,13 @@ impl Stylesheet {
         self.rules.iter().all(|r| r.universal)
     }
 
+    /// True when a rule's selector has a descendant or child combinator: whether it matches an
+    /// element then depends on that element's ancestors, so moving the element can change its
+    /// cascaded style.
+    pub fn has_combinators(&self) -> bool {
+        self.rules.iter().any(|r| r.selector.parts.len() > 1)
+    }
+
     /// True when the sheet declares any of `props` (lower-case property names).
     pub fn declares_any(&self, props: &[&str]) -> bool {
         props.iter().any(|p| self.props.contains(*p))
