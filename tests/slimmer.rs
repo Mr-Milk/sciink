@@ -457,3 +457,68 @@ fn definitions_in_different_style_contexts_are_not_merged() {
         );
     }
 }
+
+#[test]
+fn precision_rounds_significant_digits_and_keeps_integers_flags_exponents_and_leading_dots() {
+    use sciink::tools::slimmer::round_numbers;
+    let (s, k) = round_numbers(
+        "M .5 1e-5 -0.1234567 123456.789 L1-2 a1 1 0 01.5.5 z",
+        6,
+        true,
+    )
+    .unwrap();
+    assert_eq!(s, "M .5 1e-5 -0.123457 123457 L1-2 a1 1 0 01.5.5 z");
+    assert_eq!(
+        k, 2,
+        "only the two long numbers changed; .5 and 1e-5 would not get shorter"
+    );
+    assert_eq!(
+        round_numbers("10.000001 20", 4, false).unwrap(),
+        ("10 20".to_string(), 1)
+    );
+    assert_eq!(
+        round_numbers("1em", 6, false),
+        None,
+        "units: leave the value alone"
+    );
+    assert_eq!(round_numbers("50%", 6, false), None);
+    assert_eq!(
+        round_numbers("M0 0", 6, true).unwrap(),
+        ("M0 0".to_string(), 0)
+    );
+    assert_eq!(
+        round_numbers("-0.0", 6, false).unwrap(),
+        ("0".to_string(), 1)
+    );
+    assert_eq!(
+        round_numbers("a 5 5 0 1 0 10 0", 4, true).unwrap(),
+        ("a 5 5 0 1 0 10 0".to_string(), 0),
+        "spaced arc flags"
+    );
+}
+
+#[test]
+fn precision_is_off_by_default_and_never_touches_transform_viewbox_style_or_text_positions() {
+    let svg = format!(
+        r#"<svg {NS} viewBox="0 0 10.123456789 10"><g transform="translate(0.123456789)"><path id="p" d="M0.123456789 0h1" style="stroke-width:0.123456789"/><rect id="r" x="0.123456789" width="1" height="1"/><text id="t" x="0.123456789" y="1">a</text></g></svg>"#
+    );
+    let (s0, msgs0) = slim(&svg, &[]);
+    assert_eq!(s0, svg, "the default keeps every digit: {msgs0:?}");
+    let (s, msgs) = slim(&svg, &["--precision=6"]);
+    assert!(
+        s.contains(r#"d="M0.123457 0h1""#) && s.contains(r#"x="0.123457" width"#),
+        "{s}"
+    );
+    for kept in [
+        r#"viewBox="0 0 10.123456789 10""#,
+        "translate(0.123456789)",
+        "stroke-width:0.123456789",
+        r#"<text id="t" x="0.123456789""#,
+    ] {
+        assert!(s.contains(kept), "{kept} is untouched: {s}");
+    }
+    assert!(
+        msgs[0].contains("coordinate precision: 6 significant digits, 2 numbers changed"),
+        "{msgs:?}"
+    );
+}

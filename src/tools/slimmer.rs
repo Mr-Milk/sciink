@@ -645,6 +645,154 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
     (merged, repointed)
 }
 
+/// Integers stay verbatim (already short, and arc flags are integers); a float is re-emitted with
+/// `sig` significant digits in the shortest round-trip form, and only when that is shorter.
+fn round_token(tok: &str, sig: u8, is_float: bool, changed: &mut usize) -> String {
+    if !is_float {
+        return tok.to_string();
+    }
+    let Ok(v) = tok.parse::<f64>() else {
+        return tok.to_string();
+    };
+    if !v.is_finite() {
+        return tok.to_string();
+    }
+    let r: f64 = if v == 0.0 {
+        0.0
+    } else {
+        format!("{:.*e}", usize::from(sig) - 1, v)
+            .parse()
+            .unwrap_or(v)
+    };
+    let s = if r == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{r}")
+    };
+    if s.len() < tok.len() {
+        *changed += 1;
+        s
+    } else {
+        tok.to_string()
+    }
+}
+
+/// Rounds every non-integer number of an SVG number list or of path data to `sig` significant
+/// digits and copies everything else verbatim: separators, path command letters, integers, and any
+/// number whose rounded form would not be shorter. In path mode the two arc flags of every `A`/`a`
+/// 7-tuple are read as single characters (`01.5` is flag 0, flag 1, number .5). `None` when the
+/// text is not a plain number list (units, `%`, anything unexpected): the caller leaves the
+/// attribute alone. Returns the new text and how many numbers changed.
+pub fn round_numbers(text: &str, sig: u8, path_grammar: bool) -> Option<(String, usize)> {
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut changed = 0;
+    let (mut i, mut cmd, mut argi) = (0usize, 0u8, 0usize);
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() {
+            if !path_grammar {
+                return None;
+            }
+            cmd = c;
+            argi = 0;
+            out.push(c as char);
+            i += 1;
+        } else if c.is_ascii_digit() || matches!(c, b'.' | b'-' | b'+') {
+            if path_grammar && matches!(cmd, b'a' | b'A') && matches!(argi % 7, 3 | 4) {
+                if !matches!(c, b'0' | b'1') {
+                    return None;
+                }
+                out.push(c as char);
+                i += 1;
+                argi += 1;
+                continue;
+            }
+            let start = i;
+            if matches!(b[i], b'-' | b'+') {
+                i += 1;
+            }
+            let (mut digits, mut dot, mut exp) = (0usize, false, false);
+            while i < b.len() {
+                match b[i] {
+                    d if d.is_ascii_digit() => {
+                        digits += 1;
+                        i += 1;
+                    }
+                    b'.' if !dot && !exp => {
+                        dot = true;
+                        i += 1;
+                    }
+                    b'e' | b'E' if !exp && digits > 0 => {
+                        let j = i + 1;
+                        let k = if j < b.len() && matches!(b[j], b'-' | b'+') {
+                            j + 1
+                        } else {
+                            j
+                        };
+                        if k < b.len() && b[k].is_ascii_digit() {
+                            exp = true;
+                            i = k;
+                        } else {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            if digits == 0 {
+                return None;
+            }
+            out.push_str(&round_token(&text[start..i], sig, dot || exp, &mut changed));
+            argi += 1;
+        } else if c == b',' || c.is_ascii_whitespace() {
+            out.push(c as char);
+            i += 1;
+        } else {
+            return None;
+        }
+    }
+    Some((out, changed))
+}
+
+/// Geometry attributes of shapes; `transform`, `viewBox`, styles and text positions are never
+/// touched (scale factors and units would amplify the error; kerning lists are semantic input).
+const SHAPE_NUMERIC_ATTRS: &[&str] = &[
+    "x", "y", "width", "height", "rx", "ry", "cx", "cy", "r", "x1", "y1", "x2", "y2",
+];
+
+/// Step (f), opt-in: rounds `d`, `points` and the numeric geometry attributes of shapes to `sig`
+/// significant digits. Not rendering-exact — relative error ≤ 5·10⁻ˢⁱᵍ per number, accumulating
+/// along relative commands — hence off by default. Returns the number of numbers changed.
+pub fn round_coordinates(doc: &mut Doc, sig: u8) -> usize {
+    let nodes: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .filter(|&n| doc.is_element(n) && SHAPES.contains(&doc.tag(n)))
+        .collect();
+    let mut total = 0;
+    for n in nodes {
+        let mut todo: Vec<(&str, bool)> = Vec::new();
+        match doc.tag(n) {
+            "path" => todo.push(("d", true)),
+            "polyline" | "polygon" => todo.push(("points", false)),
+            _ => {}
+        }
+        todo.extend(SHAPE_NUMERIC_ATTRS.iter().map(|a| (*a, false)));
+        for (name, path_grammar) in todo {
+            let Some(v) = doc.attr(n, name) else {
+                continue;
+            };
+            if let Some((new, k)) = round_numbers(v, sig, path_grammar) {
+                if k > 0 {
+                    doc.set_attr(n, name, new);
+                    total += k;
+                }
+            }
+        }
+    }
+    total
+}
+
 /// Runs the enabled steps in order, one `Timer` phase each.
 pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report {
     let mut r = Report::default();
@@ -687,6 +835,11 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         r.defs_merged = n;
         r.attrs_repointed = m;
         t.phase("merge", || format!("merged={n} repointed={m}"));
+    }
+    if o.precision > 0 {
+        let n = round_coordinates(doc, o.precision);
+        r.numbers_rounded = n;
+        t.phase("precision", || format!("sig={} changed={n}", o.precision));
     }
     r
 }
