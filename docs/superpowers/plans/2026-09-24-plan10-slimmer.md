@@ -2571,3 +2571,26 @@ variance** — 27.17 → 13.44 s is a 2.02× reduction and the untouched origina
 Appendix A baseline in the same session; the wrapper count (2 826 vs 2 834) is the design-time scan lacking
 the step's guards (child kind, ancestors, comments) — accepted. Also worth recording: step (b) removed 82
 elements the design-time scan had not counted (it did not look for zero-size shapes or lone-moveto paths).
+
+**Post-fix-wave run** (2026-09-24, after the five fix commits 48f012c…9b4a44d of the final review's wave,
+release build, default options). Inkscape was **not** re-timed: the round-trip figures above predate the
+wave, and the output differs from the timed file by 58 elements out of 44 000.
+
+```
+Slimmer: 52.6 MB → 49.1 MB (-7 %), 62357 → 44073 elements
+  duplicate stylesheets removed: 176 (1 moved to the document root)
+  empty or invisible elements removed: 16
+  wrapper groups collapsed: 2834
+  unused definitions removed: 3489 in 2 round(s) (48 emptied containers)
+  identical definitions merged: 4246 (6705 attributes repointed)
+  coordinate precision: unchanged
+```
+
+Bytes 52 605 143 → 49 074 283 (−3 530 860, −6.71 %); elements 62 357 → 44 073 (−18 284, −29.3 %);
+`phase=total` 347.6 ms (parse 70.2, styles 3.4, empty 109.9, wrappers 9.4, prune 21.4, merge 70.3, write 63.0).
+Against the T10 run: invisible-shape removal is now opt-in (`removeinvisible`, finding F9), so the 58
+`fill:none` shapes — matplotlib's transparent figure and axes backgrounds, which still carry the figure's
+bounding box — stay, and the 8 wrapper groups they had emptied (removed as empty groups before) are now
+collapsed as wrappers: 82 → 16 empty elements, 2 826 → 2 834 wrappers, which is exactly Appendix A's
+design-time count (the "missed by 8" above was the invisible-shape pass, not a missing guard). Prune and
+merge counts are unchanged; the stylesheet line of the report now counts the sheets moved to the root.

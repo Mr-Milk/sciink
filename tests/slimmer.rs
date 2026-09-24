@@ -848,22 +848,25 @@ fn big_doc_loses_style_rules_minus_one_sheets_merges_its_identical_clips_and_ren
     let diff = support::pixel_diff_fraction(
         &support::render_png(svg.as_bytes(), 1500),
         &support::render_png(s.as_bytes(), 1500),
-        32,
+        0,
     );
     assert_eq!(diff, 0.0, "rendering-exact by construction");
 }
 
 /// Renders `f` before and after a Slimmer run with `extra` options; the pixel-diff fraction must
-/// not exceed `max`, and every reference in the output must resolve.
+/// not exceed `max`, and every reference in the output must resolve. A default-option run (`max ==
+/// 0.0`) compares at threshold 0 (byte-for-byte pixels); a lossy run (precision) keeps the coarser
+/// threshold 32, since rounding coordinates can nudge an edge by a fraction of a pixel.
 fn check_exact(f: &std::path::Path, extra: &[&str], max: f64) {
     let input = std::fs::read(f).unwrap();
     let mut a = vec!["--tool=slimmer", "--tab=Options"];
     a.extend(extra);
     let out = sciink::run(&args(&a), &input).unwrap().svg;
+    let threshold = if max == 0.0 { 0 } else { 32 };
     let d = support::pixel_diff_fraction(
         &support::render_png(&input, 1500),
         &support::render_png(&out, 1500),
-        32,
+        threshold,
     );
     eprintln!(
         "{}: pixel diff {:.5} % with {extra:?}",

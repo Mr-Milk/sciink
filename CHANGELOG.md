@@ -29,11 +29,12 @@ such documents.
   behaves the same), not a bug — now pinned by tests instead of listed as a limitation.
 - Slimmer: a new tool that makes a whole document smaller and faster for Inkscape. Rendering-exact by
   default: keeps one of identical `<style>` elements (matplotlib adds one per imported figure, and
-  Inkscape's load and save cost is per rule × element), removes empty and invisible elements, collapses
+  Inkscape's load and save cost is per rule × element), removes empty elements (invisible shapes on
+  request), collapses
   single-child wrapper groups, prunes unused definitions and merges identical ones with references
   repointed. Optional coordinate rounding in significant digits. A report dialog lists what changed. On a
-  52 MB manuscript: 176 sheets, 3 489 definitions pruned, 4 246 merged, 2 826 groups collapsed; 62 357 →
-  44 015 elements, 52.6 MB → 49.1 MB; Inkscape's round trip 27.2 s → 13.4 s.
+  52 MB manuscript: 176 sheets, 3 489 definitions pruned, 4 246 merged, 2 834 groups collapsed; 62 357 →
+  44 073 elements, 52.6 MB → 49.1 MB; Inkscape's round trip 27.2 s → 13.4 s.
 
 ## 0.1.0 — 2026-09-23
 

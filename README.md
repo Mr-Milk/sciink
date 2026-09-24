@@ -74,7 +74,7 @@ xattr -dr com.apple.quarantine "$HOME/Library/Application Support/org.inkscape.I
 | **Text Ghoster** | Puts a blurred, semi-transparent white box behind each selected object so labels stay readable over data. |
 | **Combine by Color** | Merges paths that share stroke, fill, width, dashes and markers into one path each. Fewer elements, smaller files. |
 | **Favorite Markers** | Puts stored start/mid/end marker templates on the selected paths at any size. Arrow, Triangle and Distance are built in; store your own from a selected path. |
-| **Slimmer** | Makes the whole document smaller and faster in Inkscape: merges the duplicate stylesheets every matplotlib import adds, removes unused and merges identical definitions, drops empty and invisible elements and single-child wrapper groups. Rendering-exact by default; optional coordinate rounding. |
+| **Slimmer** | Makes the whole document smaller and faster in Inkscape: merges the duplicate stylesheets every matplotlib import adds, removes unused and merges identical definitions, drops empty elements (invisible ones on request) and single-child wrapper groups. Rendering-exact by default; optional coordinate rounding. |
 | **Diagnostics**, **Debug** | Version, platform and font report; Font Probe, Text Highlight and Text Fix show what the text engine measures and does. |
 
 Options and defaults match the original. Known differences are listed under "Deliberate deviations" in
