@@ -384,3 +384,76 @@ fn referenced_definitions_style_glyph_script_children_text_paths_and_the_root_de
         "the root <defs> is never removed even when empty"
     );
 }
+
+#[test]
+fn identical_clip_paths_merge_and_every_reference_form_is_repointed() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><defs><clipPath id="c1"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c2"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c3"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c10"><rect x="1" y="0" width="10" height="10"/></clipPath><linearGradient id="g1"><stop offset="0" stop-color="red"/></linearGradient><linearGradient id="g2" xlink:href="#g1"/><linearGradient id="g3" xlink:href="#g1"/></defs>
+<rect id="z" clip-path="url(#c1)" width="1" height="1"/><rect id="a" clip-path="url(#c2)" width="1" height="1"/><rect id="b" style="clip-path:url( '#c3' );fill:url(#g3)" width="1" height="1"/><rect id="k" clip-path="url(#c10)" width="1" height="1"/><rect id="f" fill="url(#g2)" width="1" height="1"/></svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in ["c1", "c10", "g1", "g2"] {
+        assert!(has(&d, id), "{id} survives: {s}");
+    }
+    for id in ["c2", "c3", "g3"] {
+        assert!(!has(&d, id), "{id} is a copy of an earlier definition: {s}");
+    }
+    assert_eq!(by_id(&d, "a").attribute("clip-path"), Some("url(#c1)"));
+    let b = by_id(&d, "b").attribute("style").unwrap();
+    assert!(
+        b.contains("clip-path:url(#c1)") && b.contains("fill:url(#g2)"),
+        "quoted and inline references are repointed: {b}"
+    );
+    assert_eq!(
+        by_id(&d, "k").attribute("clip-path"),
+        Some("url(#c10)"),
+        "c10 is not c1"
+    );
+    assert!(
+        msgs[0].contains("identical definitions merged: 3 (2 attributes repointed)"),
+        "{msgs:?}"
+    );
+    assert!(every_reference_resolves(&d), "{s}");
+}
+
+#[test]
+fn definitions_with_referenced_inner_ids_style_mentions_or_duplicate_ids_are_not_merged() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><style>#c2 rect{{fill:red}}</style><defs><clipPath id="c1"><rect width="1" height="1"/></clipPath><clipPath id="c2"><rect width="1" height="1"/></clipPath><clipPath id="c3"><rect id="inner" width="1" height="1"/></clipPath><clipPath id="c4"><rect width="1" height="1"/></clipPath><clipPath id="c4"><rect width="1" height="1"/></clipPath></defs>
+<rect clip-path="url(#c1)" width="1" height="1"/><rect clip-path="url(#c2)" width="1" height="1"/><rect clip-path="url(#c3)" width="1" height="1"/><rect clip-path="url(#c4)" width="1" height="1"/><use xlink:href="#inner"/></svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in ["c1", "c2", "c3", "c4"] {
+        assert!(has(&d, id), "{id} must stay: {s}");
+    }
+    assert_eq!(
+        d.descendants()
+            .filter(|n| n.attribute("id") == Some("c4"))
+            .count(),
+        2,
+        "duplicate ids are left alone"
+    );
+    assert_eq!(
+        msgs,
+        vec!["Slimmer: nothing to do".to_string()],
+        "nothing merged, nothing else to do (no wrapper groups, so no stylesheet note): {msgs:?}"
+    );
+}
+
+#[test]
+fn definitions_in_different_style_contexts_are_not_merged() {
+    let svg = format!(
+        r#"<svg {NS}><defs><clipPath id="a"><rect width="1" height="1"/></clipPath></defs><g style="clip-rule:evenodd"><defs><clipPath id="b"><rect width="1" height="1"/></clipPath></defs></g><defs><clipPath id="c"><rect width="1" height="1" style="clip-rule:evenodd"/></clipPath></defs>
+<rect clip-path="url(#a)" width="1" height="1"/><rect clip-path="url(#b)" width="1" height="1"/><rect clip-path="url(#c)" width="1" height="1"/></svg>"#
+    );
+    let (s, _) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in ["a", "b", "c"] {
+        assert!(
+            has(&d, id),
+            "{id}: inherited or inline clip-rule makes it a different clip: {s}"
+        );
+    }
+}

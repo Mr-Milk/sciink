@@ -17,7 +17,7 @@ use crate::dom::{Doc, NodeId};
 use crate::geom::path::parse_d;
 use crate::geom::{PathEl, ipx};
 use crate::ops::bbox::{SHAPES, has_bbox};
-use crate::ops::cleanup::{detach_tidy, is_layer, referenced_ids};
+use crate::ops::cleanup::{css_idents, detach_tidy, is_layer, referenced_ids};
 
 use super::first_line;
 
@@ -449,6 +449,202 @@ pub fn prune_unused(doc: &mut Doc) -> (usize, usize, usize) {
     (pruned, rounds, containers)
 }
 
+/// Definition kinds whose content alone determines their effect (their coordinates are interpreted
+/// in the referencing element's space, so where they sit in the tree is irrelevant).
+const MERGE_TAGS: &[&str] = &[
+    "clipPath",
+    "mask",
+    "linearGradient",
+    "radialGradient",
+    "pattern",
+    "marker",
+    "filter",
+    "symbol",
+];
+
+/// Canonical text of a definition: tag, attributes except `id` sorted by name, the element's cascaded
+/// style (presentation attributes, inline style and every stylesheet rule that matches it), then the
+/// children — elements recursively, non-blank text, comments skipped.
+fn canon(doc: &Doc, n: NodeId, out: &mut String) {
+    out.push('<');
+    out.push_str(doc.tag(n));
+    let mut attrs: Vec<(&str, &str)> = doc
+        .attrs(n)
+        .iter()
+        .filter(|a| a.name != "id")
+        .map(|a| (a.name.as_str(), a.value.as_str()))
+        .collect();
+    attrs.sort_unstable();
+    for (k, v) in attrs {
+        out.push(' ');
+        out.push_str(k);
+        out.push('=');
+        out.push_str(v);
+        out.push('\u{2}');
+    }
+    out.push('|');
+    out.push_str(&doc.cascaded_style(n).to_css());
+    out.push('>');
+    for c in doc.children(n) {
+        if doc.is_element(c) {
+            canon(doc, c, out);
+        } else if let Some(t) = doc.text(c) {
+            let t = t.trim();
+            if !t.is_empty() {
+                out.push('"');
+                out.push_str(t);
+                out.push('"');
+            }
+        }
+    }
+    out.push_str("</>");
+}
+
+/// What two definitions must share to be interchangeable: the parent's specified style (what the
+/// definition inherits — `clip-rule`, `stop-color`) and the canonical text.
+fn canonical_key(doc: &Doc, n: NodeId) -> String {
+    let mut s = String::new();
+    if let Some(p) = doc.parent(n) {
+        if doc.is_element(p) {
+            s.push_str(&doc.specified_style(p).to_css());
+        }
+    }
+    s.push('\u{1}');
+    canon(doc, n, &mut s);
+    s
+}
+
+/// `url(#dup)` → `url(#surv)` inside `v`, tolerating whitespace and quotes; `None` when nothing
+/// changed. The closing `)` bounds the id, so `clip1` never touches `clip10`.
+fn rewrite_urls(v: &str, rename: &HashMap<String, String>) -> Option<String> {
+    let mut out = String::with_capacity(v.len());
+    let mut changed = false;
+    let mut rest = v;
+    while let Some(i) = rest.find("url(") {
+        out.push_str(&rest[..i + 4]);
+        rest = &rest[i + 4..];
+        let Some(end) = rest.find(')') else { break };
+        let inner = &rest[..end];
+        let core = inner.trim().trim_matches(['\'', '"']);
+        match core.strip_prefix('#').and_then(|id| rename.get(id)) {
+            Some(new) => {
+                out.push('#');
+                out.push_str(new);
+                changed = true;
+            }
+            None => out.push_str(inner),
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+/// Rewrites every reference to a merged definition: `href`/`xlink:href` and any other attribute whose
+/// whole value is `#dup`, and every `url(#dup)` in any attribute — inline `style` included, without a
+/// parse round trip. Returns the number of attributes rewritten.
+fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
+    let mut count = 0;
+    let nodes: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .filter(|&n| doc.is_element(n))
+        .collect();
+    for n in nodes {
+        let attrs: Vec<(String, String)> = doc
+            .attrs(n)
+            .iter()
+            .filter(|a| !matches!(a.name.as_str(), "id" | "d" | "points"))
+            .map(|a| (a.name.clone(), a.value.clone()))
+            .collect();
+        for (name, value) in attrs {
+            let new = if value.contains("url(") {
+                rewrite_urls(&value, rename)
+            } else {
+                value
+                    .trim()
+                    .strip_prefix('#')
+                    .and_then(|id| rename.get(id))
+                    .map(|s| format!("#{s}"))
+            };
+            if let Some(v) = new {
+                doc.set_attr(n, &name, v);
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Step (e): definitions with the same canonical key are interchangeable; every copy after the
+/// first in document order is removed and its references repointed to the first. Exact because the
+/// key covers everything that can make two definitions render differently: every attribute but
+/// `id`, each element's cascaded style (an `#id` rule or a combinator matching one copy only yields
+/// a different key), the parent's specified style (inheritance into the definition) and the content.
+/// Refused for a definition whose descendant ids are referenced (they would vanish), whose ids
+/// appear in `<style>` text (CSS is not rewritten), or whose id is missing or not unique (repointing
+/// to a duplicated id would resolve to the first-wins index entry). Repeats until stable: two
+/// gradients that differ only by `href` to two merged copies become identical in the next round.
+/// Returns (definitions merged, attributes repointed).
+pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
+    let (mut merged, mut repointed) = (0usize, 0usize);
+    loop {
+        let refs = referenced_ids(doc);
+        let mut sheet_ids = HashSet::new();
+        for s in style_elements(doc) {
+            css_idents(&doc.text_content(s), &mut sheet_ids);
+        }
+        let mut id_count: HashMap<String, usize> = HashMap::new();
+        for n in doc.descendants(doc.svg()) {
+            if let Some(id) = doc.attr(n, "id") {
+                *id_count.entry(id.to_string()).or_default() += 1;
+            }
+        }
+        let candidates: Vec<NodeId> = doc
+            .descendants(doc.svg())
+            .skip(1)
+            .filter(|&n| doc.is_element(n) && MERGE_TAGS.contains(&doc.tag(n)))
+            .collect();
+        let mut survivor: HashMap<String, String> = HashMap::new(); // key → surviving id
+        let mut rename: HashMap<String, String> = HashMap::new(); // duplicate id → surviving id
+        let mut dups: Vec<NodeId> = Vec::new();
+        for n in candidates {
+            let Some(id) = doc.attr(n, "id").map(str::to_string) else {
+                continue;
+            };
+            if id_count.get(&id) != Some(&1) || sheet_ids.contains(&id) {
+                continue;
+            }
+            let inner_pinned = doc
+                .descendants(n)
+                .skip(1)
+                .filter_map(|d| doc.attr(d, "id"))
+                .any(|i| refs.contains(i) || sheet_ids.contains(i));
+            if inner_pinned {
+                continue;
+            }
+            let key = canonical_key(doc, n);
+            match survivor.get(&key) {
+                Some(first) => {
+                    rename.insert(id, first.clone());
+                    dups.push(n);
+                }
+                None => {
+                    survivor.insert(key, id);
+                }
+            }
+        }
+        if dups.is_empty() {
+            break;
+        }
+        for &d in &dups {
+            detach_tidy(doc, d);
+        }
+        merged += dups.len();
+        repointed += repoint(doc, &rename);
+    }
+    (merged, repointed)
+}
+
 /// Runs the enabled steps in order, one `Timer` phase each.
 pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report {
     let mut r = Report::default();
@@ -485,6 +681,12 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         t.phase("prune", || {
             format!("removed={n} rounds={rounds} containers={containers}")
         });
+    }
+    if o.mergedefs {
+        let (n, m) = merge_identical_defs(doc);
+        r.defs_merged = n;
+        r.attrs_repointed = m;
+        t.phase("merge", || format!("merged={n} repointed={m}"));
     }
     r
 }
