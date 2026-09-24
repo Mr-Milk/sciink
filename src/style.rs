@@ -395,6 +395,16 @@ impl Stylesheet {
     pub fn rule_count(&self) -> usize {
         self.rules.len()
     }
+
+    /// True when every rule is a lone `*`: nothing can match one element and not another.
+    pub fn only_universal_rules(&self) -> bool {
+        self.rules.iter().all(|r| r.universal)
+    }
+
+    /// True when the sheet declares any of `props` (lower-case property names).
+    pub fn declares_any(&self, props: &[&str]) -> bool {
+        props.iter().any(|p| self.props.contains(*p))
+    }
 }
 
 pub fn parse_stylesheet(css: &str) -> Stylesheet {
@@ -677,7 +687,9 @@ pub struct Caches {
 }
 
 impl Doc {
-    fn stylesheet(&self) -> Rc<Stylesheet> {
+    /// The document stylesheet: every `<style>` element's text concatenated in document order
+    /// (any depth), cached on `sheet_generation`.
+    pub fn stylesheet(&self) -> Rc<Stylesheet> {
         let g = self.sheet_generation.get();
         if let Some((sg, s)) = &self.caches.borrow().sheet {
             if *sg == g {

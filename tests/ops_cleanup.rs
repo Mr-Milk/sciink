@@ -23,7 +23,8 @@ fn out(d: &Doc) -> String {
 use std::collections::HashSet;
 
 use sciink::ops::cleanup::{
-    delete_up, drop_dangling_refs, gc_created_clips, strip_attr, strip_whitespace, url_id,
+    delete_up, detach_tidy, drop_dangling_refs, gc_created_clips, is_layer, referenced_ids,
+    strip_attr, strip_whitespace, url_id,
 };
 
 #[test]
@@ -242,4 +243,58 @@ fn an_upper_case_inline_clip_path_reference_is_still_dropped() {
         Some("fill:red"),
         "an upper-case CLIP-PATH in the inline style must still be found and dropped"
     );
+}
+
+#[test]
+fn referenced_ids_finds_every_reference_form_and_ignores_data_uris() {
+    let d = doc(&format!(
+        r##"<svg {NS} xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape">
+<style>#s1 {{ fill: red }} .c {{ mask: url( '#s2' ) }} #s4.cls {{ fill: blue }}</style>
+<g clip-path="url(#a1)" style="fill:url( #a2 ); stroke:#123456" mask="url(&quot;#a3&quot;)"/>
+<use xlink:href="#h1"/><use href="#h2"/>
+<path inkscape:path-effect="#pe1;#pe2" inkscape:connection-start="#cs1" d="M0 0 #notanid"/>
+<image xlink:href="data:image/png;base64,QUJD#zz"/>
+<text id="t1">#hashtag</text>
+</svg>"##
+    ));
+    let r = referenced_ids(&d);
+    for id in [
+        "s1", "s2", "s4", "a1", "a2", "a3", "h1", "h2", "pe1", "pe2", "cs1",
+    ] {
+        assert!(r.contains(id), "{id} is referenced: {r:?}");
+    }
+    for id in ["notanid", "zz", "hashtag", "t1", "123456"] {
+        assert!(!r.contains(id), "{id} is not a reference: {r:?}");
+    }
+}
+
+#[test]
+fn detach_tidy_removes_the_indentation_before_the_node_but_not_text_inside_text_elements() {
+    let mut d = doc(&format!(
+        "<svg {NS}>\n  <g id=\"g\">\n    <rect id=\"r\"/>\n  </g>\n  <text id=\"t\">a <tspan id=\"s\">b</tspan> c</text>\n</svg>"
+    ));
+    let r_node = id(&d, "r");
+    detach_tidy(&mut d, r_node);
+    let s = out(&d);
+    assert!(
+        s.contains("<g id=\"g\">\n  </g>"),
+        "the rect and its own indentation are gone, the closing indentation stays: {s}"
+    );
+    let s_node = id(&d, "s");
+    detach_tidy(&mut d, s_node);
+    let s = out(&d);
+    assert!(
+        s.contains("<text id=\"t\">a  c</text>"),
+        "inside <text> the preceding text is content, not indentation: {s}"
+    );
+}
+
+#[test]
+fn is_layer_reads_inkscape_groupmode() {
+    let d = doc(&format!(
+        r#"<svg {NS} xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"><g id="l" inkscape:groupmode="layer"/><g id="g"/><rect id="r" inkscape:groupmode="layer"/></svg>"#
+    ));
+    assert!(is_layer(&d, id(&d, "l")));
+    assert!(!is_layer(&d, id(&d, "g")));
+    assert!(!is_layer(&d, id(&d, "r")), "only groups are layers");
 }
