@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 — 2026-09-24
 
 Large documents no longer freeze Inkscape for our part of the run. On a 52 MB, 62 000-element
 manuscript the Flattener went from 1.1 s to 212 ms on one figure and from 6.1 s to 1.0 s on the
