@@ -31,7 +31,9 @@ such documents.
   default: keeps one of identical `<style>` elements (matplotlib adds one per imported figure, and
   Inkscape's load and save cost is per rule × element), removes empty and invisible elements, collapses
   single-child wrapper groups, prunes unused definitions and merges identical ones with references
-  repointed. Optional coordinate rounding in significant digits. A report dialog lists what changed.
+  repointed. Optional coordinate rounding in significant digits. A report dialog lists what changed. On a
+  52 MB manuscript: 176 sheets, 3 489 definitions pruned, 4 246 merged, 2 826 groups collapsed; 52.6 MB →
+  49.1 MB; Inkscape's round trip 27.2 s → 13.4 s.
 
 ## 0.1.0 — 2026-09-23
 

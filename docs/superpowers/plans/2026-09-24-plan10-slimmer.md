@@ -2463,4 +2463,105 @@ names; the controller checks commit trailers.
 
 ## Appendix B — Measured results (filled by T10)
 
-_Not yet measured._
+**Run:** measured 2026-09-24 on the dev machine (`cargo build --release`, HEAD `06230bb`). Input
+`/Users/yzheng/Documents/Manuscripts/MetPredict/metpredict_figures_clean.svg` — 52 605 143 B (52.6 MB /
+50.2 MiB), 62 357 elements. All outputs written under the session scratchpad, never next to the
+manuscript.
+
+**Slimmer report** (`--tool=slimmer --tab=Options`, default options, stderr verbatim):
+
+```
+Slimmer: 52.6 MB → 49.1 MB (-7 %), 62357 → 44015 elements
+  duplicate stylesheets removed: 176 (1 kept, moved to the document root)
+  empty or invisible elements removed: 82
+  wrapper groups collapsed: 2826
+  unused definitions removed: 3489 in 2 round(s) (48 emptied containers)
+  identical definitions merged: 4246 (6705 attributes repointed)
+  coordinate precision: unchanged
+```
+
+| Counter | Value |
+|---|---|
+| duplicate stylesheets removed | 176 (1 kept, moved to document root) |
+| empty/invisible elements removed | 82 |
+| wrapper groups collapsed | 2 826 |
+| unused definitions removed | 3 489 (2 rounds, 48 emptied containers) |
+| identical definitions merged | 4 246 (6 705 attributes repointed) |
+| coordinate precision | unchanged (precision=0, this run) |
+
+**Bytes and elements** (`ls -l` / exact bytes):
+
+| | Bytes | `ls -l` | Elements |
+|---|---|---|---|
+| Before | 52 605 143 | 50.2M | 62 357 |
+| After, default | 49 063 783 | 46.8M | 44 015 |
+| Change | −3 541 360 (−6.73 %) | | −18 342 (−29.4 %) |
+| After, `--precision=6` | 48 869 670 | 46.6M | 44 015 (unchanged by precision) |
+| Change vs. input | −3 735 473 (−7.10 %) | | |
+
+`--precision=6` report (separate file `slim-p6.svg`, not used for Inkscape timing):
+
+```
+Slimmer: 52.6 MB → 48.9 MB (-7 %), 62357 → 44015 elements
+  duplicate stylesheets removed: 176 (1 kept, moved to the document root)
+  empty or invisible elements removed: 82
+  wrapper groups collapsed: 2826
+  unused definitions removed: 3489 in 2 round(s) (48 emptied containers)
+  identical definitions merged: 4246 (6705 attributes repointed)
+  coordinate precision: 6 significant digits, 122155 numbers changed
+```
+
+**Phase log** (`SCIINK_LOG`, default run):
+
+| phase | dt (ms) | detail |
+|---|---|---|
+| parse | 75.7 | bytes=52605143 elements=62357 |
+| styles | 2.5 | removed=176 moved=true |
+| empty | 119.8 | removed=82 |
+| wrappers | 10.7 | collapsed=2826 |
+| prune | 25.2 | removed=3489 rounds=2 containers=48 |
+| merge | 73.2 | merged=4246 repointed=6705 |
+| write | 63.4 | bytes=49063783 |
+| **total** | **370.5** | elements_removed=18342 |
+
+**Acid test (Step 2):** `cargo test --release --test slimmer -- --ignored --nocapture` →
+
+```
+.../tests/upstream/data/svg/Acid_tests.svg: pixel diff 0.00000 % with []
+test default_slimmer_renders_acid_tests_identically ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out
+```
+
+**Inkscape acceptance:** `--export-type=svg --export-plain-svg --export-filename=slim-roundtrip.svg
+slim.svg` → exit **0**; output 50 776 304 B (48.4 MiB). Only pre-existing benign warnings
+(`burghoff.autoexporter` empty-string translation ×3, `mask`/`clip-path` given as CSS ×1 each) — the same
+warnings appear on the unmodified manuscript too and are unrelated to Slimmer.
+
+**Round trip** (`--actions=org.sciink.about.noprefs`, wall-clock `total` from zsh `time`, run twice each):
+
+| File | Run 1 | Run 2 | Faster |
+|---|---|---|---|
+| Original manuscript | 27.173 s | 27.558 s | 27.173 s |
+| `slim.svg` | 13.440 s | 13.639 s | 13.440 s |
+
+(Both files parsed correctly inside Inkscape's own diagnostics report: 62 357 elements — 5 039 text,
+22 113 path — for the original; 44 015 elements — 5 039 text, 20 380 path — for `slim.svg`, i.e. text is
+untouched and the reduction is all path/group/def elements, as expected.)
+
+**Targets** (the plan's "Targets:" line above, plus Step 1's "Expected on this file"):
+
+| Target | Measured | Result |
+|---|---|---|
+| 176 sheets removed | 176 | **met** |
+| ≥ 2 000 definitions pruned | 3 489 | **met** |
+| ≥ 4 000 merged | 4 246 | **met** |
+| 2 834 groups collapsed | 2 826 | **missed** by 8 (99.7 % of expected) — the design-time count in Appendix A ("`<g>` with one child and only an `id`", a manual/raw structural scan) likely did not apply every guard the implemented step (c) does (styled, transformed, referenced or layer groups are correctly kept); root cause not investigated further, per instructions to record rather than tune |
+| `phase=total` ≤ 600 ms | 370.5 ms | **met** |
+| output ≥ 4 % smaller | 6.73 % (49.1 MB) | **met** |
+| round trip 26.9 s → ≤ 13 s | 27.173 s → 13.440 s | original close to its own baseline (+1.0 % vs. Appendix A's 26.9 s); slimmed **missed** by 0.44 s (3.4 % over ≤ 13 s) — inside the "varies by a second or two" range called out for this measurement, and since the original also ran ~1–2 % above its historical baseline today, this reads as day-to-day machine variance rather than a code regression |
+| ≥ 15 % smaller with `--precision=6` | 7.10 % (48.9 MB) | **missed** — rounding to 6 significant digits changed 122 155 numbers but saved only ~0.4 percentage points beyond the default run; most path `d` numbers in this manuscript are apparently already close to 6 significant digits, so little further shrinkage is available at that precision |
+| 62 357 → ≤ 47 000 elements | 44 015 | **met** |
+| Slimmer ≤ 0.6 s | 370.5 ms (phase=total) | **met** |
+| pixel diff exactly 0.0 with defaults | 0.00000 % (Acid_tests, `--ignored` case) | **met** |
+| pixel diff ≤ 0.001 with `--precision=6` | not exercised by Task 10 — `tests/slimmer.rs` has only one `--ignored` case (the defaults Acid test above); this target is covered by Task 7/8's own fixture/bench suite (already green on this branch), not re-run here | **not evaluated in this task** |
