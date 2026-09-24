@@ -321,3 +321,66 @@ fn layers_labelled_groups_use_targets_switch_children_and_title_wrappers_are_nev
     }
     assert_eq!(msgs, vec!["Slimmer: nothing to do".to_string()]);
 }
+
+#[test]
+fn unused_definitions_are_pruned_to_a_fixpoint_including_nested_defs_and_gradient_chains() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><defs id="root"><clipPath id="used"><rect width="1" height="1"/></clipPath><clipPath id="dead"><rect width="1" height="1"/></clipPath><linearGradient id="base"/><linearGradient id="chain" xlink:href="#base"/><linearGradient id="live" xlink:href="#base"/><linearGradient id="g1" xlink:href="#g2"/><linearGradient id="g2"/><path id="glyph" d="M0 0h1"/><rect id="loose" width="1" height="1"/></defs>
+<g id="fig"><defs id="nested"><clipPath id="deadn"><rect width="1" height="1"/></clipPath></defs><rect id="r" clip-path="url(#used)" width="1" height="1" style="fill:url(#live)"/></g>
+<mask id="strayfree"><rect width="1" height="1"/></mask>
+</svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in ["root", "used", "base", "live", "r", "fig"] {
+        assert!(has(&d, id), "{id} must stay: {s}");
+    }
+    for id in [
+        "dead",
+        "chain",
+        "g1",
+        "g2",
+        "glyph",
+        "loose",
+        "deadn",
+        "nested",
+        "strayfree",
+    ] {
+        assert!(!has(&d, id), "{id} is unused and should be gone: {s}");
+    }
+    assert!(
+        msgs[0].contains("unused definitions removed: 8 in 3 round(s) (1 emptied containers)"),
+        "g2 is only freed once g1 is gone, so it takes a second round; the third finds nothing: {msgs:?}"
+    );
+    assert!(every_reference_resolves(&d));
+}
+
+#[test]
+fn referenced_definitions_style_glyph_script_children_text_paths_and_the_root_defs_survive_pruning()
+{
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><defs id="root"><style id="sheet">.x{{fill:red}}</style><script id="js">//</script><title id="tt">t</title><font id="fnt"><font-face id="ff"/><glyph id="gl"/></font><path id="curve" d="M0 0h1"/><marker id="mk"><path d="M0 0h1"/></marker><pattern id="pat"><rect width="1" height="1"/></pattern></defs>
+<text><textPath xlink:href="#curve">on a curve</textPath></text>
+<path d="M0 0h1" style="marker-end:url(#mk)"/><rect width="1" height="1" fill="url(#pat)"/>
+<g id="emptyroot"><defs id="emptydefs"/></g></svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in [
+        "root", "sheet", "js", "tt", "fnt", "ff", "gl", "curve", "mk", "pat",
+    ] {
+        assert!(has(&d, id), "{id} must stay: {s}");
+    }
+    assert!(
+        !has(&d, "emptydefs") && !has(&d, "emptyroot"),
+        "an empty nested <defs> goes, then the group it emptied: {s}"
+    );
+    assert!(
+        msgs[0].contains("unused definitions removed: 0 in 2 round(s) (2 emptied containers)"),
+        "{msgs:?}"
+    );
+    assert!(
+        has(&d, "root"),
+        "the root <defs> is never removed even when empty"
+    );
+}

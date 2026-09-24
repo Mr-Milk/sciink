@@ -347,6 +347,108 @@ pub fn collapse_wrappers(doc: &mut Doc, refs: &HashSet<String>) -> Result<usize,
     Ok(collapsed)
 }
 
+/// Definition kinds that render nothing on their own (upstream `clean_up_document`'s list minus
+/// `textPath`, `animate*`, `font`, `font-face`, which are content or name-referenced, not
+/// id-referenced — upstream deletes rendered content there).
+const PRUNE_TAGS: &[&str] = &[
+    "clipPath",
+    "mask",
+    "linearGradient",
+    "radialGradient",
+    "pattern",
+    "symbol",
+    "marker",
+    "filter",
+];
+/// Direct `<defs>` children that are used without an id reference.
+const DEFS_KEEP: &[&str] = &[
+    "style",
+    "glyph",
+    "script",
+    "metadata",
+    "title",
+    "desc",
+    "font",
+    "font-face",
+];
+
+/// Non-layer groups left without element or comment children, reverse order (children first).
+fn prune_empty_groups(doc: &mut Doc, refs: &HashSet<String>) -> usize {
+    let groups: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .skip(1)
+        .filter(|&n| doc.is_element(n) && doc.tag(n) == "g")
+        .collect();
+    let mut removed = 0;
+    for &g in groups.iter().rev() {
+        if removable_context(doc, g, refs) && empty_group(doc, g) {
+            detach_tidy(doc, g);
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Step (d), after `dhelpers.py:990 clean_up_document`: a definition (`PRUNE_TAGS` anywhere, or any
+/// direct child of any `<defs>` except `DEFS_KEEP`) goes when no id in it — its own or a
+/// descendant's — is referenced. Repeats until stable, because a definition can hold the only
+/// reference to another (gradient `href` chains). Nested `<defs>` left empty go too (the root
+/// `<defs>` stays; Inkscape expects one), as do groups emptied by that. Exact: nothing rendered
+/// pointed at any of it. Returns (definitions removed, rounds run, emptied containers removed).
+pub fn prune_unused(doc: &mut Doc) -> (usize, usize, usize) {
+    let (mut pruned, mut rounds, mut containers) = (0usize, 0usize, 0usize);
+    loop {
+        rounds += 1;
+        let refs = referenced_ids(doc);
+        let svg = doc.svg();
+        let candidates: Vec<NodeId> = doc
+            .descendants(svg)
+            .skip(1)
+            .filter(|&n| {
+                doc.is_element(n)
+                    && (PRUNE_TAGS.contains(&doc.tag(n))
+                        || (doc
+                            .parent(n)
+                            .is_some_and(|p| doc.is_element(p) && doc.tag(p) == "defs")
+                            && !DEFS_KEEP.contains(&doc.tag(n))))
+            })
+            .collect();
+        let mut removed_now = 0;
+        // inner definitions before the containers holding them
+        for &n in candidates.iter().rev() {
+            let used = doc
+                .descendants(n)
+                .any(|d| doc.attr(d, "id").is_some_and(|id| refs.contains(id)));
+            if !used {
+                detach_tidy(doc, n);
+                removed_now += 1;
+            }
+        }
+        let empty_defs: Vec<NodeId> = doc
+            .descendants(svg)
+            .skip(1)
+            .filter(|&n| {
+                doc.is_element(n)
+                    && doc.tag(n) == "defs"
+                    && doc.parent(n) != Some(svg)
+                    && !doc
+                        .children(n)
+                        .any(|c| doc.is_element(c) || doc.is_comment(c))
+            })
+            .collect();
+        for &e in &empty_defs {
+            detach_tidy(doc, e);
+        }
+        let emptied = empty_defs.len() + prune_empty_groups(doc, &refs);
+        pruned += removed_now;
+        containers += emptied;
+        if removed_now + emptied == 0 {
+            break;
+        }
+    }
+    (pruned, rounds, containers)
+}
+
 /// Runs the enabled steps in order, one `Timer` phase each.
 pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report {
     let mut r = Report::default();
@@ -374,6 +476,15 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
                 t.phase("wrappers", || "skipped=stylesheet".to_string());
             }
         }
+    }
+    if o.pruneunused {
+        let (n, rounds, containers) = prune_unused(doc);
+        r.defs_pruned = n;
+        r.prune_rounds = rounds;
+        r.containers_removed = containers;
+        t.phase("prune", || {
+            format!("removed={n} rounds={rounds} containers={containers}")
+        });
     }
     r
 }
