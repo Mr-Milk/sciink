@@ -683,10 +683,11 @@ const COLOR_ATTRS: &[&str] = &[
 /// `cleanup::referenced_ids` splits on: a value is a reference only as a whole `#id` list token.
 const ID_LIST_SEPARATORS: [char; 4] = [';', ',', ' ', '|'];
 
-/// Every whole `#<id>` token of `v` (a bare id, or one item of an `ID_LIST_SEPARATORS` list)
-/// rewritten when the id is a key of `rename`; `None` when nothing changed. A `#` inside a token
-/// (`other.svg#dup`, an external fragment) is not a local reference and is left alone, as
-/// `referenced_ids` leaves it; separators are copied verbatim.
+/// Every whole `#<id>` token of `v` (a bare id, or one item of an `ID_LIST_SEPARATORS` list),
+/// trimmed the way `referenced_ids` trims it (`&#9;#dup` is a reference too), rewritten when the
+/// id is a key of `rename`; `None` when nothing changed. A `#` inside a token (`other.svg#dup`, an
+/// external fragment) is not a local reference and is left alone, as `referenced_ids` leaves it;
+/// separators and the whitespace around a token are copied verbatim.
 fn rewrite_id_tokens(v: &str, rename: &HashMap<String, String>) -> Option<String> {
     let mut out = String::with_capacity(v.len());
     let mut changed = false;
@@ -694,10 +695,14 @@ fn rewrite_id_tokens(v: &str, rename: &HashMap<String, String>) -> Option<String
     while !rest.is_empty() {
         let end = rest.find(ID_LIST_SEPARATORS).unwrap_or(rest.len());
         let (tok, tail) = rest.split_at(end);
-        match tok.strip_prefix('#').and_then(|id| rename.get(id)) {
+        let core = tok.trim();
+        match core.strip_prefix('#').and_then(|id| rename.get(id)) {
             Some(new) => {
+                let start = tok.len() - tok.trim_start().len();
+                out.push_str(&tok[..start]);
                 out.push('#');
                 out.push_str(new);
+                out.push_str(&tok[start + core.len()..]);
                 changed = true;
             }
             None => out.push_str(tok),
@@ -711,9 +716,11 @@ fn rewrite_id_tokens(v: &str, rename: &HashMap<String, String>) -> Option<String
 
 /// Rewrites every reference to a merged definition: every `url(#dup)` in any attribute — inline
 /// `style` included, without a parse round trip — and, for an attribute that is neither a paint
-/// property nor `style` (`COLOR_ATTRS`) and whose value contains `#` but no `url(`, every whole
-/// `#dup` token of the value read as an `ID_LIST_SEPARATORS` list (`href="#dup"` is the one-token
-/// case). Returns the number of attributes rewritten.
+/// property nor `style` (`COLOR_ATTRS`) and whose value has no `url(` but starts with `#` once
+/// trimmed (exactly the values `referenced_ids` reads as id lists, so `inkscape:label="Figure
+/// #dup"` is text, not a reference), every whole `#dup` token of the value read as an
+/// `ID_LIST_SEPARATORS` list (`href="#dup"` is the one-token case). Returns the number of
+/// attributes rewritten.
 fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
     let mut count = 0;
     let nodes: Vec<NodeId> = doc
@@ -730,7 +737,7 @@ fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
         for (name, value) in attrs {
             let new = if value.contains("url(") {
                 rewrite_urls(&value, rename)
-            } else if value.contains('#') && !COLOR_ATTRS.contains(&name.as_str()) {
+            } else if !COLOR_ATTRS.contains(&name.as_str()) && value.trim_start().starts_with('#') {
                 rewrite_id_tokens(&value, rename)
             } else {
                 None
@@ -830,14 +837,15 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
         // `g clipPath{…}` rule matches both copies where they are and would stop matching a
         // survivor moved into the root <defs>, changing its cascaded style after the key was built.
         let combinators = doc.stylesheet().has_combinators();
-        // What a survivor would inherit at the root <defs>: the existing one's specified style, or
-        // nothing when there is none yet. `doc.defs()` is called only once a move is decided, so a
-        // refused relocation never leaves a new, empty <defs> behind.
-        let root_defs_style = doc
+        // What a survivor would inherit at the root <defs>: that element's specified style — read
+        // from the real element, because a tag rule such as `defs{clip-rule:evenodd}` styles a
+        // freshly created one too. When none existed it is created here and removed again below
+        // if nothing moved into it, so a refused relocation leaves no empty <defs> behind.
+        let had_root_defs = doc
             .children(svg)
-            .find(|&c| doc.is_element(c) && doc.tag(c) == "defs")
-            .map(|d| doc.specified_style(d).to_css())
-            .unwrap_or_default();
+            .any(|c| doc.is_element(c) && doc.tag(c) == "defs");
+        let root_defs = doc.defs();
+        let root_defs_style = doc.specified_style(root_defs).to_css();
         let mut rename: HashMap<String, String> = HashMap::new(); // duplicate id → surviving id
         let mut dups: Vec<NodeId> = Vec::new();
         for key in &order {
@@ -859,13 +867,15 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
                 continue;
             }
             if !is_root_defs {
-                let root_defs = doc.defs();
                 doc.append_child(root_defs, survivor);
             }
             for (d, did) in &group[1..] {
                 rename.insert(did.clone(), sid.clone());
                 dups.push(*d);
             }
+        }
+        if !had_root_defs && doc.first_child(root_defs).is_none() {
+            detach_tidy(doc, root_defs); // created above for the comparison only
         }
         if dups.is_empty() {
             break;

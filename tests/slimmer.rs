@@ -88,7 +88,7 @@ fn repointing_leaves_external_fragments_and_inline_colours_alone() {
     // `abc` duplicates `s`; a hex-looking id must be rewritten only where `#abc` is a whole local
     // id token — not inside a colour, not inside an external fragment
     let svg = format!(
-        r##"<svg {NS} {INK}><defs><clipPath id="s"><rect width="1" height="1"/></clipPath><clipPath id="abc"><rect width="1" height="1"/></clipPath></defs><rect id="r1" clip-path="url(#s)" width="1" height="1"/><rect id="r2" style="clip-path:url(#abc);fill:#abc" width="1" height="1"/><a id="link" href="other.svg#abc"><rect id="r3" width="1" height="1"/></a><path id="p" inkscape:path-effect="#abc" d="M0 0L1 1"/></svg>"##
+        r##"<svg {NS} {INK}><defs><clipPath id="s"><rect width="1" height="1"/></clipPath><clipPath id="abc"><rect width="1" height="1"/></clipPath></defs><rect id="r1" clip-path="url(#s)" width="1" height="1"/><rect id="r2" style="clip-path:url(#abc);fill:#abc" width="1" height="1"/><a id="link" href="other.svg#abc"><rect id="r3" width="1" height="1"/></a><path id="p" inkscape:path-effect="&#9;#abc" d="M0 0L1 1"/><g id="lbl" inkscape:label="Figure #abc"><rect id="r4" width="1" height="1"/></g></svg>"##
     );
     let (s, _msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
@@ -103,11 +103,40 @@ fn repointing_leaves_external_fragments_and_inline_colours_alone() {
         Some("other.svg#abc"),
         "an external fragment is not a local reference: {s}"
     );
+    let ink = "http://www.inkscape.org/namespaces/inkscape";
     assert_eq!(
-        by_id(&d, "p").attribute(("http://www.inkscape.org/namespaces/inkscape", "path-effect")),
+        by_id(&d, "p")
+            .attribute((ink, "path-effect"))
+            .map(str::trim),
         Some("#s"),
-        "a whole local id token is repointed: {s}"
+        "a whole local id token is repointed, whitespace around it or not: {s}"
     );
+    assert_eq!(
+        by_id(&d, "lbl").attribute((ink, "label")),
+        Some("Figure #abc"),
+        "text that merely contains #id is not a reference list: {s}"
+    );
+}
+
+#[test]
+fn relocation_compares_against_the_real_root_defs_style() {
+    // no root <defs> exists; a tag rule would style the one relocation creates, so a survivor from
+    // an unstyled parent would inherit differently there: refused, and no <defs> is left behind
+    let figs = r#"<g id="figA"><clipPath id="ca"><rect width="1" height="1"/></clipPath><rect clip-path="url(#ca)" width="1" height="1"/></g><g id="figB"><clipPath id="cb"><rect width="1" height="1"/></clipPath><rect clip-path="url(#cb)" width="1" height="1"/></g>"#;
+    let svg = format!(r#"<svg {NS}><style>defs{{clip-rule:evenodd}}</style>{figs}</svg>"#);
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "ca") && has(&d, "cb"), "{s}");
+    assert!(
+        !d.descendants().any(|n| n.has_tag_name("defs")),
+        "the <defs> created for the comparison is removed again: {s}"
+    );
+    // a universal rule styles the parents and the new <defs> alike: the merge proceeds
+    let svg = format!(r#"<svg {NS}><style>*{{clip-rule:evenodd}}</style>{figs}</svg>"#);
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "ca") && !has(&d, "cb"), "{s}");
+    assert!(every_reference_resolves(&d), "{s}");
 }
 
 #[test]

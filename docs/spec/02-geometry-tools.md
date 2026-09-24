@@ -351,8 +351,9 @@ Order: styles → empty → wrappers → prune → merge → precision. Every de
   equals the root's and no stylesheet rule has a combinator (stays when already there; otherwise the key is
   not merged at all — relocating could change what the survivor inherits or which rules match it — so no
   figure comes to depend on another's content; the root `<defs>` is created only for a move that happens);
-  references repointed (`url(…)` in any attribute, `href`, every whole `#id` list token of an attribute
-  that is neither a paint property nor `style`); refused for referenced inner ids, ids in `<style>` text,
+  references repointed (`url(…)` in any attribute, `href`, and every whole `#id` list token of an attribute
+  that is neither a paint property nor `style` and whose value starts with `#` — exactly what
+  `referenced_ids` reads as a reference); refused for referenced inner ids, ids in `<style>` text,
   missing or duplicated ids, a definition nested inside another definition, and a definition holding a
   `style`/`script`/`font`/`font-face`; to a fixpoint.
 - **precision** (opt-in, lossy): `d`, `points`, shape `x y width height rx ry cx cy r x1 y1 x2 y2` rounded to
