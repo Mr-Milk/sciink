@@ -14,7 +14,7 @@ and documented in `docs/DEVELOPING.md`.
   cloned per node; `clip-path`/`mask` sheet lookups short-circuit.
 - DOM: a move re-indexes nothing; identical attribute writes are skipped; the writer copies attribute
   values in bulk and pre-sizes its buffer.
-- Fonts: the scan is cached on disk (`fontcache-1-<key hash>.tsv`; ≈ 3 s → tens of ms after boot); DejaVu Sans
+- Fonts: the scan is cached on disk (`fontcache-2-<key hash>.tsv`; ≈ 3 s → tens of ms after boot); DejaVu Sans
   (Book, Bold) is bundled as the matplotlib fallback, an installed copy takes precedence; Diagnostics
   and Font Probe show `[bundled]`.
 - Live preview turned off on every tool (`needs-live-preview="false"`, matching upstream); a live

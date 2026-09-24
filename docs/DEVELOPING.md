@@ -140,7 +140,9 @@ docs/superpowers/plans/  one implementation plan per part, with the rulings made
   byte-stable across runs and platforms.
 - Tests never loosen a tolerance to pass; a mismatch with upstream is either a bug or a documented
   deviation with its own test.
-- Bump `FONT_CACHE_FORMAT` in `src/text/fontcache.rs` when `face_metrics` or the cached fields change.
+- Bump `FONT_CACHE_FORMAT` in `src/text/fontcache.rs` when `face_metrics`, the cached fields or how a
+  field is derived change; the format is part of the file name and the next write removes the
+  other formats' files.
 
 ## Packaging
 

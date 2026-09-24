@@ -177,6 +177,69 @@ fn a_corrupt_cache_file_is_ignored_and_rewritten() {
     }
 }
 
+/// The format is part of the file name, so a bump would otherwise leave the previous format's
+/// file behind for ever (it held `bundled` flags computed the old way); the next write sweeps it.
+/// A current-format file for another scan key is not ours to touch.
+#[test]
+fn writing_the_cache_removes_files_of_other_formats_only() {
+    let _g = SERIAL.lock().unwrap();
+    let (fonts, cache) = sandbox("sweep");
+    let dir = cache.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    let old = dir.join("fontcache-1-0123456789abcdef.tsv");
+    let other_key = dir.join(format!(
+        "fontcache-{FONT_CACHE_FORMAT}-fedcba9876543210.tsv"
+    ));
+    let unrelated = dir.join("fontcache-notes.tsv");
+    for p in [&old, &other_key, &unrelated] {
+        std::fs::write(p, "H\tsciink-fontcache\t1\t0.2.0\n").unwrap();
+    }
+    FontSystem::scan_with_cache(&key(&fonts), Some(&cache));
+    assert!(cache.is_file(), "the new cache was written");
+    assert!(!old.exists(), "the format-1 file is gone");
+    assert!(
+        other_key.is_file(),
+        "a current-format file for another key stays"
+    );
+    assert!(unrelated.is_file(), "a file without a numeric format stays");
+}
+
+/// `bundled` is derived from the scan pass on a fresh scan and stored per face; a warm start must
+/// report the same faces as bundled — through the dev-install symlinks in particular.
+#[cfg(unix)]
+#[test]
+fn the_bundled_flag_survives_a_cache_hit_through_symlinks() {
+    let _g = SERIAL.lock().unwrap();
+    let (fonts, cache) = sandbox("bundled-hit");
+    let bundled = fonts.parent().unwrap().join("bundled");
+    std::fs::create_dir_all(&bundled).unwrap();
+    for f in ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"] {
+        std::os::unix::fs::symlink(fonts.join(f), bundled.join(f)).unwrap();
+    }
+    let k = ScanKey {
+        system: false,
+        dirs: vec![fonts.clone()],
+        bundled: Some(bundled),
+    };
+    let (h, m, w) = cache_events();
+    let fresh = FontSystem::scan_with_cache(&k, Some(&cache)); // miss + write
+    assert_eq!(cache_events(), (h, m + 1, w + 1));
+    assert_eq!(
+        fresh.face_count(),
+        6,
+        "4 copies + 2 symlinked bundled faces"
+    );
+    assert_eq!(fresh.faces().filter(|&x| fresh.is_bundled(x)).count(), 2);
+    let opens = face_open_count();
+    let cached = FontSystem::scan_with_cache(&k, Some(&cache)); // hit
+    assert_eq!(cache_events(), (h + 1, m + 1, w + 1));
+    assert_eq!(face_open_count(), opens, "no font file opened on the hit");
+    assert_eq!(cached.faces().filter(|&x| cached.is_bundled(x)).count(), 2);
+    for x in fresh.faces() {
+        assert_eq!(fresh.face_info(x), cached.face_info(x), "face {x:?}");
+    }
+}
+
 #[test]
 fn a_different_scan_key_does_not_reuse_the_cache() {
     let _g = SERIAL.lock().unwrap();

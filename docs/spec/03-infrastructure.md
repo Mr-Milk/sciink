@@ -284,7 +284,7 @@ Flattener (+ `--testmode`).
 ## Deliberate deviations (Plan 9)
 
 1. **Persistent font-scan cache.** Face metadata and metrics are cached under
-   `$INKSCAPE_PROFILE_DIR/sciink/fontcache-1-<key hash>.tsv` (one file per distinct scan key, so
+   `$INKSCAPE_PROFILE_DIR/sciink/fontcache-2-<key hash>.tsv` (one file per distinct scan key, so
    e.g. alternating `SCIINK_FONT_DIRS` settings do not invalidate each other's cache; per-user temp
    directory when the variable is unset) and validated by the size and mtime of every cached font
    file plus the mtime of every directory holding one; not noticed: a font installed into a
