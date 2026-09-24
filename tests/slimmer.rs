@@ -124,7 +124,12 @@ fn a_lone_surviving_stylesheet_moves_to_the_root_and_at_rules_or_extra_attribute
             "{id}: an @-rule or an extra attribute blocks dedup: {s}"
         );
     }
-    assert_eq!(msgs, vec!["Slimmer: nothing to do".to_string()]);
+    // The @import sheets make the whole stylesheet opaque (F5): nothing is dedup-eligible or
+    // repositioned, but the report is no longer silent — it now explains why nothing ran.
+    assert!(
+        msgs[0].contains("rule(s) or @-rules sciink cannot analyse"),
+        "{msgs:?}"
+    );
     assert_eq!(s, svg, "nothing changed → byte-identical");
 }
 
@@ -357,9 +362,12 @@ fn wrapper_groups_are_kept_under_a_tag_rule_a_combinator_a_universal_opacity_rul
         let (s, msgs) = slim(&svg, &[]);
         let d = roxmltree::Document::parse(&s).unwrap();
         assert!(has(&d, "w"), "{sheet}: the wrapper stays: {s}");
+        // The @-media case is caught by the opaque-stylesheet gate (F5), which skips wrappers
+        // along with empty-element removal and merging and gives its own, differently worded
+        // note; the other three are refused by collapse_wrappers' own universal-rule gate. Both
+        // notes explain the block the same way.
         assert!(
-            msgs.iter()
-                .any(|m| m.contains("wrapper groups kept: the stylesheet has")),
+            msgs.iter().any(|m| m.contains("kept: the stylesheet has")),
             "{sheet}: {msgs:?}"
         );
     }
@@ -464,6 +472,100 @@ fn referenced_definitions_style_glyph_script_children_text_paths_and_the_root_de
     assert!(
         has(&d, "root"),
         "the root <defs> is never removed even when empty"
+    );
+}
+
+#[test]
+fn stylesheets_inside_unused_definitions_are_kept() {
+    let svg = format!(
+        r#"<svg {NS}><style>.b{{fill:blue}}</style><defs><symbol id="s"><style>.a{{fill:red}}</style></symbol></defs><rect id="r" class="a" width="20" height="20"/></svg>"#
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "s"),
+        "the symbol holding a document-wide <style> is never unused: {s}"
+    );
+    let after = Doc::parse(s.as_bytes()).unwrap();
+    assert_eq!(
+        after.computed(after.by_id("r").unwrap(), "fill"),
+        "red",
+        "the nested sheet's rule still applies"
+    );
+
+    let svg2 = format!(
+        r#"<svg {NS}><style>rect{{fill:red}}</style><style>.b{{fill:blue}}</style><defs><symbol id="s"><style>rect{{fill:red}}</style></symbol></defs><rect id="r" width="20" height="20"/></svg>"#
+    );
+    let (s2, _msgs2) = slim(&svg2, &[]);
+    let after2 = Doc::parse(s2.as_bytes()).unwrap();
+    assert_eq!(
+        after2.computed(after2.by_id("r").unwrap(), "fill"),
+        "red",
+        "whichever copy of the rule survives, r is still red: {s2}"
+    );
+}
+
+#[test]
+fn an_opaque_stylesheet_keeps_empty_elements_wrappers_and_definitions_and_says_so() {
+    // (i) an unsupported pseudo-class selector: the wrapper group stays
+    let svg = format!(
+        r#"<svg {NS}><style>path:first-child{{fill:red}}</style><rect width="1" height="1"/><g id="w"><path id="p" d="M20 0h20v20h-20z"/></g></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "w"), "{s}");
+    assert!(
+        msgs[0].contains("rule(s) or @-rules sciink cannot analyse"),
+        "{msgs:?}"
+    );
+
+    // (ii) an unsupported pseudo-class selector: empty-element removal is skipped
+    let svg = format!(
+        r#"<svg {NS}><style>rect:first-child{{fill:red}}</style><g class="k"><path id="e" d=""/><rect id="r" width="20" height="20"/></g></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "e"), "{s}");
+    assert!(
+        msgs[0].contains("rule(s) or @-rules sciink cannot analyse"),
+        "{msgs:?}"
+    );
+
+    // (iii) an unsupported attribute selector: definition merging is skipped
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><style>[id="p2"] rect{{fill:red}}</style><defs><pattern id="p1"><rect width="1" height="1"/></pattern><pattern id="p2"><rect width="1" height="1"/></pattern></defs><rect fill="url(#p1)" width="10" height="10"/><rect fill="url(#p2)" width="10" height="10"/></svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "p1") && has(&d, "p2"), "{s}");
+    assert!(
+        msgs[0].contains("rule(s) or @-rules sciink cannot analyse"),
+        "{msgs:?}"
+    );
+
+    // (iv) an @ block, nothing else: the wrapper group stays
+    let svg = format!(
+        r#"<svg {NS}><style>@media all{{g > path{{fill:red}}}}</style><g id="w"><path d="M0 0h1"/></g></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "w"), "{s}");
+    assert!(
+        msgs[0].contains("rule(s) or @-rules sciink cannot analyse"),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn swatches_and_color_profiles_are_never_pruned() {
+    let svg = format!(
+        r##"<svg {NS} {INK}><defs><linearGradient id="sw" inkscape:swatch="solid"/><color-profile id="cp"/></defs></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "sw") && has(&d, "cp"),
+        "swatches are referenced by name and color-profile is a kept defs child: {s}"
     );
 }
 

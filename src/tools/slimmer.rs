@@ -304,6 +304,9 @@ const GROUP_EFFECT_PROPS: &[&str] = &[
     "display",
     "transform",
     "enable-background",
+    "translate",
+    "rotate",
+    "scale",
 ];
 
 /// The single element child of `g` when `g` is a pure wrapper: only an `id` attribute (layers,
@@ -360,16 +363,17 @@ pub fn collapse_wrappers(doc: &mut Doc, refs: &HashSet<String>) -> Result<usize,
         return Ok(0); // nothing to collapse, so no note about the stylesheet either
     }
     let sheet = doc.stylesheet();
-    if sheet.rule_count() > 0 {
-        let at_rule = style_elements(doc)
-            .into_iter()
-            .any(|s| doc.text_content(s).contains('@'));
-        if at_rule || !sheet.only_universal_rules() || sheet.declares_any(GROUP_EFFECT_PROPS) {
-            return Err(format!(
-                "wrapper groups kept: the stylesheet has {} rule(s) that can depend on grouping",
-                sheet.rule_count()
-            ));
-        }
+    let at_rule = style_elements(doc)
+        .into_iter()
+        .any(|s| doc.text_content(s).contains('@'));
+    if at_rule
+        || (sheet.rule_count() > 0
+            && (!sheet.only_universal_rules() || sheet.declares_any(GROUP_EFFECT_PROPS)))
+    {
+        return Err(format!(
+            "wrapper groups kept: the stylesheet has {} rule(s) that can depend on grouping",
+            sheet.rule_count()
+        ));
     }
     let mut collapsed = 0;
     for g in wrappers {
@@ -411,7 +415,17 @@ const DEFS_KEEP: &[&str] = &[
     "desc",
     "font",
     "font-face",
+    "animate",
+    "animateTransform",
+    "animateMotion",
+    "animateColor",
+    "set",
+    "color-profile",
 ];
+
+/// Tags whose effect is document-wide wherever they sit (a `<style>` or `<script>` applies to the
+/// whole document even nested inside an unused definition, so that definition is never "unused").
+const GLOBAL_EFFECT_TAGS: &[&str] = &["style", "script", "font", "font-face"];
 
 /// Non-layer groups left without element or comment children, reverse order (children first).
 fn prune_empty_groups(doc: &mut Doc, refs: &HashSet<String>) -> usize {
@@ -432,9 +446,12 @@ fn prune_empty_groups(doc: &mut Doc, refs: &HashSet<String>) -> usize {
 
 /// Step (d), after `dhelpers.py:990 clean_up_document`: a definition (`PRUNE_TAGS` anywhere, or any
 /// direct child of any `<defs>` except `DEFS_KEEP`) goes when no id in it — its own or a
-/// descendant's — is referenced. Repeats until stable, because a definition can hold the only
-/// reference to another (gradient `href` chains). Nested `<defs>` left empty go too (the root
-/// `<defs>` stays; Inkscape expects one); emptied non-layer `<g>` go too, but only when
+/// descendant's — is referenced, and no descendant carries a `GLOBAL_EFFECT_TAGS` tag (a `<style>`
+/// applies to the whole document wherever it sits, so the definition holding it is never
+/// "unused"). An element carrying `inkscape:swatch` or `osb:paint` is never a candidate (Inkscape
+/// swatches are referenced by name, not by id). Repeats until stable, because a definition can hold
+/// the only reference to another (gradient `href` chains). Nested `<defs>` left empty go too (the
+/// root `<defs>` stays; Inkscape expects one); emptied non-layer `<g>` go too, but only when
 /// `remove_groups` (`o.removeempty`). Exact: nothing rendered pointed at any of it. Returns
 /// (definitions removed, rounds run, emptied containers removed).
 pub fn prune_unused(doc: &mut Doc, remove_groups: bool) -> (usize, usize, usize) {
@@ -453,14 +470,18 @@ pub fn prune_unused(doc: &mut Doc, remove_groups: bool) -> (usize, usize, usize)
                             .parent(n)
                             .is_some_and(|p| doc.is_element(p) && doc.tag(p) == "defs")
                             && !DEFS_KEEP.contains(&doc.tag(n))))
+                    // Inkscape swatches are referenced by name, not by id.
+                    && doc.attr(n, "inkscape:swatch").is_none()
+                    && doc.attr(n, "osb:paint").is_none()
             })
             .collect();
         let mut removed_now = 0;
         // inner definitions before the containers holding them
         for &n in candidates.iter().rev() {
-            let used = doc
-                .descendants(n)
-                .any(|d| doc.attr(d, "id").is_some_and(|id| refs.contains(id)));
+            let used = doc.descendants(n).any(|d| {
+                doc.attr(d, "id").is_some_and(|id| refs.contains(id))
+                    || (doc.is_element(d) && GLOBAL_EFFECT_TAGS.contains(&doc.tag(d)))
+            });
             if !used {
                 detach_tidy(doc, n);
                 removed_now += 1;
@@ -628,8 +649,10 @@ fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
 /// `id`, each element's cascaded style (an `#id` rule or a combinator matching one copy only yields
 /// a different key), the parent's specified style (inheritance into the definition) and the content.
 /// Refused for a definition whose descendant ids are referenced (they would vanish), whose ids
-/// appear in `<style>` text (CSS is not rewritten), or whose id is missing or not unique (repointing
-/// to a duplicated id would resolve to the first-wins index entry). Repeats until stable: two
+/// appear in `<style>` text (CSS is not rewritten), whose id is missing or not unique (repointing
+/// to a duplicated id would resolve to the first-wins index entry), or whose subtree carries a
+/// `GLOBAL_EFFECT_TAGS` tag (a nested `<style>` applies document-wide; merging its container would
+/// delete it). Repeats until stable: two
 /// gradients that differ only by `href` to two merged copies become identical in the next round.
 /// Returns (definitions merged, attributes repointed).
 pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
@@ -667,6 +690,12 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
                 .filter_map(|d| doc.attr(d, "id"))
                 .any(|i| refs.contains(i) || sheet_ids.contains(i));
             if inner_pinned {
+                continue;
+            }
+            let has_global_effect = doc
+                .descendants(n)
+                .any(|d| doc.is_element(d) && GLOBAL_EFFECT_TAGS.contains(&doc.tag(d)));
+            if has_global_effect {
                 continue;
             }
             let key = canonical_key(doc, n);
@@ -849,24 +878,58 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         r.sheet_moved = moved;
         t.phase("styles", || format!("removed={n} moved={moved}"));
     }
+    // Selectors the parser drops (attribute selectors, pseudo-classes, sibling combinators) and
+    // `@` rules (`@media`, `@import`) make the stylesheet opaque: sciink cannot tell whether it
+    // hides a rule that would change what empty-element removal, wrapper collapse or definition
+    // merging may safely do, so all three are skipped and one note explains why.
+    let opaque = {
+        let sheet = doc.stylesheet();
+        sheet.unsupported_rules() > 0
+            || style_elements(doc)
+                .into_iter()
+                .any(|s| doc.text_content(s).contains('@'))
+    };
+    if opaque {
+        let sheet = doc.stylesheet();
+        let unsupported = sheet.unsupported_rules();
+        let n = if unsupported > 0 {
+            unsupported
+        } else {
+            style_elements(doc)
+                .into_iter()
+                .filter(|&s| doc.text_content(s).contains('@'))
+                .count()
+        };
+        r.notes.push(format!(
+            "empty-element removal, wrapper groups and definition merging kept: the stylesheet has {n} rule(s) or @-rules sciink cannot analyse"
+        ));
+    }
     if o.removeempty {
-        let refs = referenced_ids(doc);
-        let n = remove_empty(doc, &refs, o.removeinvisible);
-        r.empty_removed = n;
-        t.phase("empty", || {
-            format!("removed={n} invisible={}", o.removeinvisible)
-        });
+        if opaque {
+            t.phase("empty", || "skipped=stylesheet".to_string());
+        } else {
+            let refs = referenced_ids(doc);
+            let n = remove_empty(doc, &refs, o.removeinvisible);
+            r.empty_removed = n;
+            t.phase("empty", || {
+                format!("removed={n} invisible={}", o.removeinvisible)
+            });
+        }
     }
     if o.collapsegroups {
-        let refs = referenced_ids(doc);
-        match collapse_wrappers(doc, &refs) {
-            Ok(n) => {
-                r.wrappers_collapsed = n;
-                t.phase("wrappers", || format!("collapsed={n}"));
-            }
-            Err(note) => {
-                r.notes.push(note);
-                t.phase("wrappers", || "skipped=stylesheet".to_string());
+        if opaque {
+            t.phase("wrappers", || "skipped=stylesheet".to_string());
+        } else {
+            let refs = referenced_ids(doc);
+            match collapse_wrappers(doc, &refs) {
+                Ok(n) => {
+                    r.wrappers_collapsed = n;
+                    t.phase("wrappers", || format!("collapsed={n}"));
+                }
+                Err(note) => {
+                    r.notes.push(note);
+                    t.phase("wrappers", || "skipped=stylesheet".to_string());
+                }
             }
         }
     }
@@ -880,10 +943,14 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         });
     }
     if o.mergedefs {
-        let (n, m) = merge_identical_defs(doc);
-        r.defs_merged = n;
-        r.attrs_repointed = m;
-        t.phase("merge", || format!("merged={n} repointed={m}"));
+        if opaque {
+            t.phase("merge", || "skipped=stylesheet".to_string());
+        } else {
+            let (n, m) = merge_identical_defs(doc);
+            r.defs_merged = n;
+            r.attrs_repointed = m;
+            t.phase("merge", || format!("merged={n} repointed={m}"));
+        }
     }
     if o.precision > 0 {
         let n = round_coordinates(doc, o.precision);
