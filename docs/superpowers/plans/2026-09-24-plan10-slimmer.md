@@ -2127,8 +2127,57 @@ fn check_exact(f: &std::path::Path, extra: &[&str], max: f64) {
     );
     eprintln!("{}: pixel diff {:.5} % with {extra:?}", f.display(), d * 100.0);
     assert!(d <= max, "{}: {d} > {max}", f.display());
-    let doc = roxmltree::Document::parse(std::str::from_utf8(&out).unwrap()).unwrap();
-    assert!(every_reference_resolves(&doc), "{}", f.display());
+    // Four upstream fixtures carry dangling `url(#…)`/`href` references of their own (verified with
+    // every step off: byte-identical output). The invariant is therefore "no NEW dangling
+    // reference", not "every reference resolves" (ruling during execution).
+    let before = roxmltree::Document::parse(std::str::from_utf8(&input).unwrap()).unwrap();
+    let after = roxmltree::Document::parse(std::str::from_utf8(&out).unwrap()).unwrap();
+    let introduced: Vec<String> = dangling_references(&after)
+        .difference(&dangling_references(&before))
+        .cloned()
+        .collect();
+    assert!(
+        introduced.is_empty(),
+        "{}: the Slimmer introduced dangling references {introduced:?} (an upstream fixture may carry its own; those are not ours)",
+        f.display()
+    );
+}
+```
+
+`every_reference_resolves` (T2's helper) is re-expressed on top of a new helper so both views share one
+scanner:
+
+```rust
+/// Ids the document points at (`url(#x)` in any attribute, `#x` hrefs) that have no element.
+fn dangling_references(d: &roxmltree::Document) -> HashSet<String> {
+    let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
+    let mut out = HashSet::new();
+    for n in d.descendants().filter(|n| n.is_element()) {
+        for a in n.attributes() {
+            let v = a.value();
+            for piece in v.split("url(#").skip(1) {
+                if let Some(id) = piece.split(')').next() {
+                    let id = id.trim().trim_matches(['\'', '"']);
+                    if !ids.contains(id) {
+                        out.insert(id.to_string());
+                    }
+                }
+            }
+            if a.name() == "href" {
+                if let Some(id) = v.strip_prefix('#') {
+                    if !ids.contains(id) {
+                        out.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every `url(#x)` and `#x` href in the document has a target (BigDoc and the synthetic documents).
+fn every_reference_resolves(d: &roxmltree::Document) -> bool {
+    dangling_references(d).is_empty()
 }
 
 #[test]
