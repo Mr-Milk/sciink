@@ -121,10 +121,13 @@ fn scan_fresh(key: &ScanKey) -> Scan {
     for d in &key.dirs {
         db.load_fonts_dir(d);
     }
+    // fontdb records a symlinked entry under its resolved target path (dev installs symlink the
+    // bundled fonts), so "bundled" cannot be read off a face's path: it is what this pass adds.
+    let before: HashSet<fontdb::ID> = db.faces().map(|f| f.id).collect();
     if let Some(b) = &key.bundled {
         db.load_fonts_dir(b);
     }
-    let entries = FontSystem::scan_entries(&db, key.bundled.as_deref());
+    let entries = FontSystem::scan_entries(&db, |id| !before.contains(&id));
     (db, entries)
 }
 
@@ -250,7 +253,7 @@ impl FontSystem {
         for d in dirs {
             db.load_fonts_dir(d);
         }
-        let entries = Self::scan_entries(&db, None);
+        let entries = Self::scan_entries(&db, |_| false);
         Self::from_entries(db, entries, t0)
     }
 
@@ -264,12 +267,13 @@ impl FontSystem {
 
     /// The face pass: one `FaceInfo` per parsable face, sorted by (family, weight, style, width,
     /// bundled, path, index). This is the part of `from_db` up to and including
-    /// `entries.sort_by(...)`.
+    /// `entries.sort_by(...)`. `is_bundled` says which faces the bundled directory's scan added.
     fn scan_entries(
         db: &fontdb::Database,
-        bundled: Option<&std::path::Path>,
+        is_bundled: impl Fn(fontdb::ID) -> bool,
     ) -> Vec<(fontdb::ID, FaceInfo)> {
         let mut entries: Vec<(fontdb::ID, FaceInfo)> = Vec::new();
+        let mut seen: HashSet<(PathBuf, u32)> = HashSet::new();
         for f in db.faces() {
             let family = f
                 .families
@@ -281,6 +285,15 @@ impl FontSystem {
                 fontdb::Source::SharedFile(p, _) => (Some(p.clone()), f.index),
                 fontdb::Source::Binary(_) => (None, f.index),
             };
+            // fontdb dedupes only within one `load_fonts_dir` call: a symlinked entry that
+            // resolves to a file another pass scanned directly comes back as a second face with
+            // the same path. One file is one face — the first occurrence; the cache rejects a
+            // duplicate `(path, index)`, which would otherwise make every run a miss.
+            if let Some(p) = &path {
+                if !seen.insert((p.clone(), index)) {
+                    continue;
+                }
+            }
             let style = match f.style {
                 fontdb::Style::Normal => FontStyle::Normal,
                 fontdb::Style::Italic => FontStyle::Italic,
@@ -309,7 +322,7 @@ impl FontSystem {
                     descent_max: m.4,
                     x_height: m.5,
                     cap_height: m.6,
-                    bundled: matches!((&path, bundled), (Some(p), Some(b)) if p.starts_with(b)),
+                    bundled: is_bundled(f.id),
                 },
             ));
         }

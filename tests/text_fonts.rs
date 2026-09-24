@@ -308,3 +308,45 @@ fn is_bundled_reports_the_source_directory() {
             .starts_with(&bundled)
     );
 }
+
+/// `dist/dev-install.sh` symlinks the bundled fonts into `<extension dir>/fonts`, and fontdb
+/// records a symlinked entry under its resolved target path — so "bundled" cannot be read off the
+/// face's path; it is whatever the bundled scan pass added.
+#[cfg(unix)]
+#[test]
+fn a_bundled_face_reached_through_a_symlink_is_still_flagged() {
+    // As in a dev install: the installed fonts live elsewhere (one copy of DejaVu Sans Book here,
+    // standing for a system font) and the bundled directory holds symlinks to files that no other
+    // pass scans.
+    let installed = bundled_copy("symlink-installed");
+    let dir = std::env::temp_dir().join(format!("sciink-bundled-{}-symlink", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fonts");
+    for f in ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"] {
+        std::os::unix::fs::symlink(src.join(f), dir.join(f)).unwrap();
+    }
+    let mut fs = FontSystem::scan_with_cache(
+        &ScanKey {
+            system: false,
+            dirs: vec![installed],
+            bundled: Some(dir),
+        },
+        None,
+    );
+    assert_eq!(
+        fs.face_count(),
+        3,
+        "1 installed copy + 2 symlinked bundled faces"
+    );
+    let flagged: Vec<_> = fs.faces().filter(|&k| fs.is_bundled(k)).collect();
+    assert_eq!(flagged.len(), 2, "both symlinked faces are bundled");
+    for &k in &flagged {
+        assert_eq!(fs.face_info(k).family, "DejaVu Sans");
+    }
+    let spec = sciink::text::fonts::FontSpec::from_style(&sciink::style::Style::parse(
+        "font-family:'DejaVu Sans'",
+    ));
+    let k = fs.resolve(&spec).expect("DejaVu Sans resolves");
+    assert!(!fs.is_bundled(k), "the installed copy still wins the tie");
+}

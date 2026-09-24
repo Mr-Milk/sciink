@@ -45,7 +45,7 @@ fn touch(p: &Path) {
 
 #[test]
 fn a_cold_scan_writes_the_cache_and_a_warm_scan_opens_no_font_file() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (fonts, cache) = sandbox("cold-warm");
     let (h0, m0, w0) = cache_events();
     let fresh = FontSystem::scan_with_cache(&key(&fonts), Some(&cache));
@@ -73,7 +73,7 @@ fn a_cold_scan_writes_the_cache_and_a_warm_scan_opens_no_font_file() {
 
 #[test]
 fn metrics_from_the_cache_equal_metrics_from_a_fresh_scan() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (fonts, cache) = sandbox("metrics");
     let fresh = FontSystem::scan_with_cache(&key(&fonts), None);
     FontSystem::scan_with_cache(&key(&fonts), Some(&cache)); // writes
@@ -111,7 +111,7 @@ fn metrics_from_the_cache_equal_metrics_from_a_fresh_scan() {
 
 #[test]
 fn touching_adding_or_removing_a_font_file_invalidates_the_cache() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (fonts, cache) = sandbox("invalidate");
     let k = key(&fonts);
     FontSystem::scan_with_cache(&k, Some(&cache));
@@ -145,7 +145,7 @@ fn touching_adding_or_removing_a_font_file_invalidates_the_cache() {
 
 #[test]
 fn a_corrupt_cache_file_is_ignored_and_rewritten() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (fonts, cache) = sandbox("corrupt");
     let k = key(&fonts);
     FontSystem::scan_with_cache(&k, Some(&cache));
@@ -177,9 +177,116 @@ fn a_corrupt_cache_file_is_ignored_and_rewritten() {
     }
 }
 
+/// The format is part of the file name, so a bump would otherwise leave the previous format's
+/// file behind for ever (it held `bundled` flags computed the old way); the next write sweeps it.
+/// A current-format file for another scan key is not ours to touch.
+#[test]
+fn writing_the_cache_removes_files_of_other_formats_only() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (fonts, cache) = sandbox("sweep");
+    let dir = cache.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    let old = dir.join("fontcache-1-0123456789abcdef.tsv");
+    let other_key = dir.join(format!(
+        "fontcache-{FONT_CACHE_FORMAT}-fedcba9876543210.tsv"
+    ));
+    let unrelated = dir.join("fontcache-notes.tsv");
+    for p in [&old, &other_key, &unrelated] {
+        std::fs::write(p, "H\tsciink-fontcache\t1\t0.2.0\n").unwrap();
+    }
+    FontSystem::scan_with_cache(&key(&fonts), Some(&cache));
+    assert!(cache.is_file(), "the new cache was written");
+    assert!(!old.exists(), "the format-1 file is gone");
+    assert!(
+        other_key.is_file(),
+        "a current-format file for another key stays"
+    );
+    assert!(unrelated.is_file(), "a file without a numeric format stays");
+}
+
+/// `bundled` is derived from the scan pass on a fresh scan and stored per face; a warm start must
+/// report the same faces as bundled — through the dev-install symlinks in particular.
+#[cfg(unix)]
+#[test]
+fn the_bundled_flag_survives_a_cache_hit_through_symlinks() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (fonts, cache) = sandbox("bundled-hit");
+    // As in a dev install, the symlinks point at files no other pass scans (the vendored
+    // originals; the sandbox copies stand for the installed fonts).
+    let bundled = fonts.parent().unwrap().join("bundled");
+    std::fs::create_dir_all(&bundled).unwrap();
+    for f in ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"] {
+        std::os::unix::fs::symlink(vendored().join(f), bundled.join(f)).unwrap();
+    }
+    let k = ScanKey {
+        system: false,
+        dirs: vec![fonts.clone()],
+        bundled: Some(bundled),
+    };
+    let (h, m, w) = cache_events();
+    let fresh = FontSystem::scan_with_cache(&k, Some(&cache)); // miss + write
+    assert_eq!(cache_events(), (h, m + 1, w + 1));
+    assert_eq!(
+        fresh.face_count(),
+        6,
+        "4 copies + 2 symlinked bundled faces"
+    );
+    assert_eq!(fresh.faces().filter(|&x| fresh.is_bundled(x)).count(), 2);
+    let opens = face_open_count();
+    let cached = FontSystem::scan_with_cache(&k, Some(&cache)); // hit
+    assert_eq!(cache_events(), (h + 1, m + 1, w + 1));
+    assert_eq!(face_open_count(), opens, "no font file opened on the hit");
+    assert_eq!(cached.faces().filter(|&x| cached.is_bundled(x)).count(), 2);
+    for x in fresh.faces() {
+        assert_eq!(fresh.face_info(x), cached.face_info(x), "face {x:?}");
+    }
+}
+
+/// fontdb reaches a file twice when a symlinked entry resolves to a file another pass scanned
+/// directly (a `~/.fonts/X.ttf` pointing at a system font; bundled symlinks into a scanned
+/// directory). One file is one face — the first occurrence — so the cache never holds a duplicate
+/// `(path, index)`, which `read` rejects, and which would otherwise make every run a miss.
+#[cfg(unix)]
+#[test]
+fn a_font_file_reached_twice_is_one_face_and_the_cache_still_hits() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (fonts, cache) = sandbox("twice");
+    // canonical, so the copies' own paths equal what the symlinks resolve to on every OS
+    let fonts = fonts.canonicalize().unwrap();
+    let bundled = fonts.parent().unwrap().join("bundled");
+    std::fs::create_dir_all(&bundled).unwrap();
+    for f in ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"] {
+        std::os::unix::fs::symlink(fonts.join(f), bundled.join(f)).unwrap();
+    }
+    let k = ScanKey {
+        system: false,
+        dirs: vec![fonts.clone()],
+        bundled: Some(bundled),
+    };
+    let (h, m, w) = cache_events();
+    let fresh = FontSystem::scan_with_cache(&k, Some(&cache));
+    assert_eq!(
+        fresh.face_count(),
+        4,
+        "the symlinked twins are the same files"
+    );
+    assert_eq!(
+        fresh.faces().filter(|&x| fresh.is_bundled(x)).count(),
+        0,
+        "a file reached again through the bundled directory stays an installed face"
+    );
+    let cached = FontSystem::scan_with_cache(&k, Some(&cache));
+    assert_eq!(
+        cache_events(),
+        (h + 1, m + 1, w + 1),
+        "one miss, one write, then a hit"
+    );
+    assert_eq!(cached.face_count(), 4);
+}
+
 #[test]
 fn a_different_scan_key_does_not_reuse_the_cache() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (fonts, cache) = sandbox("key");
     FontSystem::scan_with_cache(&key(&fonts), Some(&cache));
     let other = ScanKey {
@@ -198,7 +305,7 @@ fn a_different_scan_key_does_not_reuse_the_cache() {
 
 #[test]
 fn an_unwritable_cache_location_does_not_fail_the_scan() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (fonts, _) = sandbox("unwritable");
     // A path under a nonexistent root may still be creatable by `create_dir_all` on some
     // platforms; a regular FILE where a directory is wanted fails portably, since a directory
@@ -213,7 +320,7 @@ fn an_unwritable_cache_location_does_not_fail_the_scan() {
 
 #[test]
 fn the_cache_path_honours_the_environment_switches() {
-    let _g = SERIAL.lock().unwrap();
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let k = key(&vendored());
     // SAFETY: tests in this binary are serialised by SERIAL and restore the variables.
     unsafe {

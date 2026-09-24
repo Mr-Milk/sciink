@@ -16,9 +16,9 @@ use std::time::UNIX_EPOCH;
 
 use super::fonts::{FaceInfo, FontStyle, ScanKey};
 
-/// Bump when `face_metrics` or the stored fields change — not with the crate version, so a patch
-/// release does not force a full rescan.
-pub const FONT_CACHE_FORMAT: u32 = 1;
+/// Bump when `face_metrics`, the stored fields or how a field is derived change — not with the
+/// crate version, so a patch release does not force a full rescan. 2: `bundled` by scan pass.
+pub const FONT_CACHE_FORMAT: u32 = 2;
 
 /// A face as fontdb needs it (`fontdb::FaceInfo` minus id and source) plus our `FaceInfo`.
 #[derive(Debug, Clone, PartialEq)]
@@ -316,7 +316,35 @@ pub fn write(path: &Path, key: &ScanKey, faces: &[CachedFace]) {
         let _ = fs::create_dir_all(dir);
     }
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    if fs::write(&tmp, out).is_ok() && fs::rename(&tmp, path).is_err() {
+    if fs::write(&tmp, out).is_err() {
+        return;
+    }
+    if fs::rename(&tmp, path).is_err() {
         let _ = fs::remove_file(&tmp);
+        return;
+    }
+    remove_other_formats(path);
+}
+
+/// The format is part of the file name (`cache_path`), so a bump would leave the previous
+/// format's files — with fields derived the old way — in the cache directory for ever. Once the
+/// new file is in place, drop every `fontcache-<other format>-*.tsv` beside it; a file for
+/// another scan key in the current format stays.
+fn remove_other_formats(written: &Path) {
+    let Some(dir) = written.parent() else { return };
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let other_format = name
+            .strip_prefix("fontcache-")
+            .and_then(|rest| rest.split_once('-'))
+            .and_then(|(fmt, _)| fmt.parse::<u32>().ok())
+            .is_some_and(|fmt| fmt != FONT_CACHE_FORMAT);
+        if other_format && name.ends_with(".tsv") {
+            let _ = fs::remove_file(e.path());
+        }
     }
 }
