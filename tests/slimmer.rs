@@ -222,3 +222,102 @@ fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_re
     assert_eq!(msgs, vec!["Slimmer: nothing to do".to_string()]);
     assert_eq!(s, svg, "byte-identical when nothing is removed");
 }
+
+#[test]
+fn wrapper_groups_with_only_an_id_collapse_and_the_child_keeps_its_place_and_gets_the_id() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer"><rect id="before" width="1" height="1"/><g id="patch_1">
+  <path d="M0 0h1"/>
+</g><g id="outer"><g id="inner"><rect id="kid" width="1" height="1"/></g></g><g id="two"><rect width="1" height="1"/><rect width="1" height="1"/></g><g id="styled" style="opacity:.5"><rect width="1" height="1"/></g><g id="xf" transform="translate(1)"><rect width="1" height="1"/></g><rect id="after" width="1" height="1"/></g></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let kids: Vec<(String, String)> = by_id(&d, "layer")
+        .children()
+        .filter(|c| c.is_element())
+        .map(|c| {
+            (
+                c.tag_name().name().to_string(),
+                c.attribute("id").unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    let want = [
+        ("rect", "before"),
+        ("path", "patch_1"),
+        ("rect", "kid"),
+        ("g", "two"),
+        ("g", "styled"),
+        ("g", "xf"),
+        ("rect", "after"),
+    ];
+    assert_eq!(
+        kids,
+        want.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect::<Vec<_>>(),
+        "the wrapper's id moves to a child without one; nested wrappers collapse in one pass: {s}"
+    );
+    assert!(msgs[0].contains("wrapper groups collapsed: 3"), "{msgs:?}");
+}
+
+#[test]
+fn wrapper_groups_are_kept_under_a_tag_rule_a_combinator_a_universal_opacity_rule_or_an_at_rule() {
+    for sheet in [
+        "g{fill:red}",
+        "g > path{fill:red}",
+        "*{opacity:.5}",
+        "@media print{*{fill:red}} *{fill:red}",
+    ] {
+        let svg = format!(
+            r#"<svg {NS}><style>{sheet}</style><g id="w"><path id="p" d="M0 0h1"/></g></svg>"#
+        );
+        let (s, msgs) = slim(&svg, &[]);
+        let d = roxmltree::Document::parse(&s).unwrap();
+        assert!(has(&d, "w"), "{sheet}: the wrapper stays: {s}");
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("wrapper groups kept: the stylesheet has")),
+            "{sheet}: {msgs:?}"
+        );
+    }
+    let svg = format!(
+        r#"<svg {NS}><style>*{{stroke-linejoin:round}}</style><g id="w"><path id="p" d="M0 0h1"/></g></svg>"#
+    );
+    let (s, _) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        !has(&d, "w") && has(&d, "p"),
+        "a lone * rule without group-level properties is safe: {s}"
+    );
+}
+
+#[test]
+fn layers_labelled_groups_use_targets_switch_children_and_title_wrappers_are_never_collapsed() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK} {INK}>
+<g id="layer" inkscape:groupmode="layer"><rect width="1" height="1"/></g>
+<g id="named" inkscape:label="Panel A"><rect width="1" height="1"/></g>
+<g id="cloned"><rect width="1" height="1"/></g><use xlink:href="#cloned"/>
+<switch><g id="insw"><rect width="1" height="1"/></g></switch>
+<g id="titled"><title>only a title</title></g>
+<g id="commented"><!-- glyph group --><rect width="1" height="1"/></g>
+<clipPath id="cp"><g id="inclip"><rect width="1" height="1"/></g></clipPath><rect clip-path="url(#cp)" width="1" height="1"/>
+</svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in [
+        "layer",
+        "named",
+        "cloned",
+        "insw",
+        "titled",
+        "commented",
+        "inclip",
+        "cp",
+    ] {
+        assert!(has(&d, id), "{id} must stay: {s}");
+    }
+    assert_eq!(msgs, vec!["Slimmer: nothing to do".to_string()]);
+}

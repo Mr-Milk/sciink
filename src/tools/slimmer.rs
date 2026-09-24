@@ -241,6 +241,112 @@ pub fn remove_empty(doc: &mut Doc, refs: &HashSet<String>) -> usize {
     removed
 }
 
+/// Rendered children a wrapper may hand up; `title`, `desc`, `metadata`, `defs`, `style` mean
+/// something different under a different parent.
+const COLLAPSE_CHILD: &[&str] = &[
+    "g", "a", "path", "rect", "circle", "ellipse", "line", "polyline", "polygon", "use", "text",
+    "image", "flowRoot", "switch",
+];
+/// Ancestors under which a group is a plain container. Not `switch` (which picks one child), not
+/// `clipPath`/`mask`/`symbol`/`defs` (a `<g>` inside a clipPath is ignored by renderers; collapsing
+/// it would activate the child).
+const COLLAPSE_ANCESTORS: &[&str] = &["svg", "g", "a"];
+/// Properties a lone `*` rule would apply to the wrapper AND its child, where the group level is
+/// not redundant: non-inherited effects compound (`opacity` 0.5 × 0.5) or depend on the box.
+const GROUP_EFFECT_PROPS: &[&str] = &[
+    "opacity",
+    "filter",
+    "clip-path",
+    "mask",
+    "mix-blend-mode",
+    "isolation",
+    "display",
+    "transform",
+    "enable-background",
+];
+
+/// The single element child of `g` when `g` is a pure wrapper: only an `id` attribute (layers,
+/// labelled, transformed, styled and `xml:space` groups drop out), one element child of a rendered
+/// kind, other children whitespace only (a comment disqualifies), every ancestor a plain container,
+/// and no reference to `g` (a `<use>`, an `#id` selector, a connector).
+fn wrapper_child(doc: &Doc, g: NodeId, refs: &HashSet<String>) -> Option<NodeId> {
+    if !doc.attrs(g).iter().all(|a| a.name == "id") {
+        return None;
+    }
+    if doc.attr(g, "id").is_some_and(|id| refs.contains(id)) {
+        return None;
+    }
+    let root = doc.root();
+    if !doc
+        .ancestors(g)
+        .take_while(|&a| a != root)
+        .all(|a| COLLAPSE_ANCESTORS.contains(&doc.tag(a)))
+    {
+        return None;
+    }
+    let mut child = None;
+    for k in doc.children(g) {
+        if doc.is_element(k) {
+            if child.is_some() {
+                return None;
+            }
+            child = Some(k);
+        } else if doc.is_comment(k) || doc.text(k).is_some_and(|t| !t.trim().is_empty()) {
+            return None;
+        }
+    }
+    let c = child?;
+    COLLAPSE_CHILD.contains(&doc.tag(c)).then_some(c)
+}
+
+/// Step (c): replaces every pure wrapper `<g>` by its only child. Exact when no stylesheet rule can
+/// tell the wrapper from its child: a wrapper with only an `id` has no properties of its own, so
+/// nothing inherits from it, and `doc.replace` keeps the child's position. The step is skipped as a
+/// whole when the stylesheet has a rule that is not a lone `*`, declares a group-level property
+/// (`GROUP_EFFECT_PROPS`), or contains an `@` rule (our parser skips `@media` blocks that Inkscape
+/// may apply). The wrapper's id moves to a child that has none, so matplotlib's `patch_1`-style
+/// names survive on the object. `ops::clip::ungroup` is not reused: it pushes the cascaded style
+/// down onto the child. Returns `Err(reason)` when skipped.
+pub fn collapse_wrappers(doc: &mut Doc, refs: &HashSet<String>) -> Result<usize, String> {
+    let wrappers: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .skip(1)
+        .filter(|&n| {
+            doc.is_element(n) && doc.tag(n) == "g" && wrapper_child(doc, n, refs).is_some()
+        })
+        .collect();
+    if wrappers.is_empty() {
+        return Ok(0); // nothing to collapse, so no note about the stylesheet either
+    }
+    let sheet = doc.stylesheet();
+    if sheet.rule_count() > 0 {
+        let at_rule = style_elements(doc)
+            .into_iter()
+            .any(|s| doc.text_content(s).contains('@'));
+        if at_rule || !sheet.only_universal_rules() || sheet.declares_any(GROUP_EFFECT_PROPS) {
+            return Err(format!(
+                "wrapper groups kept: the stylesheet has {} rule(s) that can depend on grouping",
+                sheet.rule_count()
+            ));
+        }
+    }
+    let mut collapsed = 0;
+    for g in wrappers {
+        // re-validated: collapsing an outer wrapper changed this one's ancestors
+        let Some(c) = wrapper_child(doc, g, refs) else {
+            continue;
+        };
+        if doc.attr(c, "id").is_none() {
+            if let Some(id) = doc.remove_attr(g, "id") {
+                doc.set_attr(c, "id", id);
+            }
+        }
+        doc.replace(g, c);
+        collapsed += 1;
+    }
+    Ok(collapsed)
+}
+
 /// Runs the enabled steps in order, one `Timer` phase each.
 pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report {
     let mut r = Report::default();
@@ -255,6 +361,19 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         let n = remove_empty(doc, &refs);
         r.empty_removed = n;
         t.phase("empty", || format!("removed={n}"));
+    }
+    if o.collapsegroups {
+        let refs = referenced_ids(doc);
+        match collapse_wrappers(doc, &refs) {
+            Ok(n) => {
+                r.wrappers_collapsed = n;
+                t.phase("wrappers", || format!("collapsed={n}"));
+            }
+            Err(note) => {
+                r.notes.push(note);
+                t.phase("wrappers", || "skipped=stylesheet".to_string());
+            }
+        }
     }
     r
 }
