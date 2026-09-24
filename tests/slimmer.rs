@@ -249,6 +249,7 @@ fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_re
 <rect id="filtered" width="0" height="0" style="filter:url(#f)"/>
 <use xlink:href="#target"/><rect id="target" width="0" height="0"/>
 <g id="clipped" clip-path="url(#c)"><rect width="1" height="1"/></g>
+<ellipse id="autor" cx="1" cy="1" ry="8" fill="red"/><ellipse id="negr" cx="1" cy="1" rx="-1" ry="8" fill="red"/>
 </svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
@@ -267,11 +268,41 @@ fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_re
         "f",
         "c",
         "clipped",
+        "autor",
+        "negr",
     ] {
         assert!(has(&d, id), "{id} must stay: {s}");
     }
     assert_eq!(msgs, vec!["Slimmer: nothing to do".to_string()]);
     assert_eq!(s, svg, "byte-identical when nothing is removed");
+}
+
+#[test]
+fn shapes_inside_cloned_groups_and_symbols_are_kept() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><g id="icon"><rect id="r1" x="2" y="2" width="14" height="14" fill="none"/></g><use xlink:href="#icon" x="20" stroke="blue" stroke-width="2"/><symbol id="s"><rect id="r2" width="1" height="1" fill="none"/></symbol><use xlink:href="#s"/></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &["--removeinvisible=true"]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "r1"),
+        "r1 may render with the clone's own stroke: {s}"
+    );
+    assert!(has(&d, "r2"), "r2 only ever renders through a <use>: {s}");
+}
+
+#[test]
+fn text_built_from_a_tref_is_kept() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><defs><text id="t">Hello</text></defs><text id="u" x="2" y="15"><tref xlink:href="#t"/></text></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "u"), "u's characters come from the tref: {s}");
+    assert!(
+        has(&d, "t"),
+        "t is not pruned: the tref's xlink:href already counts as a reference: {s}"
+    );
 }
 
 #[test]

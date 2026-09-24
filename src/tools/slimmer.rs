@@ -133,11 +133,25 @@ pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, bool) {
     (removed, moved)
 }
 
+/// Inside a `<symbol>`, or inside a subtree something points at (`<use>`, a clip, a marker…): the
+/// element may be re-rendered elsewhere with other inherited paint, so its own context proves nothing.
+fn under_symbol_or_referenced(doc: &Doc, n: NodeId, refs: &HashSet<String>) -> bool {
+    let root = doc.root();
+    std::iter::once(n)
+        .chain(doc.ancestors(n).take_while(|&a| a != root))
+        .any(|a| {
+            doc.is_element(a)
+                && (doc.tag(a) == "symbol"
+                    || (a != n && doc.attr(a, "id").is_some_and(|id| refs.contains(id))))
+        })
+}
+
 /// Context checks shared by every removable element: rendered (no `UNRENDERED` ancestor such as
 /// `defs`, `clipPath`, `mask`), not referenced by id, not named (`inkscape:label` marks intent —
 /// an invisible spacer, say), not a `<switch>` child (removing one changes which sibling is
 /// chosen), not hidden (`display:none` is how Inkscape hides objects and layers: hidden is not
-/// empty), no filter (a `feFlood` filter paints even on an empty shape).
+/// empty), no filter (a `feFlood` filter paints even on an empty shape), not inside a `<symbol>`
+/// or a referenced subtree (`under_symbol_or_referenced`).
 fn removable_context(doc: &Doc, n: NodeId, refs: &HashSet<String>) -> bool {
     has_bbox(doc, n)
         && doc.attr(n, "id").is_none_or(|id| !refs.contains(id))
@@ -149,6 +163,7 @@ fn removable_context(doc: &Doc, n: NodeId, refs: &HashSet<String>) -> bool {
         && doc
             .specified(n, "filter")
             .is_none_or(|v| v.trim() == "none")
+        && !under_symbol_or_referenced(doc, n, refs)
 }
 
 /// A `<g>` with no element or comment children (a comment marks upstream's matplotlib glyph
@@ -160,8 +175,16 @@ fn empty_group(doc: &Doc, n: NodeId) -> bool {
             .any(|c| doc.is_element(c) || doc.is_comment(c))
 }
 
-/// A `<text>` without characters; preserved whitespace stays (it can carry `text-decoration`).
+/// A `<text>` without characters; preserved whitespace stays (it can carry `text-decoration`). A
+/// `<tref>` descendant pulls in another element's characters, so its own text nodes prove nothing.
 fn empty_text(doc: &Doc, n: NodeId) -> bool {
+    if doc
+        .descendants(n)
+        .skip(1)
+        .any(|d| doc.is_element(d) && doc.tag(d) == "tref")
+    {
+        return false;
+    }
     let t = doc.text_content(n);
     t.trim().is_empty() && (t.is_empty() || !doc.xml_space_preserve(n))
 }
@@ -197,7 +220,21 @@ fn empty_shape(doc: &Doc, n: NodeId) -> bool {
             .is_none_or(|p| !p.bytes().any(|b| b.is_ascii_digit())),
         "rect" => non_positive("width") || non_positive("height"),
         "circle" => non_positive("r"),
-        "ellipse" => non_positive("rx") || non_positive("ry"),
+        // SVG 2: a missing or literal "auto" rx/ry takes the other radius's value.
+        "ellipse" => {
+            let rad = |a: &str| {
+                doc.attr(n, a)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty() && *v != "auto")
+                    .map(ipx)
+            };
+            match (rad("rx"), rad("ry")) {
+                (None, None) => true, // both auto → 0 → not rendered
+                (Some(Some(r)), None) | (None, Some(Some(r))) => r == 0.0,
+                (Some(Some(a)), Some(Some(b))) => a == 0.0 || b == 0.0,
+                _ => false, // unparsable: keep
+            }
+        }
         _ => false,
     }
 }
