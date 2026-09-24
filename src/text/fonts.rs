@@ -121,10 +121,13 @@ fn scan_fresh(key: &ScanKey) -> Scan {
     for d in &key.dirs {
         db.load_fonts_dir(d);
     }
+    // fontdb records a symlinked entry under its resolved target path (dev installs symlink the
+    // bundled fonts), so "bundled" cannot be read off a face's path: it is what this pass adds.
+    let before: HashSet<fontdb::ID> = db.faces().map(|f| f.id).collect();
     if let Some(b) = &key.bundled {
         db.load_fonts_dir(b);
     }
-    let entries = FontSystem::scan_entries(&db, key.bundled.as_deref());
+    let entries = FontSystem::scan_entries(&db, |id| !before.contains(&id));
     (db, entries)
 }
 
@@ -250,7 +253,7 @@ impl FontSystem {
         for d in dirs {
             db.load_fonts_dir(d);
         }
-        let entries = Self::scan_entries(&db, None);
+        let entries = Self::scan_entries(&db, |_| false);
         Self::from_entries(db, entries, t0)
     }
 
@@ -264,10 +267,10 @@ impl FontSystem {
 
     /// The face pass: one `FaceInfo` per parsable face, sorted by (family, weight, style, width,
     /// bundled, path, index). This is the part of `from_db` up to and including
-    /// `entries.sort_by(...)`.
+    /// `entries.sort_by(...)`. `is_bundled` says which faces the bundled directory's scan added.
     fn scan_entries(
         db: &fontdb::Database,
-        bundled: Option<&std::path::Path>,
+        is_bundled: impl Fn(fontdb::ID) -> bool,
     ) -> Vec<(fontdb::ID, FaceInfo)> {
         let mut entries: Vec<(fontdb::ID, FaceInfo)> = Vec::new();
         for f in db.faces() {
@@ -309,7 +312,7 @@ impl FontSystem {
                     descent_max: m.4,
                     x_height: m.5,
                     cap_height: m.6,
-                    bundled: matches!((&path, bundled), (Some(p), Some(b)) if p.starts_with(b)),
+                    bundled: is_bundled(f.id),
                 },
             ));
         }

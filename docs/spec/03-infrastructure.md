@@ -295,8 +295,11 @@ Flattener (+ `--testmode`).
    (US) for every family name; only the names are used.
 2. **Bundled DejaVu Sans (Book, Bold)** ships in `<extension dir>/fonts` and is scanned after the
    system fonts; a face of identical family, weight, style and width that is not bundled sorts ahead
-   of the bundled copy, so an installed DejaVu Sans always wins. `SCIINK_NO_SYSTEM_FONTS=1` disables
-   the bundle too; `SCIINK_NO_BUNDLED_FONTS=1` disables only it. Upstream bundles nothing.
+   of the bundled copy, so an installed DejaVu Sans always wins. A face is bundled when the bundled
+   directory's scan pass added it, not when its path lies under that directory (fontdb records a
+   symlinked entry under its resolved target, and `dist/dev-install.sh` symlinks the fonts).
+   `SCIINK_NO_SYSTEM_FONTS=1` disables the bundle too; `SCIINK_NO_BUNDLED_FONTS=1` disables only
+   it. Upstream bundles nothing.
 3. **Per-phase timing** is written to `SCIINK_LOG` (`tool=… phase=… dt=…`); upstream has no
    equivalent. Nothing reaches stderr.
 4. **`needs-live-preview="false"` on every tool** — this matches upstream; Plans 5–7 had enabled it
