@@ -887,7 +887,7 @@ fn empty_paths_zero_size_shapes_empty_text_and_empty_groups_are_removed() {
 #[test]
 fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_referenced_shapes_are_kept() {
     let svg = format!(
-        r#"<svg {NS} {XLINK} {INK}>
+        r##"<svg {NS} {XLINK} {INK}>
 <defs><marker id="m"><path d="M0 0h1"/></marker><filter id="f"><feFlood flood-color="red"/></filter><clipPath id="c"><rect id="clipr" width="1" height="1" style="fill:none;stroke:none"/></clipPath></defs>
 <g id="hiddenlayer" inkscape:groupmode="layer" style="display:none"/>
 <g id="emptylayer" inkscape:groupmode="layer"/>
@@ -898,7 +898,7 @@ fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_re
 <rect id="filtered" width="0" height="0" style="filter:url(#f)"/>
 <use xlink:href="#target"/><rect id="target" width="0" height="0"/>
 <g id="clipped" clip-path="url(#c)"><rect width="1" height="1"/></g>
-</svg>"#
+</svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
@@ -1161,7 +1161,7 @@ fn wrapper_groups_are_kept_under_a_tag_rule_a_combinator_a_universal_opacity_rul
 #[test]
 fn layers_labelled_groups_use_targets_switch_children_and_title_wrappers_are_never_collapsed() {
     let svg = format!(
-        r#"<svg {NS} {XLINK} {INK}>
+        r##"<svg {NS} {XLINK} {INK}>
 <g id="layer" inkscape:groupmode="layer"><rect width="1" height="1"/></g>
 <g id="named" inkscape:label="Panel A"><rect width="1" height="1"/></g>
 <g id="cloned"><rect width="1" height="1"/></g><use xlink:href="#cloned"/>
@@ -1169,7 +1169,7 @@ fn layers_labelled_groups_use_targets_switch_children_and_title_wrappers_are_nev
 <g id="titled"><title>only a title</title></g>
 <g id="commented"><!-- glyph group --><rect width="1" height="1"/></g>
 <clipPath id="cp"><g id="inclip"><rect width="1" height="1"/></g></clipPath><rect clip-path="url(#cp)" width="1" height="1"/>
-</svg>"#
+</svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
@@ -1344,10 +1344,10 @@ re-validated when reached (`outer` hands `inner` up, then `inner` hands the rect
 #[test]
 fn unused_definitions_are_pruned_to_a_fixpoint_including_nested_defs_and_gradient_chains() {
     let svg = format!(
-        r#"<svg {NS} {XLINK}><defs id="root"><clipPath id="used"><rect width="1" height="1"/></clipPath><clipPath id="dead"><rect width="1" height="1"/></clipPath><linearGradient id="base"/><linearGradient id="chain" xlink:href="#base"/><linearGradient id="live" xlink:href="#base"/><linearGradient id="g1" xlink:href="#g2"/><linearGradient id="g2"/><path id="glyph" d="M0 0h1"/><rect id="loose" width="1" height="1"/></defs>
+        r##"<svg {NS} {XLINK}><defs id="root"><clipPath id="used"><rect width="1" height="1"/></clipPath><clipPath id="dead"><rect width="1" height="1"/></clipPath><linearGradient id="base"/><linearGradient id="chain" xlink:href="#base"/><linearGradient id="live" xlink:href="#base"/><linearGradient id="g1" xlink:href="#g2"/><linearGradient id="g2"/><path id="glyph" d="M0 0h1"/><rect id="loose" width="1" height="1"/></defs>
 <g id="fig"><defs id="nested"><clipPath id="deadn"><rect width="1" height="1"/></clipPath></defs><rect id="r" clip-path="url(#used)" width="1" height="1" style="fill:url(#live)"/></g>
 <mask id="strayfree"><rect width="1" height="1"/></mask>
-</svg>"#
+</svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
@@ -1367,10 +1367,10 @@ fn unused_definitions_are_pruned_to_a_fixpoint_including_nested_defs_and_gradien
 #[test]
 fn referenced_definitions_style_glyph_script_children_text_paths_and_the_root_defs_survive_pruning() {
     let svg = format!(
-        r#"<svg {NS} {XLINK}><defs id="root"><style id="sheet">.x{{fill:red}}</style><script id="js">//</script><title id="tt">t</title><font id="fnt"><font-face id="ff"/><glyph id="gl"/></font><path id="curve" d="M0 0h1"/><marker id="mk"><path d="M0 0h1"/></marker><pattern id="pat"><rect width="1" height="1"/></pattern></defs>
+        r##"<svg {NS} {XLINK}><defs id="root"><style id="sheet">.x{{fill:red}}</style><script id="js">//</script><title id="tt">t</title><font id="fnt"><font-face id="ff"/><glyph id="gl"/></font><path id="curve" d="M0 0h1"/><marker id="mk"><path d="M0 0h1"/></marker><pattern id="pat"><rect width="1" height="1"/></pattern></defs>
 <text><textPath xlink:href="#curve">on a curve</textPath></text>
 <path d="M0 0h1" style="marker-end:url(#mk)"/><rect width="1" height="1" fill="url(#pat)"/>
-<g id="emptyroot"><defs id="emptydefs"/></g></svg>"#
+<g id="emptyroot"><defs id="emptydefs"/></g></svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
@@ -1538,8 +1538,8 @@ Expected: PASS.
 #[test]
 fn identical_clip_paths_merge_and_every_reference_form_is_repointed() {
     let svg = format!(
-        r#"<svg {NS} {XLINK}><defs><clipPath id="c1"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c2"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c3"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c10"><rect x="1" y="0" width="10" height="10"/></clipPath><linearGradient id="g1"><stop offset="0" stop-color="red"/></linearGradient><linearGradient id="g2" xlink:href="#g1"/><linearGradient id="g3" xlink:href="#g1"/></defs>
-<rect id="z" clip-path="url(#c1)" width="1" height="1"/><rect id="a" clip-path="url(#c2)" width="1" height="1"/><rect id="b" style="clip-path:url( '#c3' );fill:url(#g3)" width="1" height="1"/><rect id="k" clip-path="url(#c10)" width="1" height="1"/><rect id="f" fill="url(#g2)" width="1" height="1"/></svg>"#
+        r##"<svg {NS} {XLINK}><defs><clipPath id="c1"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c2"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c3"><rect x="0" y="0" width="10" height="10"/></clipPath><clipPath id="c10"><rect x="1" y="0" width="10" height="10"/></clipPath><linearGradient id="g1"><stop offset="0" stop-color="red"/></linearGradient><linearGradient id="g2" xlink:href="#g1"/><linearGradient id="g3" xlink:href="#g1"/></defs>
+<rect id="z" clip-path="url(#c1)" width="1" height="1"/><rect id="a" clip-path="url(#c2)" width="1" height="1"/><rect id="b" style="clip-path:url( '#c3' );fill:url(#g3)" width="1" height="1"/><rect id="k" clip-path="url(#c10)" width="1" height="1"/><rect id="f" fill="url(#g2)" width="1" height="1"/></svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
@@ -1566,8 +1566,8 @@ fn identical_clip_paths_merge_and_every_reference_form_is_repointed() {
 #[test]
 fn definitions_with_referenced_inner_ids_style_mentions_or_duplicate_ids_are_not_merged() {
     let svg = format!(
-        r#"<svg {NS} {XLINK}><style>#c2 rect{{fill:red}}</style><defs><clipPath id="c1"><rect width="1" height="1"/></clipPath><clipPath id="c2"><rect width="1" height="1"/></clipPath><clipPath id="c3"><rect id="inner" width="1" height="1"/></clipPath><clipPath id="c4"><rect width="1" height="1"/></clipPath><clipPath id="c4"><rect width="1" height="1"/></clipPath></defs>
-<rect clip-path="url(#c1)" width="1" height="1"/><rect clip-path="url(#c2)" width="1" height="1"/><rect clip-path="url(#c3)" width="1" height="1"/><rect clip-path="url(#c4)" width="1" height="1"/><use xlink:href="#inner"/></svg>"#
+        r##"<svg {NS} {XLINK}><style>#c2 rect{{fill:red}}</style><defs><clipPath id="c1"><rect width="1" height="1"/></clipPath><clipPath id="c2"><rect width="1" height="1"/></clipPath><clipPath id="c3"><rect id="inner" width="1" height="1"/></clipPath><clipPath id="c4"><rect width="1" height="1"/></clipPath><clipPath id="c4"><rect width="1" height="1"/></clipPath></defs>
+<rect clip-path="url(#c1)" width="1" height="1"/><rect clip-path="url(#c2)" width="1" height="1"/><rect clip-path="url(#c3)" width="1" height="1"/><rect clip-path="url(#c4)" width="1" height="1"/><use xlink:href="#inner"/></svg>"##
     );
     let (s, msgs) = slim(&svg, &[]);
     let d = roxmltree::Document::parse(&s).unwrap();
