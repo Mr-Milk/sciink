@@ -956,7 +956,22 @@ pub fn round_numbers(text: &str, sig: u8, path_grammar: bool) -> Option<(String,
             if digits == 0 {
                 return None;
             }
-            out.push_str(&round_token(&text[start..i], sig, dot || exp, &mut changed));
+            let tok = &text[start..i];
+            let before = changed;
+            let rounded = round_token(tok, sig, dot || exp, &mut changed);
+            // A rounded form that lost its '.'/exponent (an integer-looking string) must not touch
+            // a following '.': "1.0.5" is two numbers (1.0, .5); rounding "1.0" to "1" would leave
+            // "1.5" — one number where the input had two.
+            if changed > before
+                && !rounded.contains('.')
+                && !rounded.contains(['e', 'E'])
+                && b.get(i) == Some(&b'.')
+            {
+                changed = before;
+                out.push_str(tok);
+            } else {
+                out.push_str(&rounded);
+            }
             argi += 1;
         } else if c == b',' || c.is_ascii_whitespace() {
             out.push(c as char);

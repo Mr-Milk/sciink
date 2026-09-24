@@ -767,6 +767,24 @@ fn precision_rounds_significant_digits_and_keeps_integers_flags_exponents_and_le
         ("a 5 5 0 1 0 10 0".to_string(), 0),
         "spaced arc flags"
     );
+    assert_eq!(
+        round_numbers("M1.0.5L19 19", 6, true).unwrap(),
+        ("M1.0.5L19 19".to_string(), 0),
+        "rounding 1.0 to 1 would make the following .5 read as part of the same number"
+    );
+    assert_eq!(
+        round_numbers("1.0.5 19 1", 6, false).unwrap(),
+        ("1.0.5 19 1".to_string(), 0)
+    );
+    assert_eq!(
+        round_numbers("M10.000001.5", 4, true).unwrap(),
+        ("M10.000001.5".to_string(), 0)
+    );
+    assert_eq!(
+        round_numbers("M1.0 .5", 6, true).unwrap(),
+        ("M1 .5".to_string(), 1),
+        "a space (not a dot) after the rounded token is unaffected"
+    );
 }
 
 #[test]
