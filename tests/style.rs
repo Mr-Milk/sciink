@@ -445,3 +445,42 @@ fn sheet_value_returns_none_for_a_property_the_sheet_never_declares() {
     assert_eq!(d.sheet_value(r, "clip-path"), None);
     assert_eq!(d.sheet_value(r, "mask"), None);
 }
+
+#[test]
+fn unsupported_rules_counts_dropped_selectors_and_at_rules() {
+    let d = doc(&format!(
+        "<svg {NS}><style>path:first-child{{fill:red}} [id=\"x\"] rect{{fill:red}} a + b{{fill:red}} @media all{{g > path{{fill:red}}}} *{{fill:red}}</style></svg>"
+    ));
+    let s = d.stylesheet();
+    assert_eq!(
+        s.unsupported_rules(),
+        4,
+        "a pseudo-class, an attribute selector, a sibling combinator and one @-block"
+    );
+    assert_eq!(s.rule_count(), 1, "only the trailing * rule parses");
+}
+
+#[test]
+fn only_universal_rules_and_declares_any_read_the_parsed_sheet() {
+    let d = doc(&format!(
+        r#"<svg {NS}><style>*{{stroke-linejoin: round}} * {{ Opacity: .5 }}</style></svg>"#
+    ));
+    let s = d.stylesheet();
+    assert_eq!(s.rule_count(), 2);
+    assert!(s.only_universal_rules());
+    assert!(
+        s.declares_any(&["opacity", "filter"]),
+        "names are lower-cased"
+    );
+    assert!(!s.declares_any(&["filter"]));
+    let d = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red}} g {{fill:blue}}</style></svg>"#
+    ));
+    assert!(
+        !d.stylesheet().only_universal_rules(),
+        "a tag rule can match one element and not another"
+    );
+    let d = doc(&format!(r#"<svg {NS}><rect/></svg>"#));
+    assert_eq!(d.stylesheet().rule_count(), 0);
+    assert!(d.stylesheet().only_universal_rules(), "vacuously true");
+}

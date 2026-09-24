@@ -17,6 +17,7 @@ pub enum ToolName {
     TextGhoster,
     CombineByColor,
     FavoriteMarkers,
+    Slimmer,
     About,
     FontProbe,
     TextHighlight,
@@ -103,7 +104,7 @@ pub const HELP: &str = "sciink — Inkscape extensions for scientific figures
 
 Inkscape launches this binary through the .inx files in the same folder. For manual use:
 
-    sciink --tool=<flattener|scaler|homogenizer|text-ghoster|combine-by-color|favorite-markers|about>
+    sciink --tool=<flattener|scaler|homogenizer|text-ghoster|combine-by-color|favorite-markers|slimmer|about>
            [--<param>=<value>...] [--id=<object-id>...] [--output <file>] [input.svg]
 
 The modified SVG is written to stdout (or --output); messages go to stderr.

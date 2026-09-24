@@ -389,11 +389,30 @@ pub struct Stylesheet {
     universal_folded: bool,
     /// Every property name declared anywhere in the sheet (`sheet_value` short-circuit).
     props: HashSet<String>,
+    /// Non-empty selectors `parse_selector` could not represent (attribute selectors,
+    /// pseudo-classes, sibling combinators), plus every `@` statement or block skipped whole.
+    unsupported: usize,
 }
 
 impl Stylesheet {
     pub fn rule_count(&self) -> usize {
         self.rules.len()
+    }
+
+    /// How much of the sheet sciink could not analyse (see `unsupported`): a caller that needs to
+    /// know whether it has seen the *whole* stylesheet checks this, not just `rule_count`.
+    pub fn unsupported_rules(&self) -> usize {
+        self.unsupported
+    }
+
+    /// True when every rule is a lone `*`: nothing can match one element and not another.
+    pub fn only_universal_rules(&self) -> bool {
+        self.rules.iter().all(|r| r.universal)
+    }
+
+    /// True when the sheet declares any of `props` (lower-case property names).
+    pub fn declares_any(&self, props: &[&str]) -> bool {
+        props.iter().any(|p| self.props.contains(*p))
     }
 }
 
@@ -420,6 +439,7 @@ pub fn parse_stylesheet(css: &str) -> Stylesheet {
             } else {
                 j + 1
             };
+            sheet.unsupported += 1;
             continue;
         }
         let Some(open) = css[i..].find('{') else {
@@ -434,14 +454,19 @@ pub fn parse_stylesheet(css: &str) -> Stylesheet {
         };
         let decls = parse_declarations(&css[i + open + 1..body_end]);
         for sel_text in selector_text.split(',') {
-            if let Some(selector) = parse_selector(sel_text.trim()) {
-                sheet.rules.push(Rule {
-                    selector,
-                    decls: decls.clone(),
-                    order,
-                    universal: false,
-                });
-                order += 1;
+            let sel_text = sel_text.trim();
+            match parse_selector(sel_text) {
+                Some(selector) => {
+                    sheet.rules.push(Rule {
+                        selector,
+                        decls: decls.clone(),
+                        order,
+                        universal: false,
+                    });
+                    order += 1;
+                }
+                None if !sel_text.is_empty() => sheet.unsupported += 1,
+                None => {}
             }
         }
         i = close;
@@ -677,7 +702,9 @@ pub struct Caches {
 }
 
 impl Doc {
-    fn stylesheet(&self) -> Rc<Stylesheet> {
+    /// The document stylesheet: every `<style>` element's text concatenated in document order
+    /// (any depth), cached on `sheet_generation`.
+    pub fn stylesheet(&self) -> Rc<Stylesheet> {
         let g = self.sheet_generation.get();
         if let Some((sg, s)) = &self.caches.borrow().sheet {
             if *sg == g {

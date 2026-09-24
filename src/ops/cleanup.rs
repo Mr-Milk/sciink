@@ -213,3 +213,100 @@ pub fn strip_attr(doc: &mut Doc, name: &str) -> usize {
     }
     nodes.len()
 }
+
+/// `inkscape:groupmode="layer"` on a `<g>`: an Inkscape layer, kept even when empty.
+pub fn is_layer(doc: &Doc, n: NodeId) -> bool {
+    doc.tag(n) == "g" && doc.attr(n, "inkscape:groupmode") == Some("layer")
+}
+
+/// `detach(n)` plus the whitespace-only text node right before it — the indentation that would
+/// otherwise stay behind as a blank line — unless the parent is text-bearing (`TEXT_KEEP`), where
+/// that text is content.
+pub fn detach_tidy(doc: &mut Doc, n: NodeId) {
+    if let Some(prev) = doc.prev_sibling(n) {
+        let blank = doc.is_text(prev) && doc.text(prev).is_some_and(|t| t.trim().is_empty());
+        let content = doc
+            .parent(n)
+            .is_some_and(|p| doc.is_element(p) && TEXT_KEEP.contains(&doc.tag(p)));
+        if blank && !content {
+            doc.detach(prev);
+        }
+    }
+    doc.detach(n);
+}
+
+/// Every id the document points at, over-inclusively — a false positive keeps an element, a
+/// false negative would delete one. Counted: `url(#id)` in any attribute value (inline `style`
+/// included) and in `<style>` text; `href`/`xlink:href` equal to `#id`; any other attribute whose
+/// value is one `#id` token or a `;`/`,`/space/`|` list of them (`inkscape:path-effect`,
+/// `inkscape:perspectiveID`, `inkscape:connection-start`); every `#ident` in `<style>` text
+/// (selectors count, so a styled definition is never pruned or merged). A `fill="#rrggbb"`
+/// attribute lands in the set as "rrggbb" — harmless. `id`, `d` and `points` are skipped; a
+/// `data:` href costs O(1).
+pub fn referenced_ids(doc: &Doc) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for n in doc.descendants(doc.svg()) {
+        if !doc.is_element(n) {
+            continue;
+        }
+        for a in doc.attrs(n) {
+            match a.name.as_str() {
+                "id" | "d" | "points" => {}
+                "href" | "xlink:href" => {
+                    if let Some(id) = a.value.trim().strip_prefix('#') {
+                        out.insert(id.to_string());
+                    }
+                }
+                _ if a.value.contains("url(") => url_ids(&a.value, &mut out),
+                _ if a.value.trim_start().starts_with('#') => {
+                    for tok in a.value.split([';', ',', ' ', '|']) {
+                        if let Some(id) = tok.trim().strip_prefix('#') {
+                            if !id.is_empty() {
+                                out.insert(id.to_string());
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if doc.tag(n) == "style" {
+            css_idents(&doc.text_content(n), &mut out);
+        }
+    }
+    out
+}
+
+/// Every `#id` inside `url( … )`, tolerating whitespace and quotes (`url( '#a' )`).
+pub fn url_ids(v: &str, out: &mut HashSet<String>) {
+    for piece in v.split("url(").skip(1) {
+        let Some(end) = piece.find(')') else { break };
+        let inner = piece[..end].trim().trim_matches(['\'', '"']).trim();
+        if let Some(id) = inner.strip_prefix('#') {
+            out.insert(id.to_string());
+        }
+    }
+}
+
+/// Every `#ident` in CSS text — `url(#id)`, `#id {…}` selectors and `#rrggbb` colours alike —
+/// plus, for `#id.class` / `#id:hover`, the ident cut at each `.` and `:` (an SVG id may itself
+/// contain `.`, so both readings are kept).
+pub fn css_idents(css: &str, out: &mut HashSet<String>) {
+    for piece in css.split('#').skip(1) {
+        let run: String = piece
+            .chars()
+            .take_while(|c| {
+                c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ':') || !c.is_ascii()
+            })
+            .collect();
+        if run.is_empty() {
+            continue;
+        }
+        for (i, c) in run.char_indices() {
+            if i > 0 && (c == '.' || c == ':') {
+                out.insert(run[..i].to_string());
+            }
+        }
+        out.insert(run);
+    }
+}

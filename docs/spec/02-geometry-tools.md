@@ -310,6 +310,54 @@ else marker; parse `url(#id)` properly).
   name), `list` checkbox prints stored names to stderr. No self-modifying .inx, no restart. Lost: custom names
   not in dropdown; no pickle migration.
 
+### Slimmer (sciink-only; the unused-definition step after `dhelpers.py:990 clean_up_document`)
+Whole document, selection ignored. Options `dedupstyles`, `removeempty`, `collapsegroups`,
+`pruneunused`, `mergedefs` (all true), `removeinvisible` (false; acts only with `removeempty`), `precision`
+(0 = keep; 4–8 significant digits), `report` (true).
+Order: styles → empty → wrappers → prune → merge → precision. Every default step is rendering-exact:
+- **styles**: `<style>` elements with identical text (attributes ⊆ {id, type=text/css}, no `@`) keep the
+  LAST copy — same-precedence conflicts are decided by source order, so only the last copy's position
+  matters. Every remaining sheet then moves to the front of the root, in document order (CSS applies
+  document-wide, so a figure that held one can be deleted without restyling the rest), except a sheet
+  nested inside a clipPath/mask/gradient/pattern/marker/filter/symbol, which stays where it is.
+- **opaque stylesheets**: when the sheet holds a selector the parser drops (attribute selectors,
+  pseudo-classes, sibling combinators — `Stylesheet::unsupported_rules()`) or any `@` rule, the empty,
+  wrappers and merge steps are all skipped, with one note; styles, prune and precision still run.
+- **empty**: drawn elements (no `UNRENDERED` ancestor, not under a `<symbol>` or a referenced subtree — a
+  `<use>` re-renders it with the clone's paint —, not referenced, no `inkscape:label`, not a `<switch>`
+  child, not `display:none`, no filter): shapes with blank `d` or only movetos, `points` without digits,
+  non-positive/missing `width`/`height`/`r`; an ellipse only when both radii resolve to non-positive (a
+  missing or `auto` radius takes the other one, SVG 2); with `removeinvisible` also `fill:none` with
+  `stroke:none` or zero width (no markers) — off by default because such a shape still carries a bounding
+  box (alignment, snapping, page fitting; matplotlib's transparent backgrounds); `<text>` without
+  characters (not `xml:space="preserve"`, no `<tref>`); non-layer `<g>` without element or comment
+  children. `line` is never empty.
+- **wrappers**: a `<g>` with only an `id`, one rendered child (`COLLAPSE_CHILD`), whitespace otherwise,
+  ancestors in {svg, g, a}, unreferenced → replaced by the child, which inherits the id. Skipped as a whole
+  when the stylesheet has a rule that is not a lone `*` or declares opacity/filter/clip-path/mask/
+  mix-blend-mode/isolation/display/transform/translate/rotate/scale/enable-background.
+- **prune**: clipPath, mask, gradients, pattern, symbol, marker, filter anywhere and every direct child of
+  any `<defs>` except style/glyph/script/metadata/title/desc/font/font-face/animate/animateTransform/
+  animateMotion/animateColor/set/color-profile, removed when no id inside is referenced (`referenced_ids`:
+  every `url(#…)`, `href`, `#id`-valued attribute or `;`/`,`/space/`|` list of them, and every `#ident` in
+  `<style>` text) and the subtree holds no `style`/`script`/`font`/`font-face` (document-wide wherever they
+  sit); an element with `inkscape:swatch` or `osb:paint` (referenced by name) is never a candidate; to a
+  fixpoint; emptied nested `<defs>` go, emptied non-layer groups only with `removeempty`; the root `<defs>`
+  stays.
+- **merge**: clipPath, mask, gradients, pattern, marker, filter, symbol with the same canonical key
+  (parent's specified style and `xml:space`; tag, attributes but id, cascaded style, children with text
+  compared verbatim) keep the first, which moves into the root `<defs>` when its parent's specified style
+  equals the root's (stays when already there; when the styles differ the key is not merged at all, so no
+  figure comes to depend on another's content); references repointed (`url(…)` in any attribute, `href`,
+  every `#id` token of a non-paint attribute); refused for referenced inner ids, ids in `<style>` text,
+  missing or duplicated ids, a definition nested inside another definition, and a definition holding a
+  `style`/`script`/`font`/`font-face`; to a fixpoint.
+- **precision** (opt-in, lossy): `d`, `points`, shape `x y width height rx ry cx cy r x1 y1 x2 y2` rounded to
+  N significant digits when shorter; integers, arc flags, `transform`, `viewBox`, styles, text positions
+  untouched; a rounded integer that would run into a following `.` keeps its original token.
+Report: one line of totals (bytes, elements), one per step (`duplicate stylesheets removed: N (M moved to
+the document root)`, …), notes; `Slimmer: nothing to do` otherwise.
+
 ## B.4 Compatibility attributes (exact)
 - `inkscape-scientific-flattenexclude="True"`; any non-empty value = excluded; removed to un-mark.
 - `inkscape-scientific-scaletype` ∈ `scale_free | aspect_locked | normal | plot_area`.
@@ -516,3 +564,23 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
   (1–2 ms on 62 000 nodes) — a rank index that every attach/detach would invalidate was rejected.
 - `ops::bbox` gives no box to a `<use>` whose `href` does not resolve (upstream `dhelpers.py:1505–1521`
   does the same); this was misfiled as a bug in 0.1.0's known gaps.
+
+## Deliberate deviations (Plan 10)
+
+- Slimmer has no upstream counterpart: duplicate-stylesheet removal, empty/invisible-element removal,
+  wrapper-group collapse, identical-definition merging and coordinate precision are sciink-only.
+- Unused-definition pruning follows `dhelpers.clean_up_document` in intent but covers nested `<defs>` and
+  removes emptied nested `<defs>` (upstream: the root defs only); it does not prune `textPath`,
+  `animate*`, `font`, `font-face` (rendered or name-referenced content, which upstream deletes) and keeps
+  `script`, `metadata`, `title`, `desc`; the reference scan covers every attribute, inline styles and
+  `<style>` text (upstream: a fixed attribute list, hrefs and inline styles).
+- Whole-document scope, selection ignored; no `delete_up` (emptied ancestors are handled by the
+  empty-group predicate, which keeps layers); no fonts are loaded.
+- Figures stay self-contained: a merged definition's survivor moves into the root `<defs>` when its
+  parent's specified style equals the root's, and a set of duplicates whose parents' styles differ is left
+  unmerged; every remaining `<style>` moves to the front of the root. Deleting one imported figure can
+  therefore not remove a definition or a stylesheet another figure depends on (Inkscape copies referenced
+  definitions on copy and paste, so a figure pasted elsewhere still carries its clips).
+- Elements carrying `inkscape:swatch` or `osb:paint`, and `color-profile`, `animate*` and `set` children of
+  `<defs>`, are never pruned: Inkscape references swatches and colour profiles by name, not by id, and an
+  animation targets its parent — upstream's collector deletes an unused swatch gradient.

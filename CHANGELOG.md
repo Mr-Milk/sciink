@@ -5,7 +5,8 @@
 Large documents no longer freeze Inkscape for our part of the run. On a 52 MB, 62 000-element
 manuscript the Flattener went from 1.1 s to 212 ms on one figure and from 6.1 s to 1.0 s on the
 whole layer (Homogenizer: 386 ms → 135 ms); Inkscape's own save/reload of such a file is unchanged
-and documented in `docs/DEVELOPING.md`.
+and documented in `docs/DEVELOPING.md`. The new Slimmer tool removes what makes Inkscape slow on
+such documents.
 
 - Flattener: the character table covers only the measured elements (upstream parity; it measured
   every text in the document); duplicate and white-rectangle removal use index sweeps instead of
@@ -26,6 +27,14 @@ and documented in `docs/DEVELOPING.md`.
   Actions image change can no longer break a build or silently drop the Linux release asset.
 - Corrected the `<use>`-inside-`clipPath` known gap: the missing box was a dangling `href` (upstream
   behaves the same), not a bug — now pinned by tests instead of listed as a limitation.
+- Slimmer: a new tool that makes a whole document smaller and faster for Inkscape. Rendering-exact by
+  default: keeps one of identical `<style>` elements (matplotlib adds one per imported figure, and
+  Inkscape's load and save cost is per rule × element), removes empty elements (invisible shapes on
+  request), collapses
+  single-child wrapper groups, prunes unused definitions and merges identical ones with references
+  repointed. Optional coordinate rounding in significant digits. A report dialog lists what changed. On a
+  52 MB manuscript: 176 sheets, 3 489 definitions pruned, 4 246 merged, 2 834 groups collapsed; 62 357 →
+  44 073 elements, 52.6 MB → 49.1 MB; Inkscape's round trip 27.2 s → 13.4 s.
 
 ## 0.1.0 — 2026-09-23
 

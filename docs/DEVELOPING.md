@@ -66,7 +66,7 @@ target/release/sciink --help
 ```
 
 Tools: `flattener`, `scaler`, `homogenizer`, `text-ghoster`, `combine-by-color`, `favorite-markers`,
-`about`, and the debug tools `font-probe`, `text-highlight`, `text-fix`. Booleans are `true`/`false`
+`slimmer`, `about`, and the debug tools `font-probe`, `text-highlight`, `text-fix`. Booleans are `true`/`false`
 (`True`, `1` and `0` are accepted); omitted parameters take their defaults; unknown flags are errors,
 because the `.inx` files and the binary ship together.
 
@@ -106,11 +106,14 @@ Flattener's text pipeline alone on the selection.
 Inkscape writes the whole document to a temporary file, runs the extension, reads the result back
 and re-renders it. On a 50 MB SVG that round trip takes seconds before and after our binary runs,
 and we do not control it; time Extensions ▸ Scientific ▸ Diagnostics on the file to see your own
-floor (Diagnostics itself does ~0.3 s of work). Two things keep it small: link raster images instead
-of embedding them (one manuscript we measured carried 27 MB of base64 in 93 `<image>` elements), and
-run the tools per figure rather than on a whole layer. Our own share is logged per phase with
-`SCIINK_LOG`; on a 62 000-element document the Flattener takes ≈ 0.2 s on one figure and
-≈ 1.0 s on the whole layer.
+floor (Diagnostics itself does under 0.1 s of work). Measured on a 52 MB, 62 000-element manuscript
+with 177 imported matplotlib figures (headless, 2026-09-24): the full round trip was 26.9 s, of
+which our binary was 0.08 s. Removing the 27 MB of embedded images changed nothing; keeping one of
+the 177 identical `<style>*{…}</style>` sheets (one per import) cut Inkscape's parse to 4.9 s from
+8.9 s and the round trip to 12.3 s — Inkscape's cost is per stylesheet rule × element. So: run
+Slimmer once on such a document (stylesheets, unused and duplicate definitions, wrapper groups),
+then run the tools per figure rather than on a whole layer. Our own share is logged per phase with
+`SCIINK_LOG`; the Flattener takes ≈ 0.2 s on one figure and ≈ 1.0 s on the whole layer.
 
 ## Repository layout
 

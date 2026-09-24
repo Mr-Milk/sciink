@@ -51,6 +51,7 @@ fn phase_timings() {
                 "--fontmodes=2".to_string(),
                 "--id=layer1".to_string(),
             ],
+            vec!["--tool=slimmer".to_string(), "--tab=Options".to_string()],
         ] {
             let args: Vec<&str> = args.iter().map(|s| s.as_ref()).collect();
             let log = log_for(&path, &args);

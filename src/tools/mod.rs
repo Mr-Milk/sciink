@@ -8,6 +8,7 @@ pub mod flattener;
 pub mod font_probe;
 pub mod homogenizer;
 pub mod scaler;
+pub mod slimmer;
 pub mod text_fix;
 pub mod text_ghoster;
 pub mod text_highlight;

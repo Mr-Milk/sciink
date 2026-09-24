@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<inkscape-extension xmlns="http://www.inkscape.org/namespace/inkscape/extension">
+    <name>Slimmer (sciink)</name>
+    <id>org.sciink.slimmer</id>
+    <param name="tool" type="string" gui-hidden="true">slimmer</param>
+    <param name="tab" type="notebook">
+        <page name="Options" gui-text="Options">
+            <label>Makes the whole document smaller and faster to load, save and edit in Inkscape. The selection is ignored. Every option except coordinate precision leaves the rendering exactly unchanged.</label>
+            <param name="dedupstyles" type="bool" gui-text="Merge duplicate stylesheets" gui-description="Keeps one copy of identical &lt;style&gt; elements (matplotlib adds one per imported figure). Every rule costs Inkscape time on each load and save.">true</param>
+            <param name="removeempty" type="bool" gui-text="Remove empty and invisible elements" gui-description="Empty paths and text, zero-size shapes, empty groups. Hidden objects, layers and labelled objects are kept.">true</param>
+            <param name="removeinvisible" type="bool" gui-text="Remove invisible shapes (no fill, no stroke)" gui-description="Shapes that paint nothing but still count for bounding boxes, alignment, snapping and page fitting — matplotlib's transparent figure and axes backgrounds are such shapes. Needs 'Remove empty and invisible elements'. Off by default.">false</param>
+            <param name="collapsegroups" type="bool" gui-text="Collapse single-child wrapper groups" gui-description="A group holding one object and carrying nothing but an id is replaced by the object, which inherits the id. Layers, labelled, styled and referenced groups are kept.">true</param>
+            <param name="pruneunused" type="bool" gui-text="Remove unused definitions" gui-description="Clip paths, masks, gradients, patterns, markers, filters and symbols nothing refers to, including inside nested &lt;defs&gt;.">true</param>
+            <param name="mergedefs" type="bool" gui-text="Merge identical definitions" gui-description="Definitions with identical content (for example one clip path per axes) are kept once and every reference is repointed.">true</param>
+            <param name="precision" type="optiongroup" appearance="combo" gui-text="Coordinate precision" gui-description="Rounds path and shape coordinates. Not rendering-exact: 6 digits moves a point by at most 0.0005 per 1000 units.">
+                <option value="0">Unchanged (exact)</option>
+                <option value="8">8 significant digits</option>
+                <option value="7">7 significant digits</option>
+                <option value="6">6 significant digits</option>
+                <option value="5">5 significant digits</option>
+                <option value="4">4 significant digits</option>
+            </param>
+            <param name="report" type="bool" gui-text="Show a report" gui-description="What was removed and the size before and after.">true</param>
+        </page>
+    </param>
+    <effect needs-live-preview="false">
+        <object-type>all</object-type>
+        <effects-menu>
+            <submenu name="Scientific"/>
+        </effects-menu>
+    </effect>
+    <script>
+        <command location="inx">bin/sciink</command>
+    </script>
+</inkscape-extension>
