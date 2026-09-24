@@ -461,6 +461,28 @@ fn unsupported_rules_counts_dropped_selectors_and_at_rules() {
 }
 
 #[test]
+fn has_combinators_tells_ancestor_dependent_sheets_apart() {
+    let plain = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red}} clipPath{{clip-rule:evenodd}} #x{{fill:blue}}</style></svg>"#
+    ));
+    assert!(
+        !plain.stylesheet().has_combinators(),
+        "universal, tag and id selectors match regardless of the ancestors"
+    );
+    let nested = doc(&format!(
+        r#"<svg {NS}><style>*{{fill:red}} g clipPath{{clip-rule:evenodd}}</style></svg>"#
+    ));
+    assert!(
+        nested.stylesheet().has_combinators(),
+        "a descendant combinator"
+    );
+    let child = doc(&format!(
+        r#"<svg {NS}><style>g > path{{fill:red}}</style></svg>"#
+    ));
+    assert!(child.stylesheet().has_combinators(), "a child combinator");
+}
+
+#[test]
 fn only_universal_rules_and_declares_any_read_the_parsed_sheet() {
     let d = doc(&format!(
         r#"<svg {NS}><style>*{{stroke-linejoin: round}} * {{ Opacity: .5 }}</style></svg>"#

@@ -105,14 +105,15 @@ fn under_definition_container(doc: &Doc, s: NodeId) -> bool {
 /// its maximum order at the last copy, so deleting the earlier copies changes no winner — sheets
 /// `A B A` render as A, and keeping the first would give B. Sheets with attributes beyond `id` and
 /// `type="text/css"`, or containing an `@` rule (`@import`, `@media`: position- and
-/// count-sensitive), are left alone. Every remaining sheet not under a definition container
-/// (`under_definition_container`) then moves to the front of the root, in document order, each
-/// inserted right after the previous one (or as the root's first child, for the first): CSS applies
-/// document-wide regardless of where the `<style>` sits, so grouping every surviving sheet at the
-/// front — instead of leaving it inside whichever figure happened to hold the surviving copy —
-/// means deleting that figure later can no longer silently restyle the rest of the document, while
-/// keeping their relative order preserves the cascade's source-order tie-breaking exactly. A sheet
-/// already immediately in that position is left alone. Returns (removed, moved).
+/// count-sensitive), are left alone. Every remaining sheet then moves to the front of the root, in
+/// document order, each inserted right after the previous one (or as the root's first child, for
+/// the first): CSS applies document-wide regardless of where the `<style>` sits, so grouping every
+/// surviving sheet at the front — instead of leaving it inside whichever figure happened to hold
+/// the surviving copy — means deleting that figure later can no longer silently restyle the rest of
+/// the document, while keeping their relative order preserves the cascade's source-order
+/// tie-breaking exactly. A sheet already immediately in that position is left alone. Nothing moves
+/// while a sheet sits inside a definition container (`under_definition_container`): that one cannot
+/// leave, and moving the others past it would reorder the cascade. Returns (removed, moved).
 pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, usize) {
     let mut last: HashMap<String, NodeId> = HashMap::new();
     let mut eligible: Vec<(NodeId, String)> = Vec::new();
@@ -136,12 +137,18 @@ pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, usize) {
     }
     let svg = doc.svg();
     let remaining = style_elements(doc);
+    // A sheet pinned inside a definition container cannot move, and moving the others past it
+    // would reorder the cascade: `A, B(nested), A` dedups to `B, A` (A wins the tie) and would
+    // become `A, B` (B wins). So while one remains, nothing moves.
+    if remaining
+        .iter()
+        .any(|&s| under_definition_container(doc, s))
+    {
+        return (removed, 0);
+    }
     let mut moved = 0;
     let mut prev: Option<NodeId> = None;
     for s in remaining {
-        if under_definition_container(doc, s) {
-            continue; // left in place; does not anchor the next sheet either
-        }
         let in_place = match prev {
             None => doc.first_child(svg) == Some(s),
             Some(p) => doc.next_sibling(p) == Some(s),
@@ -475,8 +482,9 @@ fn prune_empty_groups(doc: &mut Doc, refs: &HashSet<String>) -> usize {
 /// applies to the whole document wherever it sits, so the definition holding it is never
 /// "unused"). An element carrying `inkscape:swatch` or `osb:paint` is never a candidate (Inkscape
 /// swatches are referenced by name, not by id). Repeats until stable, because a definition can hold
-/// the only reference to another (gradient `href` chains). Nested `<defs>` left empty go too (the
-/// root `<defs>` stays; Inkscape expects one); emptied non-layer `<g>` go too, but only when
+/// the only reference to another (gradient `href` chains). Nested `<defs>` left empty go too,
+/// unless their own id is referenced (the root `<defs>` stays; Inkscape expects one); emptied
+/// non-layer `<g>` go too, but only when
 /// `remove_groups` (`o.removeempty`). Exact: nothing rendered pointed at any of it. Returns
 /// (definitions removed, rounds run, emptied containers removed).
 pub fn prune_unused(doc: &mut Doc, remove_groups: bool) -> (usize, usize, usize) {
@@ -519,6 +527,8 @@ pub fn prune_unused(doc: &mut Doc, remove_groups: bool) -> (usize, usize, usize)
                 doc.is_element(n)
                     && doc.tag(n) == "defs"
                     && doc.parent(n) != Some(svg)
+                    // its own id may be the target of a <use> or an Inkscape attribute
+                    && !doc.attr(n, "id").is_some_and(|id| refs.contains(id))
                     && !doc
                         .children(n)
                         .any(|c| doc.is_element(c) || doc.is_comment(c))
@@ -656,7 +666,9 @@ fn rewrite_urls(v: &str, rename: &HashMap<String, String>) -> Option<String> {
     changed.then_some(out)
 }
 
-/// Attribute names where `#` starts a colour (`#rrggbb`), never an id reference.
+/// Attribute names where a `#` outside `url(…)` starts a colour (`#rrggbb`), never an id
+/// reference: the paint properties and the inline `style` (whose only non-`url` `#` values are
+/// colours).
 const COLOR_ATTRS: &[&str] = &[
     "fill",
     "stroke",
@@ -664,45 +676,51 @@ const COLOR_ATTRS: &[&str] = &[
     "flood-color",
     "lighting-color",
     "color",
+    "style",
 ];
 
-/// An id-name character: alphanumeric, `-`, `_`, `.` or `:`.
-fn is_id_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
-}
+/// The separators of an id list (`inkscape:path-effect`, `linkedpaths`, …), exactly the ones
+/// `cleanup::referenced_ids` splits on: a value is a reference only as a whole `#id` list token.
+const ID_LIST_SEPARATORS: [char; 4] = [';', ',', ' ', '|'];
 
-/// Every `#<ident>` token in `v` (a bare id, or one of a `;`/`,`/space/`|` list —
-/// `inkscape:path-effect`, a custom `linkedpaths`-style attribute), rewritten when the ident is a
-/// key of `rename`; `None` when nothing changed. Whitespace and any other text around the tokens is
-/// copied verbatim.
+/// Every whole `#<id>` token of `v` (a bare id, or one item of an `ID_LIST_SEPARATORS` list),
+/// trimmed the way `referenced_ids` trims it (`&#9;#dup` is a reference too), rewritten when the
+/// id is a key of `rename`; `None` when nothing changed. A `#` inside a token (`other.svg#dup`, an
+/// external fragment) is not a local reference and is left alone, as `referenced_ids` leaves it;
+/// separators and the whitespace around a token are copied verbatim.
 fn rewrite_id_tokens(v: &str, rename: &HashMap<String, String>) -> Option<String> {
     let mut out = String::with_capacity(v.len());
     let mut changed = false;
     let mut rest = v;
-    while let Some(i) = rest.find('#') {
-        out.push_str(&rest[..i]);
-        out.push('#');
-        let after = &rest[i + 1..];
-        let end = after.find(|c: char| !is_id_char(c)).unwrap_or(after.len());
-        let ident = &after[..end];
-        match rename.get(ident) {
+    while !rest.is_empty() {
+        let end = rest.find(ID_LIST_SEPARATORS).unwrap_or(rest.len());
+        let (tok, tail) = rest.split_at(end);
+        let core = tok.trim();
+        match core.strip_prefix('#').and_then(|id| rename.get(id)) {
             Some(new) => {
+                let start = tok.len() - tok.trim_start().len();
+                out.push_str(&tok[..start]);
+                out.push('#');
                 out.push_str(new);
+                out.push_str(&tok[start + core.len()..]);
                 changed = true;
             }
-            None => out.push_str(ident),
+            None => out.push_str(tok),
         }
-        rest = &after[end..];
+        let sep = tail.chars().next().map_or(0, char::len_utf8);
+        out.push_str(&tail[..sep]);
+        rest = &tail[sep..];
     }
-    out.push_str(rest);
     changed.then_some(out)
 }
 
-/// Rewrites every reference to a merged definition: `href`/`xlink:href` and any other attribute whose
-/// whole value is `#dup`, every `url(#dup)` in any attribute — inline `style` included, without a
-/// parse round trip — and, for a non-paint attribute (`COLOR_ATTRS`) whose value is not a `url(...)`
-/// but contains `#`, every `#dup` token inside a `;`/`,`/space/`|`-separated list. Returns the number
-/// of attributes rewritten.
+/// Rewrites every reference to a merged definition: every `url(#dup)` in any attribute — inline
+/// `style` included, without a parse round trip — and, for an attribute that is neither a paint
+/// property nor `style` (`COLOR_ATTRS`) and whose value has no `url(` but starts with `#` once
+/// trimmed (exactly the values `referenced_ids` reads as id lists, so `inkscape:label="Figure
+/// #dup"` is text, not a reference), every whole `#dup` token of the value read as an
+/// `ID_LIST_SEPARATORS` list (`href="#dup"` is the one-token case). Returns the number of
+/// attributes rewritten.
 fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
     let mut count = 0;
     let nodes: Vec<NodeId> = doc
@@ -719,7 +737,7 @@ fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
         for (name, value) in attrs {
             let new = if value.contains("url(") {
                 rewrite_urls(&value, rename)
-            } else if value.contains('#') && !COLOR_ATTRS.contains(&name.as_str()) {
+            } else if !COLOR_ATTRS.contains(&name.as_str()) && value.trim_start().starts_with('#') {
                 rewrite_id_tokens(&value, rename)
             } else {
                 None
@@ -753,8 +771,10 @@ fn has_merge_tag_ancestor(doc: &Doc, n: NodeId) -> bool {
 /// `GLOBAL_EFFECT_TAGS` tag (a nested `<style>` applies document-wide; merging its container would
 /// delete it), or that is itself nested inside another `MERGE_TAGS` element (`has_merge_tag_ancestor`).
 /// Before detaching the copies for a key: if the survivor's parent is the root `<defs>`, it stays;
-/// else if that parent's specified style equals the root `<defs>`'s, the survivor moves there
-/// (`doc.defs()`, created if absent, then `append_child`) so a figure that shares it stays
+/// else if that parent's specified style equals the root `<defs>`'s (an existing one's, or empty
+/// when none exists yet) and no stylesheet rule uses a combinator (`Stylesheet::has_combinators`:
+/// such a match depends on the ancestors and could change with the move), the survivor moves there
+/// (`doc.defs()`, created only then, then `append_child`) so a figure that shares it stays
 /// self-contained; else the whole key is refused (relocating would change what the survivor
 /// inherits — clipPath/mask/gradient/pattern/marker/filter/symbol content is interpreted in the
 /// *referencing* element's space and inherits only from its own ancestors). Repeats until stable: two
@@ -813,6 +833,19 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
                 .push((n, id));
         }
         let svg = doc.svg();
+        // A relocation is exact only when no rule's match depends on the survivor's ancestors: a
+        // `g clipPath{…}` rule matches both copies where they are and would stop matching a
+        // survivor moved into the root <defs>, changing its cascaded style after the key was built.
+        let combinators = doc.stylesheet().has_combinators();
+        // What a survivor would inherit at the root <defs>: that element's specified style — read
+        // from the real element, because a tag rule such as `defs{clip-rule:evenodd}` styles a
+        // freshly created one too. When none existed it is created here and removed again below
+        // if nothing moved into it, so a refused relocation leaves no empty <defs> behind.
+        let had_root_defs = doc
+            .children(svg)
+            .any(|c| doc.is_element(c) && doc.tag(c) == "defs");
+        let root_defs = doc.defs();
+        let root_defs_style = doc.specified_style(root_defs).to_css();
         let mut rename: HashMap<String, String> = HashMap::new(); // duplicate id → surviving id
         let mut dups: Vec<NodeId> = Vec::new();
         for key in &order {
@@ -825,26 +858,24 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
             let is_root_defs = parent.is_some_and(|p| {
                 doc.is_element(p) && doc.tag(p) == "defs" && doc.parent(p) == Some(svg)
             });
-            let relocate_ok = if is_root_defs {
-                true
-            } else if let Some(p) = parent {
-                let p_style = doc.specified_style(p).to_css();
-                let root_defs = doc.defs(); // created here, only when actually needed
-                doc.specified_style(root_defs).to_css() == p_style
-            } else {
-                false
-            };
+            let relocate_ok = is_root_defs
+                || (!combinators
+                    && parent.is_some_and(|p| doc.specified_style(p).to_css() == root_defs_style));
             if !relocate_ok {
-                continue; // refuse the whole key: relocating would change what the survivor inherits
+                // refuse the whole key: relocating could change what the survivor inherits or
+                // which rules match it
+                continue;
             }
             if !is_root_defs {
-                let root_defs = doc.defs();
                 doc.append_child(root_defs, survivor);
             }
             for (d, did) in &group[1..] {
                 rename.insert(did.clone(), sid.clone());
                 dups.push(*d);
             }
+        }
+        if !had_root_defs && doc.first_child(root_defs).is_none() {
+            detach_tidy(doc, root_defs); // created above for the comparison only
         }
         if dups.is_empty() {
             break;
