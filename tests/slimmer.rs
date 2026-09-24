@@ -154,3 +154,71 @@ fn the_report_lists_bytes_elements_and_each_step_and_says_nothing_to_do_on_a_cle
         "the step can be switched off"
     );
 }
+
+#[test]
+fn empty_paths_zero_size_shapes_empty_text_and_empty_groups_are_removed() {
+    let svg = format!(
+        r#"<svg {NS}><g id="layer">
+<path id="nod"/><path id="blank" d="  "/><path id="moveonly" d="M 1 2 M 3 4"/><path id="dot" d="M0 0L0 0" style="stroke:#000;stroke-linecap:round"/><path id="closed" d="M0 0Z" style="stroke:#000"/>
+<rect id="flat" x="0" y="0" width="0" height="5"/><rect id="nowidth" y="0" height="5"/><circle id="r0" cx="1" cy="1" r="0"/><ellipse id="e0" cx="1" cy="1" rx="0" ry="2"/><line id="zl" x1="0" y1="0" x2="0" y2="0" style="stroke:#000"/>
+<polyline id="nopts" points=" "/><rect id="ghost" width="5" height="5" style="fill:none;stroke:none"/><rect id="thin" width="5" height="5" style="fill:none;stroke:#000;stroke-width:0"/><rect id="attrnone" width="5" height="5" fill="none"/>
+<text id="et"> </text><text id="wt" xml:space="preserve"> </text><text id="ok">a</text>
+<g id="eg"/><g id="eg2"><g id="eg3"/></g><g id="cg"><!-- kept --></g>
+<rect id="vis" width="5" height="5"/></g></svg>"#
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in [
+        "nod", "blank", "moveonly", "flat", "nowidth", "r0", "e0", "nopts", "ghost", "thin",
+        "attrnone", "et", "eg", "eg2", "eg3",
+    ] {
+        assert!(!has(&d, id), "{id} paints nothing and should be gone: {s}");
+    }
+    for id in ["layer", "dot", "closed", "zl", "wt", "ok", "cg", "vis"] {
+        assert!(has(&d, id), "{id} must stay: {s}");
+    }
+    assert!(
+        msgs[0].contains("empty or invisible elements removed: 15"),
+        "{msgs:?}"
+    );
+}
+
+#[test]
+fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_referenced_shapes_are_kept()
+ {
+    let svg = format!(
+        r##"<svg {NS} {XLINK} {INK}>
+<defs><marker id="m"><path d="M0 0h1"/></marker><filter id="f"><feFlood flood-color="red"/></filter><clipPath id="c"><rect id="clipr" width="1" height="1" style="fill:none;stroke:none"/></clipPath></defs>
+<g id="hiddenlayer" inkscape:groupmode="layer" style="display:none"/>
+<g id="emptylayer" inkscape:groupmode="layer"/>
+<rect id="hidden" width="1" height="1" style="fill:none;stroke:none;display:none"/>
+<rect id="spacer" inkscape:label="spacer" width="9" height="9" style="fill:none;stroke:none"/>
+<switch><rect id="sw" width="0" height="0"/><text>fallback</text></switch>
+<path id="marked" d="M0 0" style="marker-start:url(#m)"/>
+<rect id="filtered" width="0" height="0" style="filter:url(#f)"/>
+<use xlink:href="#target"/><rect id="target" width="0" height="0"/>
+<g id="clipped" clip-path="url(#c)"><rect width="1" height="1"/></g>
+</svg>"##
+    );
+    let (s, msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    for id in [
+        "hiddenlayer",
+        "emptylayer",
+        "hidden",
+        "spacer",
+        "sw",
+        "marked",
+        "filtered",
+        "target",
+        "clipr",
+        "m",
+        "f",
+        "c",
+        "clipped",
+    ] {
+        assert!(has(&d, id), "{id} must stay: {s}");
+    }
+    assert_eq!(msgs, vec!["Slimmer: nothing to do".to_string()]);
+    assert_eq!(s, svg, "byte-identical when nothing is removed");
+}

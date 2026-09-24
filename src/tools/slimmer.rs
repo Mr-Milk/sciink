@@ -5,7 +5,7 @@
 //! must stay. No `Ctx`: nothing here creates clips, every deletion is of something unreferenced by
 //! construction, and the merge step repoints its own references.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt::Write as _;
 
@@ -14,7 +14,10 @@ use clap::Parser;
 use crate::Output;
 use crate::cli::{Common, inx_bool};
 use crate::dom::{Doc, NodeId};
-use crate::ops::cleanup::detach_tidy;
+use crate::geom::path::parse_d;
+use crate::geom::{PathEl, ipx};
+use crate::ops::bbox::{SHAPES, has_bbox};
+use crate::ops::cleanup::{detach_tidy, is_layer, referenced_ids};
 
 use super::first_line;
 
@@ -127,6 +130,117 @@ pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, bool) {
     (removed, moved)
 }
 
+/// Context checks shared by every removable element: rendered (no `UNRENDERED` ancestor such as
+/// `defs`, `clipPath`, `mask`), not referenced by id, not named (`inkscape:label` marks intent —
+/// an invisible spacer, say), not a `<switch>` child (removing one changes which sibling is
+/// chosen), not hidden (`display:none` is how Inkscape hides objects and layers: hidden is not
+/// empty), no filter (a `feFlood` filter paints even on an empty shape).
+fn removable_context(doc: &Doc, n: NodeId, refs: &HashSet<String>) -> bool {
+    has_bbox(doc, n)
+        && doc.attr(n, "id").is_none_or(|id| !refs.contains(id))
+        && doc.attr(n, "inkscape:label").is_none()
+        && doc.parent(n).is_some_and(|p| doc.tag(p) != "switch")
+        && doc
+            .specified(n, "display")
+            .is_none_or(|v| v.trim() != "none")
+        && doc
+            .specified(n, "filter")
+            .is_none_or(|v| v.trim() == "none")
+}
+
+/// A `<g>` with no element or comment children (a comment marks upstream's matplotlib glyph
+/// groups), and not a layer.
+fn empty_group(doc: &Doc, n: NodeId) -> bool {
+    !is_layer(doc, n)
+        && !doc
+            .children(n)
+            .any(|c| doc.is_element(c) || doc.is_comment(c))
+}
+
+/// A `<text>` without characters; preserved whitespace stays (it can carry `text-decoration`).
+fn empty_text(doc: &Doc, n: NodeId) -> bool {
+    let t = doc.text_content(n);
+    t.trim().is_empty() && (t.is_empty() || !doc.xml_space_preserve(n))
+}
+
+/// Markers paint on a lone `M` and without any stroke, so a marked shape is never "empty".
+fn no_markers(doc: &Doc, n: NodeId) -> bool {
+    ["marker", "marker-start", "marker-mid", "marker-end"]
+        .iter()
+        .all(|p| doc.specified(n, p).is_none_or(|v| v.trim() == "none"))
+}
+
+/// Shapes the SVG spec does not render at all: an absent or blank `d`; only `moveto`s (`M0 0L0 0`
+/// paints a round-cap dot and stays); `points` without a digit; a `rect` whose `width` or `height`
+/// is missing or non-positive; `r`, `rx`, `ry` missing or non-positive. Never `line` (zero length
+/// still paints caps). An unparsable length (`%`, `auto`) keeps the element.
+fn empty_shape(doc: &Doc, n: NodeId) -> bool {
+    let non_positive = |a: &str| match doc.attr(n, a) {
+        None => true,
+        Some(v) => ipx(v).is_some_and(|x| x <= 0.0),
+    };
+    match doc.tag(n) {
+        "path" => match doc.attr(n, "d").map(str::trim) {
+            None | Some("") => true,
+            Some(d) => parse_d(d).is_some_and(|p| {
+                p.path
+                    .elements()
+                    .iter()
+                    .all(|e| matches!(e, PathEl::MoveTo(_)))
+            }),
+        },
+        "polyline" | "polygon" => doc
+            .attr(n, "points")
+            .is_none_or(|p| !p.bytes().any(|b| b.is_ascii_digit())),
+        "rect" => non_positive("width") || non_positive("height"),
+        "circle" => non_positive("r"),
+        "ellipse" => non_positive("rx") || non_positive("ry"),
+        _ => false,
+    }
+}
+
+/// Paints nothing: `fill:none` and either `stroke:none` or a zero stroke width. Raw values on
+/// purpose — `inherit` and `context-*` are paints, not "none"; `opacity:0` is a deliberate hide.
+fn invisible_shape(doc: &Doc, n: NodeId) -> bool {
+    let none = |p: &str| doc.computed(n, p).trim() == "none";
+    let zero_width = doc
+        .specified(n, "stroke-width")
+        .and_then(|v| ipx(&v))
+        .is_some_and(|w| w == 0.0);
+    none("fill") && (none("stroke") || zero_width)
+}
+
+/// Step (b): removes drawn elements that contribute nothing to the rendering — empty or zero-size
+/// shapes, shapes with neither fill nor stroke, empty `<text>`, empty non-layer `<g>` — in reverse
+/// document order, so a group emptied by this pass is caught in the same pass. Exact by the
+/// predicates above; the guards are in `removable_context` and `no_markers`.
+pub fn remove_empty(doc: &mut Doc, refs: &HashSet<String>) -> usize {
+    let nodes: Vec<NodeId> = doc
+        .descendants(doc.svg())
+        .skip(1)
+        .filter(|&n| doc.is_element(n))
+        .collect();
+    let mut removed = 0;
+    for &n in nodes.iter().rev() {
+        if !removable_context(doc, n, refs) {
+            continue;
+        }
+        let go = match doc.tag(n) {
+            "g" => empty_group(doc, n),
+            "text" => empty_text(doc, n),
+            t if SHAPES.contains(&t) => {
+                no_markers(doc, n) && (empty_shape(doc, n) || invisible_shape(doc, n))
+            }
+            _ => false,
+        };
+        if go {
+            detach_tidy(doc, n);
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Runs the enabled steps in order, one `Timer` phase each.
 pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report {
     let mut r = Report::default();
@@ -135,6 +249,12 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
         r.sheets_removed = n;
         r.sheet_moved = moved;
         t.phase("styles", || format!("removed={n} moved={moved}"));
+    }
+    if o.removeempty {
+        let refs = referenced_ids(doc);
+        let n = remove_empty(doc, &refs);
+        r.empty_removed = n;
+        t.phase("empty", || format!("removed={n}"));
     }
     r
 }
