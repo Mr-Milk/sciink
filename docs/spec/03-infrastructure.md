@@ -297,7 +297,9 @@ Flattener (+ `--testmode`).
    system fonts; a face of identical family, weight, style and width that is not bundled sorts ahead
    of the bundled copy, so an installed DejaVu Sans always wins. A face is bundled when the bundled
    directory's scan pass added it, not when its path lies under that directory (fontdb records a
-   symlinked entry under its resolved target, and `dist/dev-install.sh` symlinks the fonts).
+   symlinked entry under its resolved target, and `dist/dev-install.sh` symlinks the fonts). A font
+   file the scan reaches twice — a symlinked entry resolving to a file scanned directly — is one
+   face, the first occurrence, so the cache never holds a duplicate `(path, index)`.
    `SCIINK_NO_SYSTEM_FONTS=1` disables the bundle too; `SCIINK_NO_BUNDLED_FONTS=1` disables only
    it. Upstream bundles nothing.
 3. **Per-phase timing** is written to `SCIINK_LOG` (`tool=… phase=… dt=…`); upstream has no

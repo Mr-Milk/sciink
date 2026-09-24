@@ -315,6 +315,10 @@ fn is_bundled_reports_the_source_directory() {
 #[cfg(unix)]
 #[test]
 fn a_bundled_face_reached_through_a_symlink_is_still_flagged() {
+    // As in a dev install: the installed fonts live elsewhere (one copy of DejaVu Sans Book here,
+    // standing for a system font) and the bundled directory holds symlinks to files that no other
+    // pass scans.
+    let installed = bundled_copy("symlink-installed");
     let dir = std::env::temp_dir().join(format!("sciink-bundled-{}-symlink", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -325,12 +329,16 @@ fn a_bundled_face_reached_through_a_symlink_is_still_flagged() {
     let mut fs = FontSystem::scan_with_cache(
         &ScanKey {
             system: false,
-            dirs: vec![src],
+            dirs: vec![installed],
             bundled: Some(dir),
         },
         None,
     );
-    assert_eq!(fs.face_count(), 6, "4 vendored + 2 symlinked bundled faces");
+    assert_eq!(
+        fs.face_count(),
+        3,
+        "1 installed copy + 2 symlinked bundled faces"
+    );
     let flagged: Vec<_> = fs.faces().filter(|&k| fs.is_bundled(k)).collect();
     assert_eq!(flagged.len(), 2, "both symlinked faces are bundled");
     for &k in &flagged {
@@ -340,5 +348,5 @@ fn a_bundled_face_reached_through_a_symlink_is_still_flagged() {
         "font-family:'DejaVu Sans'",
     ));
     let k = fs.resolve(&spec).expect("DejaVu Sans resolves");
-    assert!(!fs.is_bundled(k), "the vendored copy still wins the tie");
+    assert!(!fs.is_bundled(k), "the installed copy still wins the tie");
 }

@@ -273,6 +273,7 @@ impl FontSystem {
         is_bundled: impl Fn(fontdb::ID) -> bool,
     ) -> Vec<(fontdb::ID, FaceInfo)> {
         let mut entries: Vec<(fontdb::ID, FaceInfo)> = Vec::new();
+        let mut seen: HashSet<(PathBuf, u32)> = HashSet::new();
         for f in db.faces() {
             let family = f
                 .families
@@ -284,6 +285,15 @@ impl FontSystem {
                 fontdb::Source::SharedFile(p, _) => (Some(p.clone()), f.index),
                 fontdb::Source::Binary(_) => (None, f.index),
             };
+            // fontdb dedupes only within one `load_fonts_dir` call: a symlinked entry that
+            // resolves to a file another pass scanned directly comes back as a second face with
+            // the same path. One file is one face — the first occurrence; the cache rejects a
+            // duplicate `(path, index)`, which would otherwise make every run a miss.
+            if let Some(p) = &path {
+                if !seen.insert((p.clone(), index)) {
+                    continue;
+                }
+            }
             let style = match f.style {
                 fontdb::Style::Normal => FontStyle::Normal,
                 fontdb::Style::Italic => FontStyle::Italic,
