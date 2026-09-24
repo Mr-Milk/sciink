@@ -1,5 +1,4 @@
 //! Slimmer (Plan 10): every default step is rendering-exact; the guard tests name what must stay.
-#![allow(dead_code)] // helpers here are for later Plan 10 tasks (T3–T6); unused until then
 
 mod support;
 
@@ -37,22 +36,36 @@ fn by_id<'a>(d: &'a roxmltree::Document<'a>, id: &str) -> roxmltree::Node<'a, 'a
         .unwrap_or_else(|| panic!("no element with id {id}"))
 }
 
+/// Ids the document points at (`url(#x)` in any attribute, `#x` hrefs) that have no element.
+fn dangling_references(d: &roxmltree::Document) -> HashSet<String> {
+    let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
+    let mut out = HashSet::new();
+    for n in d.descendants().filter(|n| n.is_element()) {
+        for a in n.attributes() {
+            let v = a.value();
+            for piece in v.split("url(#").skip(1) {
+                if let Some(id) = piece.split(')').next() {
+                    let id = id.trim().trim_matches(['\'', '"']);
+                    if !ids.contains(id) {
+                        out.insert(id.to_string());
+                    }
+                }
+            }
+            if a.name() == "href" {
+                if let Some(id) = v.strip_prefix('#') {
+                    if !ids.contains(id) {
+                        out.insert(id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Every `url(#x)` and `#x` href in the document has a target.
 fn every_reference_resolves(d: &roxmltree::Document) -> bool {
-    let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
-    d.descendants().filter(|n| n.is_element()).all(|n| {
-        n.attributes().all(|a| {
-            let v = a.value();
-            let urls = v.split("url(#").skip(1).all(|piece| {
-                piece
-                    .split(')')
-                    .next()
-                    .is_some_and(|id| ids.contains(id.trim().trim_matches(['\'', '"'])))
-            });
-            let href = a.name() != "href" || !v.starts_with('#') || ids.contains(&v[1..]);
-            urls && href
-        })
-    })
+    dangling_references(d).is_empty()
 }
 
 #[test]
@@ -521,4 +534,105 @@ fn precision_is_off_by_default_and_never_touches_transform_viewbox_style_or_text
         msgs[0].contains("coordinate precision: 6 significant digits, 2 numbers changed"),
         "{msgs:?}"
     );
+}
+
+#[test]
+fn big_doc_loses_style_rules_minus_one_sheets_merges_its_identical_clips_and_renders_identically() {
+    let big = support::BigDoc::default();
+    let svg = big.svg();
+    let (s, msgs) = slim(&svg, &[]);
+    assert!(
+        msgs[0].contains(&format!(
+            "duplicate stylesheets removed: {}",
+            big.style_rules - 1
+        )),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs[0].contains(&format!(
+            "identical definitions merged: {}",
+            big.figures - 1
+        )),
+        "every figure's clip is the same rectangle: {msgs:?}"
+    );
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert_eq!(
+        d.descendants().filter(|n| n.has_tag_name("style")).count(),
+        1
+    );
+    assert_eq!(
+        d.descendants()
+            .filter(|n| n.has_tag_name("clipPath"))
+            .count(),
+        1
+    );
+    assert!(every_reference_resolves(&d));
+    assert!(s.len() < svg.len(), "{} → {}", svg.len(), s.len());
+    let diff = support::pixel_diff_fraction(
+        &support::render_png(svg.as_bytes(), 1500),
+        &support::render_png(s.as_bytes(), 1500),
+        32,
+    );
+    assert_eq!(diff, 0.0, "rendering-exact by construction");
+}
+
+/// Renders `f` before and after a Slimmer run with `extra` options; the pixel-diff fraction must
+/// not exceed `max`, and every reference in the output must resolve.
+fn check_exact(f: &std::path::Path, extra: &[&str], max: f64) {
+    let input = std::fs::read(f).unwrap();
+    let mut a = vec!["--tool=slimmer", "--tab=Options"];
+    a.extend(extra);
+    let out = sciink::run(&args(&a), &input).unwrap().svg;
+    let d = support::pixel_diff_fraction(
+        &support::render_png(&input, 1500),
+        &support::render_png(&out, 1500),
+        32,
+    );
+    eprintln!(
+        "{}: pixel diff {:.5} % with {extra:?}",
+        f.display(),
+        d * 100.0
+    );
+    assert!(d <= max, "{}: {d} > {max}", f.display());
+    let before = roxmltree::Document::parse(std::str::from_utf8(&input).unwrap()).unwrap();
+    let after = roxmltree::Document::parse(std::str::from_utf8(&out).unwrap()).unwrap();
+    let introduced: Vec<String> = dangling_references(&after)
+        .difference(&dangling_references(&before))
+        .cloned()
+        .collect();
+    assert!(
+        introduced.is_empty(),
+        "{}: the Slimmer introduced dangling references {introduced:?} (an upstream fixture may carry its own; those are not ours)",
+        f.display()
+    );
+}
+
+#[test]
+fn default_slimmer_renders_every_upstream_fixture_identically() {
+    for f in support::upstream_svgs() {
+        if f.file_name().is_some_and(|n| n == "Acid_tests.svg") {
+            continue; // the 5.9 MB one is opt-in below
+        }
+        check_exact(&f, &[], 0.0);
+    }
+}
+
+/// Run: `cargo test --release --test slimmer -- --ignored --nocapture`
+#[test]
+#[ignore = "5.9 MB fixture; slow in a debug build"]
+fn default_slimmer_renders_acid_tests_identically() {
+    let Some(dir) = support::upstream_data_dir() else {
+        return;
+    };
+    check_exact(&dir.join("svg/Acid_tests.svg"), &[], 0.0);
+}
+
+#[test]
+fn precision_six_changes_at_most_a_tenth_of_a_percent_of_pixels_on_upstream_fixtures() {
+    for f in support::upstream_svgs() {
+        if f.file_name().is_some_and(|n| n == "Acid_tests.svg") {
+            continue;
+        }
+        check_exact(&f, &["--precision=6"], 0.001);
+    }
 }
