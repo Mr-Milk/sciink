@@ -46,6 +46,7 @@ pub fn run(argv: &[OsString], input: &[u8]) -> Result<Output, String> {
         "scaler" => tools::scaler::run(argv, input),
         "homogenizer" => tools::homogenizer::run(argv, input),
         "favorite-markers" => tools::favorite_markers::run(argv, input),
+        "slimmer" => tools::slimmer::run(argv, input),
         other => Err(format!("unknown tool '{other}'")),
     }
 }

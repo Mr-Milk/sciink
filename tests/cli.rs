@@ -287,3 +287,32 @@ fn no_inx_file_enables_live_preview() {
         );
     }
 }
+
+#[test]
+fn slimmer_runs_through_the_binary_and_reports_nothing_to_do_on_the_simple_fixture() {
+    let p = tmp("slim.svg", SIMPLE);
+    let out = bin()
+        .args(["--tool=slimmer", "--tab=Options"])
+        .arg(&p)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        SIMPLE,
+        "nothing to slim: the document is echoed byte for byte"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(err.trim(), "Slimmer: nothing to do", "{err}");
+    let out = bin()
+        .args(["--tool=slimmer", "--precision=3"])
+        .arg(&p)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("precision must be 0 or 4–8")
+            && err.ends_with("The document was left unchanged.\n"),
+        "{err}"
+    );
+}
