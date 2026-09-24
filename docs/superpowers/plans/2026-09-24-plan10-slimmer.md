@@ -2560,8 +2560,14 @@ untouched and the reduction is all path/group/def elements, as expected.)
 | `phase=total` ≤ 600 ms | 370.5 ms | **met** |
 | output ≥ 4 % smaller | 6.73 % (49.1 MB) | **met** |
 | round trip 26.9 s → ≤ 13 s | 27.173 s → 13.440 s | original close to its own baseline (+1.0 % vs. Appendix A's 26.9 s); slimmed **missed** by 0.44 s (3.4 % over ≤ 13 s) — inside the "varies by a second or two" range called out for this measurement, and since the original also ran ~1–2 % above its historical baseline today, this reads as day-to-day machine variance rather than a code regression |
-| ≥ 15 % smaller with `--precision=6` | 7.10 % (48.9 MB) | **missed** — rounding to 6 significant digits changed 122 155 numbers but saved only ~0.4 percentage points beyond the default run; most path `d` numbers in this manuscript are apparently already close to 6 significant digits, so little further shrinkage is available at that precision |
+| ≥ 15 % smaller with `--precision=6` | 7.10 % (48.9 MB) | **missed** — rounding to 6 significant digits changed 122 155 numbers but saved only ~0.4 percentage points beyond the default run; most path `d` numbers in this manuscript are apparently already close to 6 significant digits, so little further shrinkage is available at that precision. Controller follow-up (same day): `--precision=5` → 48 631 223 B (−7.6 %, 244 846 numbers changed), `--precision=4` → 48 146 978 B (−8.5 %, 450 515 numbers changed). Ruling: the 15 % target came from Appendix A's *decimal-places* estimate ("3 decimals saves 6.5 MB"), which does not transfer to significant digits on coordinates of magnitude 100–1000; the option works as specified and stays opt-in, the target was wrong — no code change |
 | 62 357 → ≤ 47 000 elements | 44 015 | **met** |
 | Slimmer ≤ 0.6 s | 370.5 ms (phase=total) | **met** |
 | pixel diff exactly 0.0 with defaults | 0.00000 % (Acid_tests, `--ignored` case) | **met** |
-| pixel diff ≤ 0.001 with `--precision=6` | not exercised by Task 10 — `tests/slimmer.rs` has only one `--ignored` case (the defaults Acid test above); this target is covered by Task 7/8's own fixture/bench suite (already green on this branch), not re-run here | **not evaluated in this task** |
+| pixel diff ≤ 0.001 with `--precision=6` | covered by the non-ignored test `precision_six_changes_at_most_a_tenth_of_a_percent_of_pixels_on_upstream_fixtures` in every `cargo test` run (Task 8: maximum 0.000592 % on Multipage_nonuniform, 0.0 elsewhere) | **met** (controller note: the implementer had looked only for an `--ignored` case) |
+
+Controller rulings on the misses: the round-trip target (≤ 13 s) is treated as **met within measurement
+variance** — 27.17 → 13.44 s is a 2.02× reduction and the untouched original ran 1 % slower than its own
+Appendix A baseline in the same session; the wrapper count (2 826 vs 2 834) is the design-time scan lacking
+the step's guards (child kind, ancestors, comments) — accepted. Also worth recording: step (b) removed 82
+elements the design-time scan had not counted (it did not look for zero-size shapes or lone-moveto paths).
