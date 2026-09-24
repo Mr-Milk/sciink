@@ -145,7 +145,7 @@ corpus, packaging) are spread across M0–M1 and M6.
 - **One number formatter** `num::fmt` (8 significant digits, App. C.1) used by geom, text writer and all
   attribute writes; App. A's "1e-6 rounding" is subsumed.
 - **Tool names** on the CLI/`.inx`: `flattener | scaler | homogenizer | text-ghoster | combine-by-color |
-  favorite-markers | about` (App. C.3), ids `org.sciink.<tool>`, submenu `Scientific`.
+  favorite-markers | slimmer | about` (App. C.3), ids `org.sciink.<tool>`, submenu `Scientific`.
 - **`--testmode`** hidden param on the Flattener is ported (duplicate selected layer locked at opacity 0.3,
   force all fixes, replacement `sans-serif`) because every upstream Flattener ref was produced with it.
 

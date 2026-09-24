@@ -310,6 +310,35 @@ else marker; parse `url(#id)` properly).
   name), `list` checkbox prints stored names to stderr. No self-modifying .inx, no restart. Lost: custom names
   not in dropdown; no pickle migration.
 
+### Slimmer (sciink-only; the unused-definition step after `dhelpers.py:990 clean_up_document`)
+Whole document, selection ignored. Options `dedupstyles`, `removeempty`, `collapsegroups`,
+`pruneunused`, `mergedefs` (all true), `precision` (0 = keep; 4–8 significant digits), `report` (true).
+Order: styles → empty → wrappers → prune → merge → precision. Every default step is rendering-exact:
+- **styles**: `<style>` elements with identical text (attributes ⊆ {id, type=text/css}, no `@`) keep the
+  LAST copy — same-precedence conflicts are decided by source order, so only the last copy's position
+  matters; a lone survivor moves to the front of the root.
+- **empty**: drawn elements (no `UNRENDERED` ancestor, not referenced, no `inkscape:label`, not a `<switch>`
+  child, not `display:none`, no filter): shapes with blank `d` or only movetos, `points` without digits,
+  non-positive/missing `width`/`height`/`r`/`rx`/`ry`, `fill:none` with `stroke:none` or zero width (no
+  markers); `<text>` without characters (not `xml:space="preserve"`); non-layer `<g>` without element or
+  comment children. `line` is never empty.
+- **wrappers**: a `<g>` with only an `id`, one rendered child (`COLLAPSE_CHILD`), whitespace otherwise,
+  ancestors in {svg, g, a}, unreferenced → replaced by the child, which inherits the id. Skipped as a whole
+  when the stylesheet has a rule that is not a lone `*`, declares opacity/filter/clip-path/mask/
+  mix-blend-mode/isolation/display/transform/enable-background, or contains `@`.
+- **prune**: clipPath, mask, gradients, pattern, symbol, marker, filter anywhere and every direct child of
+  any `<defs>` except style/glyph/script/metadata/title/desc/font/font-face, removed when no id inside is
+  referenced (`referenced_ids`: every `url(#…)`, `href`, `#id`-valued attribute and every `#ident` in
+  `<style>` text); to a fixpoint; emptied nested `<defs>` and groups go; the root `<defs>` stays.
+- **merge**: clipPath, mask, gradients, pattern, marker, filter, symbol with the same canonical key
+  (parent's specified style; tag, attributes but id, cascaded style, children) keep the first; references
+  repointed (`url(…)` in any attribute, `href`, whole-value `#id`); refused for referenced inner ids, ids in
+  `<style>` text, missing or duplicated ids; to a fixpoint.
+- **precision** (opt-in, lossy): `d`, `points`, shape `x y width height rx ry cx cy r x1 y1 x2 y2` rounded to
+  N significant digits when shorter; integers, arc flags, `transform`, `viewBox`, styles, text positions
+  untouched.
+Report: one line of totals (bytes, elements), one per step, notes; `Slimmer: nothing to do` otherwise.
+
 ## B.4 Compatibility attributes (exact)
 - `inkscape-scientific-flattenexclude="True"`; any non-empty value = excluded; removed to un-mark.
 - `inkscape-scientific-scaletype` ∈ `scale_free | aspect_locked | normal | plot_area`.
@@ -516,3 +545,17 @@ color (+combine_paths) → Scaler → Homogenizer (after text engine) → Favori
   (1–2 ms on 62 000 nodes) — a rank index that every attach/detach would invalidate was rejected.
 - `ops::bbox` gives no box to a `<use>` whose `href` does not resolve (upstream `dhelpers.py:1505–1521`
   does the same); this was misfiled as a bug in 0.1.0's known gaps.
+
+## Deliberate deviations (Plan 10)
+
+- Slimmer has no upstream counterpart: duplicate-stylesheet removal, empty/invisible-element removal,
+  wrapper-group collapse, identical-definition merging and coordinate precision are sciink-only.
+- Unused-definition pruning follows `dhelpers.clean_up_document` in intent but covers nested `<defs>` and
+  removes emptied nested `<defs>` (upstream: the root defs only); it does not prune `textPath`,
+  `animate*`, `font`, `font-face` (rendered or name-referenced content, which upstream deletes) and keeps
+  `script`, `metadata`, `title`, `desc`; the reference scan covers every attribute, inline styles and
+  `<style>` text (upstream: a fixed attribute list, hrefs and inline styles).
+- Whole-document scope, selection ignored; no `delete_up` (emptied ancestors are handled by the
+  empty-group predicate, which keeps layers); no fonts are loaded.
+- After merging, a figure may share clip paths with other figures and is no longer self-contained
+  (Inkscape copies referenced definitions on copy and paste).
