@@ -915,8 +915,8 @@ fn hidden_objects_layers_labelled_spacers_switch_children_markers_filters_and_re
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cargo test --test slimmer empty_paths hidden_objects`
-Expected: the first fails (nothing removed yet, "nothing to do"); the second passes already (it is the guard).
+Run: `cargo test --test slimmer` (cargo accepts a single name filter at most; run the whole binary)
+Expected: `empty_paths_…` fails (nothing removed yet, "nothing to do"); `hidden_objects_…` passes already (it is the guard).
 
 - [ ] **Step 3: Implement step (b)**
 
@@ -1182,8 +1182,8 @@ fn layers_labelled_groups_use_targets_switch_children_and_title_wrappers_are_nev
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cargo test --test slimmer wrapper layers_labelled`
-Expected: the first two fail (nothing collapses, no note); the third passes already (guard).
+Run: `cargo test --test slimmer`
+Expected: the two `wrapper_groups_…` tests fail (nothing collapses, no note); `layers_labelled_…` passes already (guard).
 
 - [ ] **Step 3: Implement step (c)**
 
@@ -1391,8 +1391,8 @@ fn referenced_definitions_style_glyph_script_children_text_paths_and_the_root_de
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cargo test --test slimmer unused_definitions referenced_definitions`
-Expected: both fail (nothing pruned; `emptydefs` still there).
+Run: `cargo test --test slimmer`
+Expected: `unused_definitions_…` and `referenced_definitions_…` both fail (nothing pruned; `emptydefs` still there).
 
 - [ ] **Step 3: Implement step (d)**
 
@@ -1602,8 +1602,8 @@ fn definitions_in_different_style_contexts_are_not_merged() {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cargo test --test slimmer identical_clip definitions_`
-Expected: the first fails (nothing merged); the other two pass already (guards).
+Run: `cargo test --test slimmer`
+Expected: `identical_clip_paths_…` fails (nothing merged); the two `definitions_…` tests pass already (guards).
 
 - [ ] **Step 3: Implement step (e)**
 
