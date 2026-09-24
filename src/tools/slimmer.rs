@@ -54,7 +54,7 @@ pub struct SlimmerCli {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Report {
     pub sheets_removed: usize,
-    pub sheet_moved: bool,
+    pub sheets_moved: usize,
     pub empty_removed: usize,
     pub wrappers_collapsed: usize,
     pub defs_pruned: usize,
@@ -69,7 +69,7 @@ pub struct Report {
 
 impl Report {
     fn changed(&self) -> bool {
-        self.sheet_moved
+        self.sheets_moved > 0
             || self.sheets_removed
                 + self.empty_removed
                 + self.wrappers_collapsed
@@ -87,15 +87,33 @@ fn style_elements(doc: &Doc) -> Vec<NodeId> {
         .collect()
 }
 
+/// `s` has an ancestor element (other than the root) tagged in `PRUNE_TAGS`: a `<style>` nested in
+/// a clipPath/mask/gradient/pattern/marker/filter/symbol is left where it is. Pulling it out would
+/// strip the one thing (`GLOBAL_EFFECT_TAGS`) that keeps an otherwise-unreferenced container like
+/// that from looking unused to `prune_unused`, which runs after this step sees only where things
+/// are *now* — a plain `<g>` or `<defs>` never prunes itself this way, so a sheet nested in one of
+/// those still moves.
+fn under_definition_container(doc: &Doc, s: NodeId) -> bool {
+    let root = doc.root();
+    doc.ancestors(s)
+        .take_while(|&a| a != root)
+        .any(|a| doc.is_element(a) && PRUNE_TAGS.contains(&doc.tag(a)))
+}
+
 /// Step (a): `<style>` elements with identical text collapse onto the LAST copy. Same-precedence
 /// conflicts are decided by source order, later wins (`style::DeclKey`); a duplicated rule reaches
 /// its maximum order at the last copy, so deleting the earlier copies changes no winner — sheets
 /// `A B A` render as A, and keeping the first would give B. Sheets with attributes beyond `id` and
 /// `type="text/css"`, or containing an `@` rule (`@import`, `@media`: position- and
-/// count-sensitive), are left alone. When exactly one sheet remains it moves to the front of the
-/// root: position is irrelevant for a lone sheet, and out of a figure's nested `<defs>` deleting
-/// that figure can no longer restyle the whole document. Returns (removed, moved).
-pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, bool) {
+/// count-sensitive), are left alone. Every remaining sheet not under a definition container
+/// (`under_definition_container`) then moves to the front of the root, in document order, each
+/// inserted right after the previous one (or as the root's first child, for the first): CSS applies
+/// document-wide regardless of where the `<style>` sits, so grouping every surviving sheet at the
+/// front — instead of leaving it inside whichever figure happened to hold the surviving copy —
+/// means deleting that figure later can no longer silently restyle the rest of the document, while
+/// keeping their relative order preserves the cascade's source-order tie-breaking exactly. A sheet
+/// already immediately in that position is left alone. Returns (removed, moved).
+pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, usize) {
     let mut last: HashMap<String, NodeId> = HashMap::new();
     let mut eligible: Vec<(NodeId, String)> = Vec::new();
     for s in style_elements(doc) {
@@ -116,19 +134,26 @@ pub fn dedup_stylesheets(doc: &mut Doc) -> (usize, bool) {
             removed += 1;
         }
     }
-    let mut moved = false;
+    let svg = doc.svg();
     let remaining = style_elements(doc);
-    if remaining.len() == 1 {
-        let only = remaining[0];
-        let svg = doc.svg();
-        if doc.parent(only) != Some(svg) {
-            let first = doc.children(svg).find(|&c| doc.is_element(c));
-            match first {
-                Some(first) if first != only => doc.insert_before(only, first),
-                _ => doc.append_child(svg, only),
-            }
-            moved = true;
+    let mut moved = 0;
+    let mut prev: Option<NodeId> = None;
+    for s in remaining {
+        if under_definition_container(doc, s) {
+            continue; // left in place; does not anchor the next sheet either
         }
+        let in_place = match prev {
+            None => doc.first_child(svg) == Some(s),
+            Some(p) => doc.next_sibling(p) == Some(s),
+        };
+        if !in_place {
+            match prev {
+                Some(p) => doc.insert_after(s, p),
+                None => doc.prepend_child(svg, s),
+            }
+            moved += 1;
+        }
+        prev = Some(s);
     }
     (removed, moved)
 }
@@ -530,10 +555,25 @@ const MERGE_TAGS: &[&str] = &[
     "symbol",
 ];
 
+/// Elements whose characters are content, not structural whitespace: inside one of these (or a
+/// descendant of one), text nodes compare verbatim in `canon` — a run of `<tspan>`s with or without
+/// a space between them renders differently.
+const TEXT_TAGS: &[&str] = &[
+    "text",
+    "tspan",
+    "textPath",
+    "flowRoot",
+    "flowPara",
+    "flowRegion",
+    "flowSpan",
+];
+
 /// Canonical text of a definition: tag, attributes except `id` sorted by name, the element's cascaded
 /// style (presentation attributes, inline style and every stylesheet rule that matches it), then the
-/// children — elements recursively, non-blank text, comments skipped.
-fn canon(doc: &Doc, n: NodeId, out: &mut String) {
+/// children — elements recursively, text (non-blank and trimmed outside a text-bearing subtree,
+/// verbatim including whitespace-only nodes inside one — `TEXT_TAGS`), comments skipped.
+fn canon(doc: &Doc, n: NodeId, out: &mut String, text_mode: bool) {
+    let text_mode = text_mode || TEXT_TAGS.contains(&doc.tag(n));
     out.push('<');
     out.push_str(doc.tag(n));
     let mut attrs: Vec<(&str, &str)> = doc
@@ -555,13 +595,19 @@ fn canon(doc: &Doc, n: NodeId, out: &mut String) {
     out.push('>');
     for c in doc.children(n) {
         if doc.is_element(c) {
-            canon(doc, c, out);
+            canon(doc, c, out, text_mode);
         } else if let Some(t) = doc.text(c) {
-            let t = t.trim();
-            if !t.is_empty() {
-                out.push('"');
+            if text_mode {
+                out.push('\u{3}');
                 out.push_str(t);
-                out.push('"');
+                out.push('\u{3}');
+            } else {
+                let t = t.trim();
+                if !t.is_empty() {
+                    out.push('"');
+                    out.push_str(t);
+                    out.push('"');
+                }
             }
         }
     }
@@ -569,7 +615,8 @@ fn canon(doc: &Doc, n: NodeId, out: &mut String) {
 }
 
 /// What two definitions must share to be interchangeable: the parent's specified style (what the
-/// definition inherits — `clip-rule`, `stop-color`) and the canonical text.
+/// definition inherits — `clip-rule`, `stop-color`), the canonical text, and whether `xml:space` is
+/// preserved (which decides whether `canon`'s own whitespace was ever significant to begin with).
 fn canonical_key(doc: &Doc, n: NodeId) -> String {
     let mut s = String::new();
     if let Some(p) = doc.parent(n) {
@@ -578,7 +625,8 @@ fn canonical_key(doc: &Doc, n: NodeId) -> String {
         }
     }
     s.push('\u{1}');
-    canon(doc, n, &mut s);
+    canon(doc, n, &mut s, false);
+    s.push(if doc.xml_space_preserve(n) { 'P' } else { '-' });
     s
 }
 
@@ -608,9 +656,53 @@ fn rewrite_urls(v: &str, rename: &HashMap<String, String>) -> Option<String> {
     changed.then_some(out)
 }
 
+/// Attribute names where `#` starts a colour (`#rrggbb`), never an id reference.
+const COLOR_ATTRS: &[&str] = &[
+    "fill",
+    "stroke",
+    "stop-color",
+    "flood-color",
+    "lighting-color",
+    "color",
+];
+
+/// An id-name character: alphanumeric, `-`, `_`, `.` or `:`.
+fn is_id_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')
+}
+
+/// Every `#<ident>` token in `v` (a bare id, or one of a `;`/`,`/space/`|` list —
+/// `inkscape:path-effect`, a custom `linkedpaths`-style attribute), rewritten when the ident is a
+/// key of `rename`; `None` when nothing changed. Whitespace and any other text around the tokens is
+/// copied verbatim.
+fn rewrite_id_tokens(v: &str, rename: &HashMap<String, String>) -> Option<String> {
+    let mut out = String::with_capacity(v.len());
+    let mut changed = false;
+    let mut rest = v;
+    while let Some(i) = rest.find('#') {
+        out.push_str(&rest[..i]);
+        out.push('#');
+        let after = &rest[i + 1..];
+        let end = after.find(|c: char| !is_id_char(c)).unwrap_or(after.len());
+        let ident = &after[..end];
+        match rename.get(ident) {
+            Some(new) => {
+                out.push_str(new);
+                changed = true;
+            }
+            None => out.push_str(ident),
+        }
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
 /// Rewrites every reference to a merged definition: `href`/`xlink:href` and any other attribute whose
-/// whole value is `#dup`, and every `url(#dup)` in any attribute — inline `style` included, without a
-/// parse round trip. Returns the number of attributes rewritten.
+/// whole value is `#dup`, every `url(#dup)` in any attribute — inline `style` included, without a
+/// parse round trip — and, for a non-paint attribute (`COLOR_ATTRS`) whose value is not a `url(...)`
+/// but contains `#`, every `#dup` token inside a `;`/`,`/space/`|`-separated list. Returns the number
+/// of attributes rewritten.
 fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
     let mut count = 0;
     let nodes: Vec<NodeId> = doc
@@ -627,12 +719,10 @@ fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
         for (name, value) in attrs {
             let new = if value.contains("url(") {
                 rewrite_urls(&value, rename)
+            } else if value.contains('#') && !COLOR_ATTRS.contains(&name.as_str()) {
+                rewrite_id_tokens(&value, rename)
             } else {
-                value
-                    .trim()
-                    .strip_prefix('#')
-                    .and_then(|id| rename.get(id))
-                    .map(|s| format!("#{s}"))
+                None
             };
             if let Some(v) = new {
                 doc.set_attr(n, &name, v);
@@ -643,6 +733,15 @@ fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
     count
 }
 
+/// `n` has an ancestor (not itself) tagged in `MERGE_TAGS`: a nested definition — a gradient inside
+/// a pattern, say — is never a merge candidate, whatever it looks like from the outside.
+fn has_merge_tag_ancestor(doc: &Doc, n: NodeId) -> bool {
+    let root = doc.root();
+    doc.ancestors(n)
+        .take_while(|&a| a != root)
+        .any(|a| doc.is_element(a) && MERGE_TAGS.contains(&doc.tag(a)))
+}
+
 /// Step (e): definitions with the same canonical key are interchangeable; every copy after the
 /// first in document order is removed and its references repointed to the first. Exact because the
 /// key covers everything that can make two definitions render differently: every attribute but
@@ -650,9 +749,15 @@ fn repoint(doc: &mut Doc, rename: &HashMap<String, String>) -> usize {
 /// a different key), the parent's specified style (inheritance into the definition) and the content.
 /// Refused for a definition whose descendant ids are referenced (they would vanish), whose ids
 /// appear in `<style>` text (CSS is not rewritten), whose id is missing or not unique (repointing
-/// to a duplicated id would resolve to the first-wins index entry), or whose subtree carries a
+/// to a duplicated id would resolve to the first-wins index entry), whose subtree carries a
 /// `GLOBAL_EFFECT_TAGS` tag (a nested `<style>` applies document-wide; merging its container would
-/// delete it). Repeats until stable: two
+/// delete it), or that is itself nested inside another `MERGE_TAGS` element (`has_merge_tag_ancestor`).
+/// Before detaching the copies for a key: if the survivor's parent is the root `<defs>`, it stays;
+/// else if that parent's specified style equals the root `<defs>`'s, the survivor moves there
+/// (`doc.defs()`, created if absent, then `append_child`) so a figure that shares it stays
+/// self-contained; else the whole key is refused (relocating would change what the survivor
+/// inherits — clipPath/mask/gradient/pattern/marker/filter/symbol content is interpreted in the
+/// *referencing* element's space and inherits only from its own ancestors). Repeats until stable: two
 /// gradients that differ only by `href` to two merged copies become identical in the next round.
 /// Returns (definitions merged, attributes repointed).
 pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
@@ -674,9 +779,9 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
             .skip(1)
             .filter(|&n| doc.is_element(n) && MERGE_TAGS.contains(&doc.tag(n)))
             .collect();
-        let mut survivor: HashMap<String, String> = HashMap::new(); // key → surviving id
-        let mut rename: HashMap<String, String> = HashMap::new(); // duplicate id → surviving id
-        let mut dups: Vec<NodeId> = Vec::new();
+        // group eligible candidates by canonical key, keeping document order inside each group
+        let mut order: Vec<String> = Vec::new();
+        let mut groups: HashMap<String, Vec<(NodeId, String)>> = HashMap::new();
         for n in candidates {
             let Some(id) = doc.attr(n, "id").map(str::to_string) else {
                 continue;
@@ -695,18 +800,50 @@ pub fn merge_identical_defs(doc: &mut Doc) -> (usize, usize) {
             let has_global_effect = doc
                 .descendants(n)
                 .any(|d| doc.is_element(d) && GLOBAL_EFFECT_TAGS.contains(&doc.tag(d)));
-            if has_global_effect {
+            if has_global_effect || has_merge_tag_ancestor(doc, n) {
                 continue;
             }
             let key = canonical_key(doc, n);
-            match survivor.get(&key) {
-                Some(first) => {
-                    rename.insert(id, first.clone());
-                    dups.push(n);
-                }
-                None => {
-                    survivor.insert(key, id);
-                }
+            groups
+                .entry(key.clone())
+                .or_insert_with(|| {
+                    order.push(key.clone());
+                    Vec::new()
+                })
+                .push((n, id));
+        }
+        let svg = doc.svg();
+        let mut rename: HashMap<String, String> = HashMap::new(); // duplicate id → surviving id
+        let mut dups: Vec<NodeId> = Vec::new();
+        for key in &order {
+            let group = &groups[key];
+            if group.len() < 2 {
+                continue;
+            }
+            let (survivor, sid) = (group[0].0, group[0].1.clone());
+            let parent = doc.parent(survivor);
+            let is_root_defs = parent.is_some_and(|p| {
+                doc.is_element(p) && doc.tag(p) == "defs" && doc.parent(p) == Some(svg)
+            });
+            let relocate_ok = if is_root_defs {
+                true
+            } else if let Some(p) = parent {
+                let p_style = doc.specified_style(p).to_css();
+                let root_defs = doc.defs(); // created here, only when actually needed
+                doc.specified_style(root_defs).to_css() == p_style
+            } else {
+                false
+            };
+            if !relocate_ok {
+                continue; // refuse the whole key: relocating would change what the survivor inherits
+            }
+            if !is_root_defs {
+                let root_defs = doc.defs();
+                doc.append_child(root_defs, survivor);
+            }
+            for (d, did) in &group[1..] {
+                rename.insert(did.clone(), sid.clone());
+                dups.push(*d);
             }
         }
         if dups.is_empty() {
@@ -875,7 +1012,7 @@ pub fn slim(doc: &mut Doc, o: &SlimmerCli, t: &mut crate::log::Timer) -> Report 
     if o.dedupstyles {
         let (n, moved) = dedup_stylesheets(doc);
         r.sheets_removed = n;
-        r.sheet_moved = moved;
+        r.sheets_moved = moved;
         t.phase("styles", || format!("removed={n} moved={moved}"));
     }
     // Selectors the parser drops (attribute selectors, pseudo-classes, sibling combinators) and
@@ -1000,10 +1137,10 @@ pub fn report_message(
         s,
         "  duplicate stylesheets removed: {}{}",
         r.sheets_removed,
-        if r.sheet_moved {
-            " (1 kept, moved to the document root)"
+        if r.sheets_moved > 0 {
+            format!(" ({} moved to the document root)", r.sheets_moved)
         } else {
-            ""
+            String::new()
         }
     );
     let _ = writeln!(

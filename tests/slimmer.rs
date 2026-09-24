@@ -110,7 +110,7 @@ fn a_lone_surviving_stylesheet_moves_to_the_root_and_at_rules_or_extra_attribute
         "the lone sheet now leads the root, out of figure 2's <defs>: {s}"
     );
     assert!(
-        msgs[0].contains("(1 kept, moved to the document root)"),
+        msgs[0].contains("(1 moved to the document root)"),
         "{msgs:?}"
     );
     let svg = format!(
@@ -640,6 +640,94 @@ fn definitions_in_different_style_contexts_are_not_merged() {
             "{id}: inherited or inline clip-rule makes it a different clip: {s}"
         );
     }
+}
+
+#[test]
+fn definitions_whose_text_differs_by_whitespace_are_not_merged() {
+    let svg = format!(
+        r#"<svg {NS}><defs><pattern id="p1"><text><tspan>A</tspan> <tspan>B</tspan></text></pattern><pattern id="p2"><text><tspan>A</tspan><tspan>B</tspan></text></pattern></defs><rect fill="url(#p1)" width="1" height="1"/><rect fill="url(#p2)" width="1" height="1"/></svg>"#
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "p1") && has(&d, "p2"),
+        "a space between the tspans changes the rendered text: {s}"
+    );
+}
+
+#[test]
+fn nested_definitions_are_never_merged_even_when_identical_to_a_root_one() {
+    // G2 (root-level) is discovered before G1 (nested inside pattern P1), so without the fix G1
+    // would be the one detached and repointed to G2.
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><defs><linearGradient id="G2"><stop offset="0" stop-color="red"/></linearGradient><pattern id="P0"><rect width="1" height="1"/></pattern><pattern id="P1"><rect width="1" height="1"/><linearGradient id="G1"><stop offset="0" stop-color="red"/></linearGradient></pattern></defs><rect fill="url(#P0)" width="1" height="1"/><rect fill="url(#P1)" width="1" height="1"/><rect fill="url(#G1)" width="1" height="1"/></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &["--pruneunused=false"]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "G1"),
+        "a gradient nested inside a pattern is never a merge candidate: {s}"
+    );
+    assert!(every_reference_resolves(&d), "{s}");
+}
+
+#[test]
+fn merged_definitions_move_to_the_root_defs_so_figures_stay_self_contained() {
+    let svg = format!(
+        r#"<svg {NS}><g id="figA"><defs><clipPath id="ca"><rect width="1" height="1"/></clipPath></defs><rect clip-path="url(#ca)" width="1" height="1"/></g><g id="figB"><defs><clipPath id="cb"><rect width="1" height="1"/></clipPath></defs><rect id="rb" clip-path="url(#cb)" width="1" height="1"/></g></svg>"#
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    let clips: Vec<_> = d
+        .descendants()
+        .filter(|n| n.has_tag_name("clipPath"))
+        .collect();
+    assert_eq!(clips.len(), 1, "one clipPath remains: {s}");
+    let defs = clips[0].parent_element().unwrap();
+    assert_eq!(defs.tag_name().name(), "defs", "{s}");
+    let root = defs.parent_element().unwrap();
+    assert_eq!(root.tag_name().name(), "svg", "{s}");
+    assert!(
+        root.parent_element().is_none(),
+        "the surviving clipPath's <defs> is a direct child of the root: {s}"
+    );
+    assert!(every_reference_resolves(&d), "{s}");
+
+    // both figures carry the same non-default style, but it differs from the root <defs>'s: the
+    // merge is refused and both clipPaths stay where they are
+    let svg = format!(
+        r#"<svg {NS}><g id="figA" style="fill:blue"><defs><clipPath id="ca"><rect width="1" height="1"/></clipPath></defs><rect clip-path="url(#ca)" width="1" height="1"/></g><g id="figB" style="fill:blue"><defs><clipPath id="cb"><rect width="1" height="1"/></clipPath></defs><rect id="rb" clip-path="url(#cb)" width="1" height="1"/></g></svg>"#
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "ca") && has(&d, "cb"),
+        "the shared parent style differs from the root defs': {s}"
+    );
+}
+
+#[test]
+fn id_lists_separated_by_pipe_are_recognized_as_references() {
+    let svg = format!(
+        r##"<svg {NS}><rect id="p1" width="1" height="1"/><rect id="p2" width="1" height="1" style="fill:none;stroke:none"/><path linkedpaths="#p1,0,1|#p2,0,1|" d="M0 0h1"/></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &["--removeinvisible=true"]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(
+        has(&d, "p2"),
+        "p2 is referenced via a |-delimited list and must stay: {s}"
+    );
+}
+
+#[test]
+fn a_multi_id_attribute_is_repointed_to_the_survivor_after_a_merge() {
+    let svg = format!(
+        r##"<svg {NS} {XLINK}><defs><marker id="s1"><path d="M0 0h1"/></marker><marker id="s2"><path d="M0 0h1"/></marker></defs><path marker-start="url(#s1)" d="M0 0h1"/><rect id="v" values="#s1;#s2" width="1" height="1"/></svg>"##
+    );
+    let (s, _msgs) = slim(&svg, &[]);
+    let d = roxmltree::Document::parse(&s).unwrap();
+    assert!(has(&d, "s1") && !has(&d, "s2"), "s2 merges into s1: {s}");
+    assert_eq!(by_id(&d, "v").attribute("values"), Some("#s1;#s1"), "{s}");
 }
 
 #[test]

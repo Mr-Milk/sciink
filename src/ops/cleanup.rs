@@ -238,7 +238,7 @@ pub fn detach_tidy(doc: &mut Doc, n: NodeId) {
 /// Every id the document points at, over-inclusively — a false positive keeps an element, a
 /// false negative would delete one. Counted: `url(#id)` in any attribute value (inline `style`
 /// included) and in `<style>` text; `href`/`xlink:href` equal to `#id`; any other attribute whose
-/// value is one `#id` token or a `;`/`,`/space list of them (`inkscape:path-effect`,
+/// value is one `#id` token or a `;`/`,`/space/`|` list of them (`inkscape:path-effect`,
 /// `inkscape:perspectiveID`, `inkscape:connection-start`); every `#ident` in `<style>` text
 /// (selectors count, so a styled definition is never pruned or merged). A `fill="#rrggbb"`
 /// attribute lands in the set as "rrggbb" — harmless. `id`, `d` and `points` are skipped; a
@@ -259,7 +259,7 @@ pub fn referenced_ids(doc: &Doc) -> HashSet<String> {
                 }
                 _ if a.value.contains("url(") => url_ids(&a.value, &mut out),
                 _ if a.value.trim_start().starts_with('#') => {
-                    for tok in a.value.split([';', ',', ' ']) {
+                    for tok in a.value.split([';', ',', ' ', '|']) {
                         if let Some(id) = tok.trim().strip_prefix('#') {
                             if !id.is_empty() {
                                 out.insert(id.to_string());
